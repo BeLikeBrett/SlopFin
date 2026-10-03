@@ -13,18 +13,32 @@ installed applications; the folder uses a homebrew mount service.
 | Full Kraken decode and inner filesystem walk | Passed: 65 blocks, 26 source files |
 | Byte comparison with source, including known executable/metadata normalization | Passed |
 | Installer registration and installed `app.pkg` | Passed on firmware 8.20, isolated test title PPSA99002 |
-| Launch | Pending a fresh session with current kstuff and A53/PPR support |
+| Launch | Blocked at PPR mount after kstuff-lite 1.11 and an exact-profile A53 selector install; no app startup |
 
-The first launch returned `0x80020060` from the PPR filesystem mount, before
-SlopFin started. The test environment had kstuff-lite 1.10 loaded and the A53
-selector in stock/native state. It lacks the newer mount protocol. The official
-1.11 payload has been prepared for the next session. No successful native
-package launch or package playback is claimed yet. Folder launch and playback
-have been tested separately; see [compatibility](COMPATIBILITY.md).
+The original launch returned `0x80020060` from the PPR filesystem mount, before
+SlopFin started, with kstuff-lite 1.10 and stock A53 code. After rebooting with
+the verified official 1.11 release, its plaintext mount protocol was present.
+The selector was installed from ppr-patch revision
+`fd4c8224563130e9698d3b2b2f44712826ceb525`, using the exact retail 8.20 profile;
+all patch writes passed readback. The non-time-accelerated installer was used.
 
-## Install a downloaded package
+The next launch created `PPSA99002-app0` and `PPSA99002-app0-nest` mount entries,
+but the package mount did not finish. SlopFin never appeared in the process
+list. Subsequent file operations and Remote Play authentication timed out,
+although the payload loader and read-only kernel log probes remained responsive.
+This is a console package-mount blocker, not a successful launch. Do not treat
+this download as a working replacement for the folder build yet. Do not modify
+the selector while that mount is outstanding; recovery requires a console restart.
 
-Use a compatible jailbroken console with current native FPKG support. Firmware
+Folder launch and playback were tested separately. The original PPSA99001
+folder, saved HTTPS account settings and previous autoloader backup were
+preserved. See [compatibility](COMPATIBILITY.md) for the app's playback results.
+
+## Installation requirements (experimental)
+
+Until the mount blocker above is resolved, use the folder ZIP for normal use.
+Native testing requires a compatible jailbroken console with current FPKG
+support. Firmware
 8.20 is the current SlopFin test target. Support ranges claimed by payloads do
 not constitute SlopFin hardware validation on other firmware.
 

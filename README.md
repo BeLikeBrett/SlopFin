@@ -2,6 +2,9 @@
 
 **Your Jellyfin library, on PlayStation 5.**
 
+[![Build](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml/badge.svg)](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+
 An unofficial native client for **jailbroken PS5 consoles**, built around a
 controller interface and the console's hardware video decoder.
 
@@ -10,17 +13,18 @@ controller interface and the console's hardware video decoder.
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
 
-![SlopFin Home with movie artwork and controller controls](docs/images/home-preview.png)
+![SlopFin Home with movie artwork and controller controls](docs/images/home-console.png)
 
-*Actual Linux interface preview with fictional titles and original artwork.
-It illustrates the interface; it does not demonstrate PS5 playback.*
+*Home captured directly from SlopFin on a PS5 running firmware 8.20, using a
+real Jellyfin library. Library names, artwork and recommendations come from
+your server.*
 
 ## Choose your download
 
 | Download | How it runs | Current status |
 | --- | --- | --- |
 | **[App folder ZIP](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.000/SlopFin-01.000.000-folder.zip)** | Extract and transfer the complete PPSA99001 folder to your homebrew loader | **Recommended.** Launch/playback tested on firmware 8.20 |
-| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.000/SlopFin-01.000.000-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch validation pending current kstuff/A53 support |
+| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.000/SlopFin-01.000.000-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch currently stalls at the package mount on the test console |
 
 Both contain SlopFin. Native packaging makes distribution easier; it does not
 change video quality or playback performance. Choose one method: both release
@@ -31,10 +35,71 @@ formats use PPSA99001. See [native package requirements](docs/NATIVE_FPKG.md).
 - Browse movies and TV libraries from your own Jellyfin server.
 - Search with separate **Movies**, **Series** and **Episodes** rows, so episode
   matches do not bury the show you are looking for.
-- Enter addresses and credentials with the **PlayStation system keyboard**.
+- Enter addresses and credentials with the **PlayStation system keyboard**,
+  with editable fields, visible search text and optional password visibility.
 - Resume playback, switch audio/subtitles and continue to the next episode.
-- **Skip Intro** when Jellyfin provides usable media segments or chapter markers.
-- Adjust settings and use profile controls or the administrator dashboard.
+- **Skip Intro** with server media segments or validated chapter markers.
+  The button remains available over playback controls, with retry feedback
+  when a seek fails. Tested on *South Park* and *The Office*.
+- Smooth shared focus transitions across browsing, Settings, profiles and the
+  administrator dashboard, with stable labels and consistent button surfaces.
+- Select subtitle tracks and adjust text size, background and timing.
+- Set playback quality limits and control episode autoplay per series.
+
+## Video and audio
+
+SlopFin uses the PS5 **Videodec2 hardware decoder** for H.264 and HEVC. Jellyfin
+can copy compatible video, remux it into the MPEG-TS delivery stream, or convert
+unsupported media. An audio conversion can leave the video untouched.
+
+| Format or output | SlopFin path | Status / limits |
+| --- | --- | --- |
+| H.264 / AVC | PS5 hardware decode | Console tested |
+| HEVC Main / Main10 | PS5 hardware decode, including tested 4K sources | Decode resolution does not guarantee full-detail 4K presentation |
+| SDR / PQ content | SDR rendering and PQ tone mapping | Native ten-bit HDR10 output and live switching remain experimental |
+| Dolby Vision sources | Selected HDR10-compatible PQ base layers | No native Dolby Vision HDMI output; incompatible profiles need server conversion |
+| AAC / MP3 / AC-3 | Console decoder to PCM | Unsupported rates or output layouts need fallback |
+| AC-3 / E-AC-3 / DTS core | Compressed HDMI output | Experimental; receiver/display compatibility and lip sync vary |
+| E-AC-3 / DTS core / TrueHD | Optional FFmpeg CPU decoder to 48 kHz S16 PCM | Included in downloads, opt-in; known 48 kHz sources and supported channel layouts only |
+| Other media | Jellyfin conversion to a supported stream | Server transcoding resources required |
+
+TrueHD decoding includes tests of real 7.1 input, but the PCM output does not
+preserve a 24-bit source or Atmos objects. DTS passthrough carries the core,
+not DTS-HD lossless or DTS:X. TrueHD HDMI passthrough is unavailable. HDR10,
+HLG, HDR10+ and Dolby Vision are distinct formats; this client does not claim
+universal HDR support.
+
+See [compatibility](docs/COMPATIBILITY.md), [audio paths](docs/AUDIO.md),
+[software audio setup](docs/SOFTWARE_AUDIO.md) and [HDR evidence](docs/HDR.md)
+for tested behavior and output limitations. The software decoder is enabled
+for movie trials with the documented console marker; installing this build
+alone does not enable that experimental path.
+
+## What makes the playback work
+
+This is a native C++ application built with public homebrew tools. The player
+coordinates network delivery, transport parsing, asynchronous hardware decode,
+frame presentation and audio output within the console runtime's memory and
+threading constraints. Large buffers use flexible memory, and background work
+runs away from the render thread.
+
+**Decode stays pipelined.** Three frames can be in flight, avoiding the
+serialization that limited difficult HEVC streams. Presentation follows the
+source cadence; tested 23.976 fps content uses alternating two/three-refresh
+holds on a 59.94 Hz output. Buffering gates pause the picture when delivery
+falls behind so audio can refill. They cannot eliminate server or network gaps.
+
+**Audio paths have independent checks.** AC-3, E-AC-3 and DTS burst packing was
+compared byte for byte with FFmpeg's SPDIF output. Software-decoder tests cover
+fragmented input, channel identity, sample counts and PCM comparisons against
+an independent reference. Those checks catch framing and mapping errors;
+physical speakers and receivers still need listening tests.
+
+**Intro skipping uses real timing metadata.** Jellyfin Intro segments take
+priority over conservative named-chapter fallback. It seeks to the detected
+end instead of guessing a fixed duration for every episode. Grouped search
+likewise gives movies, series and episodes their own result budgets, keeping
+a long episode list from crowding out a matching show.
 
 ## First launch
 
