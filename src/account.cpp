@@ -291,7 +291,7 @@ bool is_picture(const std::string &name) noexcept
 void consider_file(const std::string &path, const std::string &folder,
                    std::vector<Photo> &out) noexcept
 {
-    struct stat st{};
+    struct stat st = {};
     if (stat(path.c_str(), &st) != 0 || st.st_size <= 0 || st.st_size > 24 * 1024 * 1024)
         return;
     out.push_back({path, folder, st.st_mtime});
@@ -306,7 +306,7 @@ void consider_file(const std::string &path, const std::string &folder,
  */
 bool open_sandbox(std::string &why) noexcept
 {
-    struct stat st{};
+    struct stat st = {};
     if (stat("/user/av_contents", &st) == 0)
         return true;
     const int payload = open("/app0/assets/slopfin-sandbox.bin", O_RDONLY);
@@ -370,7 +370,7 @@ void scan(const std::string &path, const std::string &folder, int depth,
         if (name == "." || name == "..")
             continue;
         const std::string full = path + "/" + name;
-        struct stat st{};
+        struct stat st = {};
         if (stat(full.c_str(), &st) != 0)
             continue;
         if (S_ISDIR(st.st_mode))
@@ -489,7 +489,7 @@ bool avatar_jpeg(const std::string &path, std::vector<unsigned char> &out,
 {
     constexpr int kSide = 512;
     const int fd = open(path.c_str(), O_RDONLY);
-    struct stat st{};
+    struct stat st = {};
     if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0)
     {
         if (fd >= 0)

@@ -38,7 +38,7 @@ int main()
     settings.autoplay_series_overrides["show"] = false;
     settings.subtitle_offsets["episode"] = 1.5;
     slopfin::config::save();
-    struct stat metadata{};
+    struct stat metadata = {};
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
     assert(settings.signed_in() && settings.host == "https://media.example.com/jellyfin");

@@ -2248,12 +2248,10 @@ void benchmark(const char *path) noexcept
         time_it([] { fill_rect_phys(0, 0, g_phys_w, g_phys_h, rgba(0x00, 0x00, 0x00, 0x80)); });
     FillJob single{0, 0, g_phys_w, g_phys_h, rgba(0x00, 0x00, 0x00, 0x80)};
     const std::uint64_t blend_one_us = time_it([&single] { fill_rows(&single, 0, 1); });
-    const std::uint64_t gradient_us = time_it(
-        []
-        {
-            vertical_gradient(0, 0, kWidth, kHeight, rgba(0x00, 0x00, 0x00, 0x00),
-                              rgb(0x0d, 0x0d, 0x12));
-        });
+    const auto top = rgba(0x00, 0x00, 0x00, 0x00);
+    const auto bottom = rgb(0x0d, 0x0d, 0x12);
+    const std::uint64_t gradient_us =
+        time_it([top, bottom] { vertical_gradient(0, 0, kWidth, kHeight, top, bottom); });
     const std::uint64_t cover_us =
         picture.pixels == nullptr
             ? 0
