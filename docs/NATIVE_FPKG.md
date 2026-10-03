@@ -30,6 +30,26 @@ This is a console package-mount blocker, not a successful launch. Do not treat
 this download as a working replacement for the folder build yet. Do not modify
 the selector while that mount is outstanding; recovery requires a console restart.
 
+A repeat test booted the official 1.11 source with observation counters enabled
+and reinstalled the exact selector after its preflight passed. Two snapshots
+confirmed the same stalled state:
+
+| Runtime observation | Result |
+| --- | --- |
+| Plaintext package header validation | Passed; one profile match |
+| `verifyImage` mailbox | One request, emulated successfully; no malformed outputs |
+| G6 key-index interception | Two traps, both applied; no index or copy errors |
+| Mount lifecycle | Hook stage 9; one key pair outstanding; no cleanup or return |
+| SlopFin startup | Not reached |
+
+Stage 9 means the one-shot session was armed before calling the original
+package-mount function. These counters narrow the failure to the mount/read
+pipeline after header validation; they do not identify a specific A53 queue
+failure or prove runtime compatibility. A separate installed-native-app check
+was rejected before PPR mounting, so native regression after the selector
+install remains unverified. The diagnostic payload was temporary; the normal
+official 1.11 autoload entry was restored and read back before the repeat launch.
+
 Folder launch and playback were tested separately. The original PPSA99001
 folder, saved HTTPS account settings and previous autoloader backup were
 preserved. See [compatibility](COMPATIBILITY.md) for the app's playback results.
