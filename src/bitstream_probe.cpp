@@ -124,7 +124,7 @@ void *run(void *) noexcept
     char path[96];
     (void)std::snprintf(path, sizeof(path), "/data/slopfin-bitstream-%s.spdif", s.file);
     const int fd = open(path, O_RDONLY);
-    struct stat st{};
+    struct stat st = {};
     if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0)
     {
         say("no %s\n", path);

@@ -229,7 +229,7 @@ unsigned char *read_local_file(const std::string &path, std::size_t &size) noexc
     const int fd = open(path.c_str(), O_RDONLY);
     if (fd < 0)
         return nullptr;
-    struct stat st{};
+    struct stat st = {};
     if (fstat(fd, &st) != 0 || st.st_size <= 0 || static_cast<std::size_t>(st.st_size) > kLimit)
     {
         (void)close(fd);
