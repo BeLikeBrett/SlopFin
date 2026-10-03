@@ -1739,3 +1739,25 @@ bands.
   then timed out; the payload loader and kernel probes remained responsive.
   Native launch/playback remain unverified, and the folder is still recommended.
   No selector change is attempted while this mount is outstanding.
+
+## 2026-10-03 — Instrumented package mount and published downloads
+
+- A fresh boot loaded official kstuff-lite 1.11 source at
+  `85fb88a526e58e357d6f1e626ce05af4acdb8b5d` with observation counters enabled.
+  Its matching socket-only reader avoided console log-file writes. The exact
+  retail 8.20 selector passed stock preflight and all install readbacks again.
+- Isolated PPSA99002 still stalled before app startup. Two snapshots showed
+  one successful plaintext profile match, one emulated verifyImage request,
+  and both key-index traps applied without malformed outputs or copy failures.
+  Hook stage 9 and one outstanding key pair stayed unchanged; mount return and
+  cleanup were never reached. This narrows the blocker without identifying a
+  specific A53 queue fault. A separate installed-native-app launch was rejected
+  before mounting, so post-selector native regression remains unverified.
+- Restored and read back the normal official 1.11 autoload entry before the
+  repeat native launch. No selector was added to autoload. Recovery boot will
+  use the normal runtime; no patch change is attempted during the stalled mount.
+- Public main CI and tag CI passed lint, app/network/tooling tests, Linux build,
+  runtime reproduction, software audio and native package verification. The
+  prerelease at `releases/tag/01.000.000` contains folder ZIP, experimental PKG,
+  matching FFmpeg source and checksums. Downloaded the final tag assets and
+  verified all checksums; the 26-file folder contains no account configuration.
