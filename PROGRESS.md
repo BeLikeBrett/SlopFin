@@ -1717,3 +1717,25 @@ bands.
   Official 1.11 was downloaded, SHA-256 verified and staged in the autoloader;
   the old payload and configuration are backed up locally. Final native launch
   waits for a user restart/jailbreak. A53 status was read only (stock/native).
+
+
+## 2026-10-03 — Public repository and fresh native mount test
+
+- Published the clean source root at https://github.com/BeLikeBrett/SlopFin.
+  Original development history and private captures remain archived locally.
+  README now includes an authorized real PS5 Home capture, codec paths,
+  implementation details and explicit experimental limits.
+- The first clean GitHub run found formatter-version differences between the
+  local Clang 23 and CI Clang 18. Portable zero-initialization and a shortened
+  benchmark lambda pass both formatters; the Linux preview rebuild passed.
+- User restarted/jailbroke the console. Official kstuff-lite 1.11 is now loaded;
+  read-only probes confirm its newer plaintext mount protocol is present.
+- With no app mounts active, installed ppr-patch's exact retail 8.20 dynamic
+  selector using its non-time-accelerated installer. Exact preflight and all
+  mutation readbacks passed. No KMB write-range patch was applied.
+- The isolated installed PPSA99002 launch progressed to app0/nest mount entries
+  but stalled before SlopFin startup. Kernel logs stop in PPR package mounting;
+  no SlopFin process exists. File operations and Remote Play authentication
+  then timed out; the payload loader and kernel probes remained responsive.
+  Native launch/playback remain unverified, and the folder is still recommended.
+  No selector change is attempted while this mount is outstanding.
