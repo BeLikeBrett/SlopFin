@@ -1,0 +1,45 @@
+# Copyright (C) 2026 Brett
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Bug report
+description: Report a reproducible problem with SlopFin.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Please keep passwords, tokens, server addresses and private media names out of reports. Native FPKG launch is still experimental; check the package guide first."
+  - type: input
+    id: build
+    attributes:
+      label: SlopFin version and installation method
+      placeholder: "01.000.000, folder ZIP or native PKG"
+    validations:
+      required: true
+  - type: input
+    id: console
+    attributes:
+      label: PS5 firmware and loader/payload versions
+      placeholder: "Firmware, kstuff, mount service and package installer"
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Jellyfin version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected result and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Playback details, if relevant
+      description: "Container, video/audio codecs, subtitles, TV/audio setup, and whether Jellyfin copied or transcoded the stream."
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or screenshots
+      description: "Remove tokens, passwords, addresses and private account/media names."

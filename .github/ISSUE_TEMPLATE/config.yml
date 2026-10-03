@@ -1,0 +1,7 @@
+# Copyright (C) 2026 Brett
+# SPDX-License-Identifier: GPL-3.0-or-later
+blank_issues_enabled: true
+contact_links:
+  - name: Installation and compatibility
+    url: https://github.com/BeLikeBrett/SlopFin/blob/main/docs/GETTING_STARTED.md
+    about: Check supported setup and known limitations before opening an issue.

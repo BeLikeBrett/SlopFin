@@ -1,0 +1,44 @@
+# ps5-native-app-boilerplate - Generated and local-only file exclusions.
+# Copyright (C) 2026 BlackBearReloaded
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+.local/
+.deps/
+.env
+__pycache__/
+*.pyc
+build/
+dist/
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
+*.elf
+*.self
+*.sprx
+*.prx
+*.pkg
+
+# Diagnostics written by the Linux preview, which runs in the repository root.
+slopfin-session.txt
+slopfin-crash.txt
+slopfin-crashes.log
+slopfin-lastrun.txt
+slopfin-report-sent.txt
+slopfin-trace.txt
+
+# Local preview, captures and diagnostic artifacts.
+/captures/
+/.slopfin/
+/.director-runs/
+slopfin-report-offered.txt
+slopfin-frame.bin
+slopfin-frames.csv
+slopfin-audio.raw
+slopfin-audio.txt
+/vendor/ps5/sdk/lib/
+
+/assets/slopfin-sandbox.bin
