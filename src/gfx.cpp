@@ -1764,6 +1764,7 @@ struct GradientJob
     int ramp_origin;      /* where the ramp starts, before clipping */
     int ramp_span;        /* how far it runs, before clipping */
     const Color *columns; /* horizontal only: one colour per destination column */
+    int rect_x, rect_y, rect_w, rect_h, radius;
 };
 
 void gradient_rows(void *context, unsigned first, unsigned stride) noexcept
@@ -1773,6 +1774,17 @@ void gradient_rows(void *context, unsigned first, unsigned stride) noexcept
     for (int py = job.y0 + static_cast<int>(first); py < job.y1; py += static_cast<int>(stride))
     {
         std::uint32_t *row = frame + static_cast<std::size_t>(py) * g_phys_w;
+        if (job.radius > 0)
+        {
+            for (int px = job.x0; px < job.x1; ++px)
+            {
+                const float coverage = rounded_coverage(px, py, job.rect_x, job.rect_y, job.rect_w,
+                                                        job.rect_h, job.radius);
+                if (coverage > 0.0f)
+                    blend_pixel(row + px, at_coverage(job.columns[px - job.x0], coverage));
+            }
+            continue;
+        }
         if (job.columns == nullptr)
         {
             const Color value =
@@ -1792,7 +1804,8 @@ void gradient_rows(void *context, unsigned first, unsigned stride) noexcept
  * nearly three thousand columns, which is the worst access pattern this
  * renderer had.
  */
-void gradient(int lx, int ly, int lw, int lh, Color from, Color to, bool vertical) noexcept
+void gradient(int lx, int ly, int lw, int lh, Color from, Color to, bool vertical,
+              int radius = 0) noexcept
 {
     const int x = to_physical_x(lx);
     const int y = to_physical_y(ly);
@@ -1806,8 +1819,13 @@ void gradient(int lx, int ly, int lw, int lh, Color from, Color to, bool vertica
     job.y1 = std::min(bottom, c.y1);
     job.from = from;
     job.to = to;
+    job.rect_x = x;
+    job.rect_y = y;
+    job.rect_w = right - x;
+    job.rect_h = bottom - y;
     if (job.x0 >= job.x1 || job.y0 >= job.y1)
         return;
+    job.radius = std::clamp(to_physical_size(radius), 0, std::min(job.rect_w, job.rect_h) / 2);
 
     /* The ramp is measured across the whole request, not the clipped part, so
        clipping never changes the colours. */
@@ -1840,6 +1858,12 @@ void vertical_gradient(int lx, int ly, int lw, int lh, Color top, Color bottom) 
 void horizontal_gradient(int lx, int ly, int lw, int lh, Color left, Color right) noexcept
 {
     gradient(lx, ly, lw, lh, left, right, false);
+}
+
+void rounded_horizontal_gradient(int x, int y, int w, int h, int radius, Color left,
+                                 Color right) noexcept
+{
+    gradient(x, y, w, h, left, right, false, radius);
 }
 
 void media_scrim(int height, Color tone, std::uint8_t base_alpha, int vertical_start,
@@ -2202,6 +2226,41 @@ void blit_cover_phys(const Bitmap &src, int x, int y, int w, int h, int radius,
         cover_rows(&job, 0, 1);
 }
 
+void blit_crop(const Bitmap &src, int source_x, int source_y, int source_side, int lx, int ly,
+               int size, int radius, std::uint8_t alpha) noexcept
+{
+    if (!src.valid() || size <= 0 || source_side <= 0 || alpha == 0)
+        return;
+    source_side = std::min(source_side, std::min(src.width, src.height));
+    source_x = std::clamp(source_x, 0, src.width - source_side);
+    source_y = std::clamp(source_y, 0, src.height - source_side);
+    const Clip &c = clip();
+    CoverJob job{};
+    job.src = &src;
+    job.x = to_physical_x(lx);
+    job.y = to_physical_y(ly);
+    job.w = to_physical_x(lx + size) - job.x;
+    job.h = to_physical_y(ly + size) - job.y;
+    if (job.w <= 0 || job.h <= 0)
+        return;
+    job.radius = std::clamp(to_physical_size(radius), 0, std::min(job.w, job.h) / 2);
+    job.alpha = alpha;
+    job.x0 = std::max(job.x, c.x0);
+    job.y0 = std::max(job.y, c.y0);
+    job.x1 = std::min(job.x + job.w, c.x1);
+    job.y1 = std::min(job.y + job.h, c.y1);
+    if (job.x0 >= job.x1 || job.y0 >= job.y1)
+        return;
+    job.step_x = (static_cast<std::int64_t>(source_side) << 16) / job.w;
+    job.step_y = (static_cast<std::int64_t>(source_side) << 16) / job.h;
+    job.origin_u = (static_cast<std::int64_t>(source_x) << 16) + job.step_x / 2 - 32768;
+    job.origin_v = (static_cast<std::int64_t>(source_y) << 16) + job.step_y / 2 - 32768;
+    if (static_cast<std::int64_t>(job.x1 - job.x0) * (job.y1 - job.y0) > g_cover_thread_above)
+        run_rows(cover_rows, &job);
+    else
+        cover_rows(&job, 0, 1);
+}
+
 /*
  * Times each primitive at the surface's real size and writes the numbers out.
  * Guessing which one was slow cost several deploys and was wrong twice: the
@@ -2251,7 +2310,7 @@ void benchmark(const char *path) noexcept
     const auto top = rgba(0x00, 0x00, 0x00, 0x00);
     const auto bottom = rgb(0x0d, 0x0d, 0x12);
     const std::uint64_t gradient_us =
-        time_it([top, bottom] { vertical_gradient(0, 0, kWidth, kHeight, top, bottom); });
+        time_it([] { vertical_gradient(0, 0, kWidth, kHeight, top, bottom); });
     const std::uint64_t cover_us =
         picture.pixels == nullptr
             ? 0

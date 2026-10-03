@@ -34,6 +34,7 @@ APP_NAME ?=
 APP_CATEGORY ?= game
 CONTENT_SUFFIX ?=
 HOST_CXX ?= clang++
+HOST_CC ?= clang
 HOST_TEST_CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
 	-ffunction-sections -fdata-sections
 HOST_TEST_LDFLAGS ?= -Wl,--gc-sections
@@ -54,7 +55,7 @@ HOST_SRC := \
 	src/app.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp \
 	src/ime.cpp src/http.cpp src/web_transport.cpp src/jellyfin.cpp src/json.cpp src/pad.cpp \
 	src/bigalloc.cpp src/config.cpp src/subtitles.cpp src/telemetry.cpp \
-	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp
+	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp src/update.cpp src/update_package.cpp
 HOST_CXXFLAGS ?= -std=c++20 -O2 -g -DSLOPFIN_HOST -Wall -Wextra \
 	-Wno-unused-parameter -pthread $(shell pkg-config --cflags sdl2)
 HOST_LDFLAGS ?= -pthread $(shell pkg-config --libs sdl2 libcurl) -lz
@@ -89,8 +90,8 @@ host-run: $(HOST_BIN)
 
 test: test-unit test-integration test-server-network
 
-.PHONY: test-playback
-test-playback:
+.PHONY: test-playback test-updates
+test-playback: test-updates
 	@mkdir -p build/tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Isrc tests/test_config.cpp src/config.cpp src/json.cpp -o build/tests/config_tests
 	@build/tests/config_tests
@@ -170,10 +171,25 @@ test-playback:
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_intro_metadata.cpp src/json.cpp -o build/tests/intro_metadata_tests
 	@build/tests/intro_metadata_tests
 
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_avatar_crop.cpp -o build/tests/avatar_crop_tests
+	@build/tests/avatar_crop_tests
+
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_rounded_render.cpp src/gfx.cpp src/bigalloc.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2) -lz $(HOST_TEST_LDFLAGS) -o build/tests/rounded_render_tests
+	@build/tests/rounded_render_tests
+
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_avatar_editor.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp src/pad.cpp src/bigalloc.cpp src/config.cpp src/json.cpp src/ui_common.cpp src/background.cpp src/ime.cpp src/jellyfin.cpp src/http.cpp src/web_transport.cpp src/trace.cpp src/crash.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2 libcurl) -lz $(HOST_TEST_LDFLAGS) -o build/tests/avatar_editor_tests
+	@SLOPFIN_DATA="$(CURDIR)/build/tests/avatar-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/avatar_editor_tests
+
 # Compatibility alias for contributors using the standard unit-test target.
 test-unit: test-playback
 
-test-integration:
+test-updates:
+	@mkdir -p build/tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_package.cpp src/update_package.cpp src/json.cpp -o build/tests/update_package_tests
+	@build/tests/update_package_tests
+	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_update_transaction.c -o build/tests/update_transaction_tests
+
+test-integration: test-updates
 	@printf '%s\n' '==> [test-integration] Running host tooling integration tests'
 	@python3 -m unittest discover -s tests -p 'test_*.py' -v
 
@@ -214,19 +230,25 @@ $(SANDBOX_ELF): payloads/sandbox/main.c
 	@cp payloads/sandbox/slopfin-sandbox.elf $@
 	@rm -f assets/slopfin-sandbox.elf
 
-app: sdk-archives $(RUNTIME) $(SANDBOX_ELF)
+UPDATE_ELF := assets/slopfin-update.bin
+$(UPDATE_ELF): payloads/updater/main.c $(wildcard src/update/*.h)
+	@printf '%s\n' '==> [payload] Building the app update helper'
+	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/updater slopfin-update.elf
+	@cp payloads/updater/slopfin-update.elf $@
+
+app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
-ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF)
+ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
 	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
 	@bash tools/build.sh Ffpkg
 
-ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF)
+ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
 	@printf '%s\n' '==> [ffpfsc] Building the app folder and compressed image'
 	@bash tools/build.sh Ffpfsc
 
-packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF)
+packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
 	@printf '%s\n' '==> [packages] Building the app folder and both package formats'
 	@bash tools/build.sh All
 

@@ -12,6 +12,7 @@
 #include "audio.hpp"
 #include "bigalloc.hpp"
 #include "account.hpp"
+#include "update.hpp"
 #include "audiocaps.hpp"
 #include "autoplay.hpp"
 #include "bitstream_probe.hpp"
@@ -2147,7 +2148,7 @@ SearchScope search_scope(Screen screen, const std::vector<SidebarEntry> &sidebar
    define it, so it is named here. */
 void open_search() noexcept;
 
-/* Results remain visible while the system keyboard is open. */
+/* Reserve an empty area beneath the field for the native keyboard. */
 int search_results_top() noexcept
 {
     return kSearchBarY + kSearchBarH + 54;
@@ -2205,6 +2206,8 @@ void draw_search_results(const std::vector<jellyfin::Item> &items,
                          const std::string &error) noexcept
 {
     const int top = search_results_top();
+    if (ime::busy())
+        return;
     draw_button_hints(kContentX, gfx::kHeight - 48,
                       {{icons::Icon::ps_cross, "Open"},
                        {icons::Icon::ps_triangle, "Edit search"},
@@ -4394,8 +4397,8 @@ void draw_skip_intro() noexcept
 
     gfx::drop_shadow(x, y, kW, kH, kRadius, 18, fade(0x78));
     gfx::rounded_rect(x, y, kW, kH, kRadius, gfx::rgba(0x0c, 0x0d, 0x12, fade(0xea)));
-    gfx::horizontal_gradient(x, y, kW, kH, gfx::rgba(0x00, 0xa4, 0xdc, fade(0x1e)),
-                             gfx::rgba(0x0c, 0x0d, 0x12, fade(0x00)));
+    gfx::rounded_horizontal_gradient(x, y, kW, kH, kRadius, gfx::rgba(0x00, 0xa4, 0xdc, fade(0x1e)),
+                                     gfx::rgba(0x0c, 0x0d, 0x12, fade(0x00)));
     gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 1, gfx::rgba(0xff, 0xff, 0xff, fade(0x24)));
     gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 2, gfx::rgba(0x62, 0xd5, 0xf4, fade(0xd8)));
     const auto button = g_view.osd_visible ? icons::Icon::ps_square : icons::Icon::ps_cross;
@@ -5114,9 +5117,9 @@ int idle_index(int minutes) noexcept
     return 3; /* whatever was stored, ninety is the one it means */
 }
 
-constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback", "Controller",
-                                         "Server",    "Account",  "Diagnostics"};
-constexpr int kSettingsMenuCount = 6;
+constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback",    "Controller", "Server",
+                                         "Account",   "Diagnostics", "Updates"};
+constexpr int kSettingsMenuCount = 7;
 
 /* A screen's single action row, focused, with the menu's look. */
 void draw_settings_action(int y, const std::string &label, const std::string &value) noexcept
@@ -5255,6 +5258,55 @@ void draw_settings(const std::string &server_name) noexcept
                        gfx::palette::text_dim);
         draw_settings_action(kGridTop + 110, "Change server", "");
         break;
+    case 7:
+    {
+        const auto info = update::status();
+        text::draw(kContentX, kSafeY + 96, "Updates", 38, Weight::bold, gfx::palette::text);
+        text::draw(kContentX, kGridTop, "Installed  " + info.current, 30, Weight::medium,
+                   gfx::palette::text);
+        text::draw(kContentX, kGridTop + 48, "BeLikeBrett / SlopFin on GitHub", 22, Weight::regular,
+                   gfx::palette::text_dim);
+        if (!info.version.empty())
+            text::draw(kContentX, kGridTop + 108,
+                       "Available  " + info.version + (info.preview ? "   Preview" : ""), 26,
+                       Weight::medium, gfx::palette::text);
+        const bool busy = info.phase == update::Phase::checking ||
+                          info.phase == update::Phase::downloading ||
+                          info.phase == update::Phase::installing;
+        text::draw_wrapped(
+            kContentX, kGridTop + 166, 1040, 3, 34,
+            info.message.empty() ? "Check for a new release, then download and install it here."
+                                 : info.message,
+            24, Weight::regular,
+            info.phase == update::Phase::error ? gfx::palette::danger : gfx::palette::text_dim);
+        if (info.phase == update::Phase::downloading && info.total > 0)
+        {
+            gfx::rounded_rect(kContentX, kGridTop + 296, 780, 8, 4, gfx::palette::surface_high);
+            const int filled = static_cast<int>(780 * info.received / info.total);
+            if (filled > 0)
+                gfx::rounded_rect(kContentX, kGridTop + 296, filled, 8, 4,
+                                  gfx::palette::accent_alt);
+            text::draw(kContentX + 804, kGridTop + 284,
+                       std::to_string(100 * info.received / info.total) + "%", 22, Weight::medium,
+                       gfx::palette::text);
+        }
+        if (!busy)
+        {
+            const char *action = info.phase == update::Phase::ready       ? "Install and restart"
+                                 : info.phase == update::Phase::available ? "Download update"
+                                                                          : "Check for updates";
+            draw_settings_action(kGridTop + 350, action, "");
+            ui::draw_button_hints(
+                kContentX, kGridTop + 444,
+                {{icons::Icon::ps_cross, action}, {icons::Icon::ps_triangle, "Check again"}});
+        }
+        text::draw_wrapped(
+            kContentX, kGridTop + 518, 1040, 3, 30,
+            "Folder builds update here using the console's payload loader. SlopFin closes during "
+            "installation and opens again when finished. Keep the console on.",
+            21, Weight::regular, gfx::palette::text_faint);
+        break;
+    }
     case 6:
     {
         /* Reports can be sent from here as well as from the offer that
@@ -5340,8 +5392,8 @@ void draw_settings(const std::string &server_name) noexcept
                               focused ? gfx::palette::text : gfx::palette::text_dim);
         }
         text::draw(kContentX, kGridTop + kSettingsMenuCount * 84 + 40,
-                   "SlopFin 0.1   unofficial Jellyfin client", 20, Weight::regular,
-                   gfx::palette::text_faint);
+                   "SlopFin " + update::status().current + "   unofficial Jellyfin client", 20,
+                   Weight::regular, gfx::palette::text_faint);
         return;
     }
     }
@@ -7384,6 +7436,22 @@ void handle_settings_input() noexcept
         if (pad::pressed(pad::Button::cross))
             ask_keyboard(View::Prompt::host);
         return;
+    case 7:
+    {
+        const auto info = update::status();
+        if (pad::pressed(pad::Button::triangle))
+            update::check();
+        else if (pad::pressed(pad::Button::cross))
+        {
+            if (info.phase == update::Phase::available)
+                update::download();
+            else if (info.phase == update::Phase::ready)
+                update::install();
+            else
+                update::check();
+        }
+        return;
+    }
     case 6:
     {
         const bool can_send = diagnostics::destination(config::current().report_server).valid();
@@ -7464,7 +7532,7 @@ bool g_exit_requested = false;
 
 bool exit_requested() noexcept
 {
-    return g_exit_requested;
+    return g_exit_requested || update::restart_requested();
 }
 
 void start() noexcept

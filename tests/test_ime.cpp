@@ -69,8 +69,8 @@ int main()
     assert(ime::busy());
     ime::poll();
     assert(captured.user_id == 7 && captured.enter_label == 2 && captured.option == 0);
-    assert(captured.horizontal_alignment == 2 && captured.vertical_alignment == 0);
-    assert(captured.pos_x == 1824.0f && captured.pos_y == 54.0f);
+    assert(captured.horizontal_alignment == 1 && captured.vertical_alignment == 0);
+    assert(captured.pos_x == 1080.0f && captured.pos_y == 244.0f);
     assert(from_utf16(captured.input_text_buffer) == "The Office");
     dialog_status = 2;
     ime::poll();

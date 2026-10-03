@@ -1761,3 +1761,28 @@ bands.
   prerelease at `releases/tag/01.000.000` contains folder ZIP, experimental PKG,
   matching FFmpeg source and checksums. Downloaded the final tag assets and
   verified all checksums; the 26-file folder contains no account configuration.
+
+## 2026-10-03 — Rounded controls, avatar cropping and in-app updates
+
+- Fixed Skip Intro's square shading: the gradient now shares the rounded fill's
+  coverage mask. Audited other gradient callers; they are page scrims rather
+  than rounded controls. Renderer tests verify excluded corners, symmetry and
+  partial coverage. Reviewed a native full-resolution button crop.
+- Re-tested successful intro seeks on South Park S1E1 (172.463958 s) and The
+  Office S2E3 (80.351 s). Initial Office startup needed time to advance from
+  the server's earlier keyframe before the intro range became active.
+- Added circular crop editing with D-pad movement, L1/R1 and trigger zoom,
+  Triangle reset, matching preview and bounded JPEG export. Native gallery,
+  movement, zoom, reset and cancel reviewed. Synthetic host checks verify
+  export matches the chosen region; no production avatar was uploaded.
+- Search requests the native IME below the field and clears result artwork
+  while editing. ABI placement checks pass; the OS overlay is absent from app
+  captures, so final TV placement needs observation.
+- Added Settings > Updates for GitHub folder releases, SHA-256 verification,
+  bounded ZIP staging, a bundled installer helper, backup/rollback and relaunch.
+  Native GitHub checking and helper backup/install/relaunch pass, with
+  account settings unchanged. The installer preserves executable permissions;
+  host checks cover installation and rollback modes. Full GitHub download
+  validation is pending the new public release. Details and recovery are in docs/UPDATES.md.
+- Host tests, Linux preview, lint and native app build pass. Native FPKG remains
+  blocked at the package mount; this work does not establish a native launch.

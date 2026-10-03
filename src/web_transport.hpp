@@ -18,6 +18,10 @@ class WebRequest
               std::string_view content_type, bool media = false) noexcept;
     long read(void *buffer, std::size_t capacity) noexcept;
     void interrupt() noexcept;
+    const std::string &location() const noexcept
+    {
+        return location_;
+    }
     int status() const noexcept
     {
         return status_;
@@ -25,6 +29,7 @@ class WebRequest
 
   private:
     int status_ = 0;
+    std::string location_;
     std::atomic<bool> interrupted_{false};
 #ifdef SLOPFIN_HOST
     void *easy_ = nullptr;

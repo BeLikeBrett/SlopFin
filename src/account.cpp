@@ -3,8 +3,6 @@
  * Copyright (C) 2026 Brett
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- *
- *
  * The console offers applications no photo picker -- its dialogs cover the
  * keyboard, save data and messages, not the media gallery -- so the picture is
  * chosen from the files the gallery keeps: captures under
@@ -15,6 +13,7 @@
  */
 
 #include "account.hpp"
+#include "avatar_crop.hpp"
 
 #include "background.hpp"
 #include "bigalloc.hpp"
@@ -173,6 +172,7 @@ struct View
     int action_index = 0;
     int photo_index = 0;
     int photo_top_row = 0;
+    avatar::Crop crop;
     Prompt prompt = Prompt::none;
     std::string current_password;
     std::string new_password;
@@ -439,7 +439,9 @@ void start_scan() noexcept
         {
             std::vector<Photo> found;
 #ifdef SLOPFIN_HOST
-            if (const char *home = std::getenv("HOME"); home != nullptr)
+            if (const char *fixture = std::getenv("SLOPFIN_PHOTOS"); fixture != nullptr)
+                scan(fixture, "Pictures", 0, found);
+            else if (const char *home = std::getenv("HOME"); home != nullptr)
                 scan(std::string{home} + "/Pictures", "Pictures", 0, found);
 #else
             std::string why;
@@ -483,14 +485,14 @@ void append_bytes(void *context, void *data, int size) noexcept
     out->insert(out->end(), bytes, bytes + size);
 }
 
-/* The picture as a 512-pixel square JPEG, centre-cropped. */
-bool avatar_jpeg(const std::string &path, std::vector<unsigned char> &out,
+/* Export the selected crop; Jellyfin applies the circular display mask. */
+bool avatar_jpeg(const std::string &path, const avatar::Crop &crop, std::vector<unsigned char> &out,
                  std::string &error) noexcept
 {
     constexpr int kSide = 512;
     const int fd = open(path.c_str(), O_RDONLY);
     struct stat st = {};
-    if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0)
+    if (fd < 0 || fstat(fd, &st) != 0 || st.st_size <= 0 || st.st_size > 32 * 1024 * 1024)
     {
         if (fd >= 0)
             (void)close(fd);
@@ -511,10 +513,13 @@ bool avatar_jpeg(const std::string &path, std::vector<unsigned char> &out,
     int width = 0;
     int height = 0;
     int channels = 0;
-    unsigned char *pixels =
-        file != nullptr && have == size
-            ? stbi_load_from_memory(file, static_cast<int>(size), &width, &height, &channels, 3)
-            : nullptr;
+    const bool valid_image =
+        file != nullptr && have == size &&
+        stbi_info_from_memory(file, static_cast<int>(size), &width, &height, &channels) != 0 &&
+        width > 0 && height > 0 && static_cast<std::uint64_t>(width) * height <= 64000000;
+    unsigned char *pixels = valid_image ? stbi_load_from_memory(file, static_cast<int>(size),
+                                                                &width, &height, &channels, 3)
+                                        : nullptr;
     if (file != nullptr)
         bigalloc::release(file);
     if (pixels == nullptr || width <= 0 || height <= 0)
@@ -525,9 +530,10 @@ bool avatar_jpeg(const std::string &path, std::vector<unsigned char> &out,
         return false;
     }
 
-    const int side = std::min(width, height);
-    const int left = (width - side) / 2;
-    const int top = (height - side) / 2;
+    const avatar::Rect area = crop.rect(width, height);
+    const int side = area.side;
+    const int left = area.x;
+    const int top = area.y;
     const int target = std::min(kSide, side);
     auto *square = static_cast<unsigned char *>(
         bigalloc::allocate(static_cast<std::size_t>(target) * target * 3u));
@@ -584,7 +590,7 @@ bool avatar_jpeg(const std::string &path, std::vector<unsigned char> &out,
     return true;
 }
 
-void save_picture(const std::string &path) noexcept
+void save_picture(const std::string &path, const avatar::Crop &crop) noexcept
 {
     {
         std::lock_guard<std::mutex> guard(g_shared.mutex);
@@ -593,11 +599,11 @@ void save_picture(const std::string &path) noexcept
         g_shared.message_is_error = false;
     }
     background::run(
-        [path]
+        [path, crop]
         {
             std::vector<unsigned char> jpeg;
             std::string error;
-            bool ok = avatar_jpeg(path, jpeg, error);
+            bool ok = avatar_jpeg(path, crop, jpeg, error);
             if (ok)
                 ok = jellyfin::upload_user_image(jpeg, error);
             jellyfin::User user;
@@ -1068,7 +1074,10 @@ Choice handle_profile_input() noexcept
         else if (pad::pressed(pad::Button::up) && index >= kGridColumns)
             index -= kGridColumns;
         else if (pad::pressed(pad::Button::cross))
+        {
+            g_view.crop = {};
             g_view.page = Page::confirm;
+        }
         g_view.photo_index = index;
         const int row = index / kGridColumns;
         if (row < g_view.photo_top_row)
@@ -1094,8 +1103,34 @@ Choice handle_profile_input() noexcept
                 if (g_view.photo_index < static_cast<int>(g_shared.photos.size()))
                     path = g_shared.photos[static_cast<std::size_t>(g_view.photo_index)].path;
             }
-            if (!path.empty())
-                save_picture(path);
+            if (!path.empty() && images::acquire(path, "crop", images::Kind::file, 1200) != nullptr)
+                save_picture(path, g_view.crop);
+        }
+        else
+        {
+            std::string path;
+            {
+                std::lock_guard<std::mutex> guard(g_shared.mutex);
+                if (g_view.photo_index < static_cast<int>(g_shared.photos.size()))
+                    path = g_shared.photos[static_cast<std::size_t>(g_view.photo_index)].path;
+            }
+            const gfx::Bitmap *picture = images::acquire(path, "crop", images::Kind::file, 1200);
+            if (picture != nullptr)
+            {
+                if (pad::pressed(pad::Button::triangle))
+                    g_view.crop = {};
+                if (pad::pressed(pad::Button::l1))
+                    g_view.crop.zoom -= 0.15;
+                if (pad::pressed(pad::Button::r1))
+                    g_view.crop.zoom += 0.15;
+                g_view.crop.zoom += (pad::trigger_right() - pad::trigger_left()) * 0.025;
+                g_view.crop.constrain(picture->width, picture->height);
+                const double dx = (pad::pressed(pad::Button::right) ? 0.035 : 0.0) -
+                                  (pad::pressed(pad::Button::left) ? 0.035 : 0.0);
+                const double dy = (pad::pressed(pad::Button::down) ? 0.035 : 0.0) -
+                                  (pad::pressed(pad::Button::up) ? 0.035 : 0.0);
+                g_view.crop.move(dx, dy, picture->width, picture->height);
+            }
         }
         return Choice::none;
     }
@@ -1216,41 +1251,53 @@ void draw_profile(const std::string &server_name) noexcept
         return;
     }
 
-    /* Confirm: the picture, and the circle it will be shown in. */
-    text::draw(kLeft, kSafeY + 50, "Use this picture?", 38, Weight::bold, gfx::palette::text);
+    text::draw(kLeft, kSafeY + 50, "Adjust your picture", 38, Weight::bold, gfx::palette::text);
+    text::draw(kLeft, kSafeY + 104, "Move and zoom until it fits the circle.", 22, Weight::regular,
+               gfx::palette::text_dim);
     if (g_view.photo_index < static_cast<int>(photos.size()))
     {
         const Photo &photo = photos[static_cast<std::size_t>(g_view.photo_index)];
-        const gfx::Bitmap *large = images::acquire(photo.path, "l", images::Kind::file, 540);
-        const gfx::Bitmap *shown =
-            large != nullptr ? large
-                             : images::acquire(photo.path, "t", images::Kind::file, kThumbH);
-        if (shown != nullptr && shown->width > 0 && shown->height > 0)
+        const gfx::Bitmap *picture = images::acquire(photo.path, "crop", images::Kind::file, 1200);
+        constexpr int kCircle = 540;
+        constexpr int kCircleY = 240;
+        gfx::rounded_rect(kLeft, kCircleY, kCircle, kCircle, kCircle / 2,
+                          gfx::palette::surface_high);
+        if (picture != nullptr)
         {
-            constexpr int kBoxW = 960;
-            constexpr int kBoxH = 540;
-            int w = kBoxW;
-            int h = shown->height * kBoxW / shown->width;
-            if (h > kBoxH)
-            {
-                h = kBoxH;
-                w = shown->width * kBoxH / shown->height;
-            }
-            gfx::blit_cover(*shown, kLeft + (kBoxW - w) / 2, 230 + (kBoxH - h) / 2, w, h, 12, 255);
-            constexpr int kCircle = 320;
-            const int cx = kLeft + kBoxW + 120;
-            gfx::blit_cover(*shown, cx, 300, kCircle, kCircle, kCircle / 2, 255);
-            text::draw(cx, 300 + kCircle + 30, "Your picture", 24, Weight::medium,
-                       gfx::palette::text_dim);
+            const avatar::Rect area = g_view.crop.rect(picture->width, picture->height);
+            gfx::blit_crop(*picture, area.x, area.y, area.side, kLeft, kCircleY, kCircle,
+                           kCircle / 2);
+            gfx::blit_crop(*picture, area.x, area.y, area.side, kLeft + 770, 270, 200, 100);
         }
-        text::draw(kLeft, 800,
-                   short_date(photo.modified) + (photo.folder.empty() ? "" : "   " + photo.folder),
-                   22, Weight::regular, gfx::palette::text_faint);
+        else
+            text::draw(kLeft + 100, kCircleY + kCircle / 2,
+                       images::failed(photo.path, "crop", images::Kind::file)
+                           ? "Could not open this picture."
+                           : "Loading picture...",
+                       22, Weight::regular, gfx::palette::text_dim);
+        gfx::stroke_rounded_rect(kLeft - 3, kCircleY - 3, kCircle + 6, kCircle + 6, kCircle / 2 + 3,
+                                 2, gfx::palette::accent_alt);
+        text::draw(kLeft + 770, 500, "Your picture", 28, Weight::medium, gfx::palette::text);
+        const int percent = static_cast<int>(std::lround(g_view.crop.zoom * 100.0));
+        text::draw(kLeft + 770, 564, "Zoom  " + std::to_string(percent) + "%", 24, Weight::regular,
+                   gfx::palette::text_dim);
+        gfx::rounded_rect(kLeft + 770, 615, 360, 6, 3, gfx::palette::surface_high);
+        const int filled = std::max(6, static_cast<int>(360 * (g_view.crop.zoom - 1.0) / 5.0));
+        gfx::rounded_rect(kLeft + 770, 615, filled, 6, 3, gfx::palette::accent_alt);
+        (void)draw_button_hints(kLeft + 770, 674, {{icons::Icon::ps_triangle, "Reset crop"}});
+        text::draw_ellipsized(kLeft, 824, 1200,
+                              short_date(photo.modified) +
+                                  (photo.folder.empty() ? "" : "   " + photo.folder),
+                              22, Weight::regular, gfx::palette::text_faint);
     }
     if (!message.empty())
-        text::draw(kLeft, 850, message, 26, Weight::medium, message_colour);
+        text::draw(kLeft, 880, message, 24, Weight::medium, message_colour);
     if (!busy)
-        draw_hint_row(kLeft, gfx::kHeight - 100, "Use this picture", "Back");
+        (void)draw_button_hints(kLeft, gfx::kHeight - 70,
+                                {{icons::Icon::ps_cross, "Use picture"},
+                                 {icons::Icon::ps_cross, "Move", "D-pad"},
+                                 {icons::Icon::ps_cross, "Zoom", "L1 / R1"},
+                                 {icons::Icon::ps_circle, "Back"}});
 }
 
 } // namespace slopfin::account

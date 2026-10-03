@@ -15,6 +15,11 @@ Playback tests cover timestamps/scanout convention, audio shutdown ownership,
 subtitle parsing, TS/AC-3 framing, HDR matrix/packing, scaling, URL selection,
 negotiation, media bitrate and isolated frame recordings. App model tests also cover native keyboard requests, server address handling,
 search grouping, intro metadata, settings persistence and navigation motion.
+Renderer checks cover rounded gradient clipping, symmetric corners and partial
+edge coverage. The avatar test drives crop controls and verifies the exported
+JPEG using a synthetic image. Update checks cover SHA-256 reference vectors,
+release selection, ZIP integrity, path rejection, staged-file tampering and
+rollback after an injected partial-install failure.
 Network checks require OpenSSL and generate a disposable local certificate;
 they do not require a public server or credentials.
 `make test-unit` aliases the app model suite; `make test` adds local network and

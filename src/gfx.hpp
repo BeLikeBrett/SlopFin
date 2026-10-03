@@ -181,6 +181,8 @@ void drop_shadow(int x, int y, int w, int h, int radius, int spread,
                  std::uint8_t strength) noexcept;
 void vertical_gradient(int x, int y, int w, int h, Color top, Color bottom) noexcept;
 void horizontal_gradient(int x, int y, int w, int h, Color left, Color right) noexcept;
+void rounded_horizontal_gradient(int x, int y, int w, int h, int radius, Color left,
+                                 Color right) noexcept;
 /* One-pass version of the common media-page scrim: a constant dim plus a
    vertical fade to opaque and a horizontal fade from the left, all using the
    same RGB tone. Visually equivalent to three separate source-over passes but
@@ -198,6 +200,8 @@ void blit_video(const Bitmap &src, int x, int y, int w, int h) noexcept;
 /* Draws src scaled to fit the destination box, preserving aspect and cropping. */
 void blit_cover(const Bitmap &src, int x, int y, int w, int h, int radius,
                 std::uint8_t alpha) noexcept;
+void blit_crop(const Bitmap &src, int source_x, int source_y, int source_side, int x, int y,
+               int size, int radius, std::uint8_t alpha = 255) noexcept;
 void blit(const Bitmap &src, int x, int y, std::uint8_t alpha) noexcept;
 
 /*

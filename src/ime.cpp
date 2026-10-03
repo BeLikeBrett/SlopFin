@@ -206,12 +206,10 @@ void start_requested() noexcept
     param.placeholder = g_placeholder_buffer.data();
     if (g_mode == slopfin::ime::Mode::search)
     {
-        // Native dialog coordinates use the standard 1920x1080 UI space.
-        // Right/top alignment follows the OpenOrbis IME ABI. The system owns
-        // the panel dimensions and clamps the requested position.
-        param.pos_x = 1824.0f;
-        param.pos_y = 54.0f;
-        param.horizontal_alignment = 2;
+        // Place below the search field; PS5 owns the final dialog dimensions.
+        param.pos_x = 1080.0f;
+        param.pos_y = 244.0f;
+        param.horizontal_alignment = 1;
         param.vertical_alignment = 0;
     }
     else

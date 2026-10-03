@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 #include <mutex>
 #ifdef SLOPFIN_HOST
 #include <curl/curl.h>
@@ -44,6 +45,10 @@ bool WebRequest::pump() noexcept
     long code = 0;
     curl_easy_getinfo(static_cast<CURL *>(easy_), CURLINFO_RESPONSE_CODE, &code);
     status_ = static_cast<int>(code);
+    char *redirect = nullptr;
+    curl_easy_getinfo(static_cast<CURL *>(easy_), CURLINFO_REDIRECT_URL, &redirect);
+    if (redirect != nullptr)
+        location_ = redirect;
     if (!done_ && pending_.empty())
         curl_multi_poll(static_cast<CURLM *>(multi_), nullptr, 0, 100, nullptr);
     return !failed_;
@@ -87,7 +92,7 @@ bool WebRequest::open(const std::string &url, const std::string &method,
     // TLS verification stays enabled. Redirects are not followed with tokens.
     if (curl_multi_add_handle(static_cast<CURLM *>(multi_), easy) != CURLM_OK)
         return false;
-    while (!status_ && !done_)
+    while ((!status_ || (status_ >= 300 && status_ < 400 && location_.empty())) && !done_)
         if (!pump())
             return false;
     return status_ != 0 && !failed_;
@@ -146,6 +151,7 @@ extern "C"
     int sceHttpSetSendTimeOut(int, std::uint32_t);
     int sceHttpSendRequest(int, const void *, std::size_t);
     int sceHttpGetStatusCode(int, int *);
+    int sceHttpGetAllResponseHeaders(int, char **, std::size_t *);
     int sceHttpReadData(int, void *, std::size_t);
     int sceHttpAbortRequest(int);
     int sceHttpDeleteRequest(int);
@@ -235,6 +241,39 @@ bool WebRequest::open(const std::string &url, const std::string &method,
     }
     if (sceHttpGetStatusCode(request, &status_) < 0)
         return false;
+    if (status_ >= 300 && status_ < 400)
+    {
+        char *raw = nullptr;
+        std::size_t length = 0;
+        if (sceHttpGetAllResponseHeaders(request, &raw, &length) < 0 || raw == nullptr ||
+            length > 65536)
+            return false;
+        std::string_view all(raw, length);
+        for (std::size_t start = 0; start < all.size();)
+        {
+            const auto end = all.find("\r\n", start);
+            const auto line =
+                all.substr(start, end == std::string_view::npos ? all.size() - start : end - start);
+            if (line.size() >= 9)
+            {
+                std::string name(line.substr(0, 9));
+                std::transform(name.begin(), name.end(), name.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (name == "location:")
+                {
+                    auto value = line.substr(9);
+                    while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+                        value.remove_prefix(1);
+                    while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+                        value.remove_suffix(1);
+                    location_ = value;
+                }
+            }
+            if (end == std::string_view::npos)
+                break;
+            start = end + 2;
+        }
+    }
     trace::mark("https: response " + std::to_string(status_));
     return true;
 }

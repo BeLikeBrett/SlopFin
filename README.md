@@ -8,7 +8,7 @@
 An unofficial native client for **jailbroken PS5 consoles**, built around a
 controller interface and the console's hardware video decoder.
 
-[Download the preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.000) ·
+[Download the preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.001) ·
 [Installation](docs/GETTING_STARTED.md) ·
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
@@ -23,8 +23,8 @@ your server.*
 
 | Download | How it runs | Current status |
 | --- | --- | --- |
-| **[App folder ZIP](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.000/SlopFin-01.000.000-folder.zip)** | Extract and transfer the complete PPSA99001 folder to your homebrew loader | **Recommended.** Launch/playback tested on firmware 8.20 |
-| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.000/SlopFin-01.000.000-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch currently stalls at the package mount on the test console |
+| **[App folder ZIP](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.001/SlopFin-01.000.001-folder.zip)** | Extract and transfer the complete PPSA99001 folder to your homebrew loader | **Recommended.** Launch/playback tested on firmware 8.20 |
+| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.001/SlopFin-01.000.001-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch currently stalls at the package mount on the test console |
 
 Both contain SlopFin. Native packaging makes distribution easier; it does not
 change video quality or playback performance. Choose one method: both release
@@ -37,6 +37,13 @@ formats use PPSA99001. See [native package requirements](docs/NATIVE_FPKG.md).
   matches do not bury the show you are looking for.
 - Enter addresses and credentials with the **PlayStation system keyboard**,
   with editable fields, visible search text and optional password visibility.
+  Search reserves space below its field while the keyboard is open; results
+  return when you finish typing.
+- Crop your profile picture in a circular preview: move with the D-pad, zoom
+  with L1/R1 or the triggers, reset with Triangle and save with Cross.
+- Download verified GitHub releases through **Settings → Updates** and install
+  them without a computer. Folder builds keep your sign-in and preferences;
+  the console needs elfldr running. See [updating](docs/UPDATES.md).
 - Resume playback, switch audio/subtitles and continue to the next episode.
 - **Skip Intro** with server media segments or validated chapter markers.
   The button remains available over playback controls, with retry feedback

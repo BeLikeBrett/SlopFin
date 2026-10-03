@@ -49,6 +49,8 @@ std::uint64_t spare_cores() noexcept;
 const gfx::Bitmap *acquire(const std::string &item_id, const std::string &tag, Kind kind,
                            int target_height) noexcept;
 
+bool failed(const std::string &item_id, const std::string &tag, Kind kind) noexcept;
+
 /*
  * Asks for artwork that is not being drawn yet, so it is already decoded by the
  * time it scrolls into view. A card only reaches `acquire` once it is on
