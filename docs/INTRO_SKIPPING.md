@@ -67,3 +67,12 @@ Read-only API sampling found Intro markers in 11 of the first 12 South Park
 episodes and all of the first 12 The Office episodes. South Park S1E9 had no
 stored Intro marker in that sample. These are sample results, not full-library
 coverage or independent verification of every detected timestamp.
+
+## Rounded control rendering
+
+The 2026-10-03 build masks the blue fade with the same antialiased rounded
+coverage as the button fill. Renderer tests cover corner exclusion, symmetry
+and partial edge coverage. Both episode seeks above were re-tested successfully
+on the console after the rendering change.
+
+![Skip Intro control at native capture resolution](images/skip-intro-control.png)

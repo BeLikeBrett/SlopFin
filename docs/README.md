@@ -22,6 +22,7 @@ another file, firmware, build or display.
 | [Dolby Vision](DOLBY_VISION.md) | Base-layer fallback versus native DV output |
 | [Bitrate](BITRATE.md) | Definitions, restarts and diagnostic caveats |
 | [Native FPKG](NATIVE_FPKG.md) | Optional installer package, build checks and pending console launch validation |
+| [Updates](UPDATES.md) | GitHub release downloads, folder installation, backup and recovery |
 | [Getting started](GETTING_STARTED.md) | Requirements, build, deployment and first-launch setup |
 | [Linux preview](HOST_BUILD.md) | `make host`, the capture tooling, and what a preview cannot tell you |
 | [Testing](TESTING.md) | Host checks and console validation workflow |

@@ -8,7 +8,7 @@
 An unofficial native client for **jailbroken PS5 consoles**, built around a
 controller interface and the console's hardware video decoder.
 
-[Download the preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.001) ·
+[Download the preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.002) ·
 [Installation](docs/GETTING_STARTED.md) ·
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
@@ -23,8 +23,8 @@ your server.*
 
 | Download | How it runs | Current status |
 | --- | --- | --- |
-| **[App folder ZIP](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.001/SlopFin-01.000.001-folder.zip)** | Extract and transfer the complete PPSA99001 folder to your homebrew loader | **Recommended.** Launch/playback tested on firmware 8.20 |
-| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.001/SlopFin-01.000.001-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch currently stalls at the package mount on the test console |
+| **[App folder ZIP](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.002/SlopFin-01.000.002-folder.zip)** | Extract and transfer the complete PPSA99001 folder to your homebrew loader | **Recommended.** Launch/playback tested on firmware 8.20 |
+| **[Native FPKG](https://github.com/BeLikeBrett/SlopFin/releases/download/01.000.002/SlopFin-01.000.002-experimental.pkg)** | Install through a compatible PS5 package installer | **Experimental.** Contents verified and test installation passed; launch currently stalls at the package mount on the test console |
 
 Both contain SlopFin. Native packaging makes distribution easier; it does not
 change video quality or playback performance. Choose one method: both release

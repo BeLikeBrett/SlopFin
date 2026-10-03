@@ -19,7 +19,8 @@ Renderer checks cover rounded gradient clipping, symmetric corners and partial
 edge coverage. The avatar test drives crop controls and verifies the exported
 JPEG using a synthetic image. Update checks cover SHA-256 reference vectors,
 release selection, ZIP integrity, path rejection, staged-file tampering and
-rollback after an injected partial-install failure.
+rollback after an injected partial-install failure, including executable
+permissions and restoration of original file modes.
 Network checks require OpenSSL and generate a disposable local certificate;
 they do not require a public server or credentials.
 `make test-unit` aliases the app model suite; `make test` adds local network and
