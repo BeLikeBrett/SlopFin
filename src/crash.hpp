@@ -16,7 +16,7 @@
  *   /data/slopfin-lastrun.txt   the session file of a run that never said
  *                               goodbye, kept at the next start
  *
- * See docs/DIAGNOSTICS.md.
+ * See docs/development/DIAGNOSTICS.md.
  */
 
 #ifndef SLOPFIN_CRASH_HPP

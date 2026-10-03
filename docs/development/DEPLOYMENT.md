@@ -1,8 +1,8 @@
 # Deployment
 
 > **Tooling/platform reference.** Inherited native-app examples below are not
-> SlopFin playback support claims. Use the [documentation index](README.md) and
-> [current compatibility table](COMPATIBILITY.md). On this host, build the app
+> SlopFin playback support claims. Use the [documentation index](../README.md) and
+> [current compatibility table](../COMPATIBILITY.md). On this host, build the app
 > with `PS5_CLANG=/usr/bin/clang`; its configured title is PPSA99001.
 
 This project creates a directory-style homebrew application and optional
@@ -166,4 +166,4 @@ The skeleton intentionally keeps `main` alive. Do not return from `main` or
 call an exit function unless the target loader and application lifecycle
 explicitly support that path.
 
-If launch fails, see [Troubleshooting](TROUBLESHOOTING.md).
+If launch fails, see [Troubleshooting](BUILD_TROUBLESHOOTING.md).

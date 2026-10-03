@@ -1167,10 +1167,8 @@ class TransportProducer
     void *thread_ = nullptr;
 
   public:
-    /* 128 MiB rather than 64: about fifteen seconds of this library's heaviest
-       stream instead of seven. The server's disk stalls for seconds at a time
-       under contention (docs/SOFTWARE_AUDIO.md); the only defence on this side
-       is having more of the stream already in hand when it happens. */
+    /* Buffer compressed video separately so presentation backpressure and
+       temporary server stalls do not block the next audio PES. */
     player::PacketQueue video{128u * 1024u * 1024u};
     std::size_t total_bytes = 0;
     TransportProducer(http::Stream &stream, player::OrderCapture &capture)

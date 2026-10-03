@@ -1,7 +1,7 @@
 # Contributing
 
 Keep changes reproducible and playback claims tied to evidence. Read the
-[architecture](ARCHITECTURE.md), [project constraints](CLAUDE.md) and
+[build guide](docs/development/BUILD.md), [architecture](docs/development/ARCHITECTURE.md), [project constraints](CLAUDE.md) and
 [compatibility guide](docs/COMPATIBILITY.md) before changing platform code.
 
 Before opening a pull request:

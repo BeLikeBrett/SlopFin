@@ -44,3 +44,8 @@ slopfin-audio.txt
 /assets/slopfin-sandbox.bin
 
 /assets/slopfin-update.bin
+
+# Local maintainer plans and session records.
+/PLAN.md
+/PROGRESS.md
+/docs/PLAYBACK_DEFAULTS.md

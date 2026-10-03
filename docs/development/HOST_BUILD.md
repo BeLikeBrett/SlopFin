@@ -30,16 +30,10 @@ already call, implemented on SDL2 and POSIX.
 | `sceKernelGettimeofday` | The wall clock, or a virtual one (below) |
 | `sceIme*` | Refused: no substitute keyboard; scripts can submit a search term to preview results |
 
-Implementing the ABI rather than branching inside the renderer is what keeps
-one copy of the drawing code. There is no `#ifdef` in `gfx.cpp`, and a visual
-change cannot be right in the preview and wrong on the console.
-
-**The host goes through the real scan-out.** The tiled copy into video memory
-and the ARGB→ABGR swizzle both run on Linux exactly as they do on the console;
-the host un-tiles at the very end, from the layout the hardware documents
-rather than from `gfx.cpp`'s opinion of it. So the preview exercises the pixel
-format and the tile table, and a capture is what the console would send over
-HDMI rather than what the app meant to draw.
+The host backend keeps platform differences outside the renderer. It runs
+the tiled copy and ARGB-to-ABGR conversion, then untile-converts for SDL.
+Captures exercise the shared pixel format and tile layout; console output
+still requires hardware validation.
 
 `player.cpp` and `audio.cpp` are not built here. `host/host_player.cpp`
 simulates a clock, pause, seek and playback controls using the item's backdrop
@@ -88,29 +82,23 @@ not replace or simulate the PS5 keyboard. Presses are injected exactly as the co
 `tools/press.sh` injects them, so a sequence run here and one run there are the
 same sequence.
 
-**Headless runs on a virtual clock.** One sixtieth of a second passes per
-presented frame, whatever the host took over that frame. Without it, writing a
-PNG — tens of milliseconds — stretches the frame it is taken on, and a
-filmstrip of an animation reports it running several times slower than it does:
-the instrument changing the thing it measures. `--real-clock` turns it off.
+Headless runs advance a virtual clock by 1/60 second per frame so image
+writes do not distort animation captures. Use `--real-clock` to measure
+against elapsed host time.
 
 `./build/host/slopfin --icon-sheet out.png` draws every icon large with its
-name under it, which is the only way to know a change to one signed distance
-field did not spoil a neighbour.
+name under it for comparing glyphs and checking related signed-distance fields.
 
 ## Looking at what comes out
 
-`tools/look.py` turns a capture into an answer. See its `--help`; the
-subcommands are `zoom`, `scan`, `plate`, `geometry`, `sheet`, `diff`, `grid`,
-`contrast` and `palette`. `tools/filmstrip.py` captures consecutive frames of
-one animation, lays them out as a strip, and reports whether the movement
-accelerates, overshoots and settles.
+`tools/look.py` inspects capture geometry, contrast, palette and differences.
+Its subcommands are `zoom`, `scan`, `plate`, `geometry`, `sheet`, `diff`,
+`grid`, `contrast` and `palette`. Use `--help` for their arguments.
+`tools/filmstrip.py` captures consecutive animation frames and reports motion
+and settling behavior.
 
-Each compares against something outside our own output — a declared palette
-colour, a layout constant, a known geometry — never against a second view of
-the same buffer. That rule is in [CLAUDE.md](../CLAUDE.md) because ignoring it
-once cost this project a long investigation into a colour bug that every
-instrument said did not exist.
+Compare results with a reference palette, layout or known geometry. Comparing
+two views of the same incorrect buffer cannot establish correctness.
 
 ## What the preview cannot tell you
 
@@ -120,7 +108,7 @@ instrument said did not exist.
   drawing change that is comfortable here can still decide the frame rate
   there. Measure that with `tools/trace.sh` on the console.
 - **Memory.** `bigalloc` is backed by `mmap` here and by flexible memory
-  there, and the 2 MiB process heap does not exist on a workstation.
+  there; the console's constrained process heap does not exist on a workstation.
 
 HTTPS/DNS preview builds also require the libcurl development package.
 `make test-server-network` runs the optional live hostname/TLS integration test.

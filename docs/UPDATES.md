@@ -1,5 +1,9 @@
 # Updating SlopFin
 
+**Status:** the updater is in draft preview 01.000.002 and still needs its final
+console download/install test. Published previews currently use manual folder
+installation. The instructions below describe the upcoming updater.
+
 Folder builds have **Settings → Updates**. Check for a release, choose
 **Download update**, then **Install and restart** after verification finishes.
 The app closes before installation and opens again afterwards. Keep the console
@@ -53,4 +57,4 @@ can require this manual recovery; the helper cannot run while the console is off
 Native FPKG installations require their package installer. The folder updater
 refuses to replace a folder that does not match the running app. Native package
 mounting remains experimental on the test console; see
-[native package status](NATIVE_FPKG.md).
+[native package status](development/NATIVE_FPKG.md).

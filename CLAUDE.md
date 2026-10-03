@@ -1,9 +1,8 @@
 # Project constraints
 
-Read [PLAN.md](PLAN.md), [PROGRESS.md](PROGRESS.md) and the
-[compatibility guide](docs/COMPATIBILITY.md) before changing platform code.
-Keep current behavior separate from historical measurements and unverified
-hardware claims. Update the dated results when validation changes.
+Read the [compatibility guide](docs/COMPATIBILITY.md) and
+[architecture](docs/development/ARCHITECTURE.md) before changing platform code.
+Keep implemented behavior separate from tested hardware results.
 
 Local reference checkouts may exist at `../boilerplate/`,
 `../reference-prosperotv/` and `../research/`. They are read-only upstream
@@ -95,8 +94,8 @@ Inspect test harness behavior before accepting measurements.
   addresses and credentials before publishing logs or screenshots.
 
 Controller, capture, launch, timing and crash helpers are documented in
-[testing](docs/TESTING.md), [Linux preview](docs/HOST_BUILD.md) and
-[diagnostics](docs/DIAGNOSTICS.md). The app closes on `/data/slopfin-quit`.
+[testing](docs/development/TESTING.md), [Linux preview](docs/development/HOST_BUILD.md) and
+[diagnostics](docs/development/DIAGNOSTICS.md). The app closes on `/data/slopfin-quit`.
 `tools/launch.sh` is for developer iteration; a crashed instance may be killed
 before relaunch, so use the orderly close path where possible.
 

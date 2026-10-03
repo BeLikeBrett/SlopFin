@@ -10,49 +10,21 @@ installed applications; the folder uses a homebrew mount service.
 | Check | Result |
 | --- | --- |
 | Finalized-image container, digests and layout | Passed |
-| Full Kraken decode and inner filesystem walk | Passed: 65 blocks, 26 source files |
+| Full Kraken decode and inner filesystem walk | Passed |
 | Byte comparison with source, including known executable/metadata normalization | Passed |
 | Installer registration and installed `app.pkg` | Passed on firmware 8.20, isolated test title PPSA99002 |
 | Launch | Blocked at PPR mount after kstuff-lite 1.11 and an exact-profile A53 selector install; no app startup |
 
-The original launch returned `0x80020060` from the PPR filesystem mount, before
-SlopFin started, with kstuff-lite 1.10 and stock A53 code. After rebooting with
-the verified official 1.11 release, its plaintext mount protocol was present.
-The selector was installed from ppr-patch revision
-`fd4c8224563130e9698d3b2b2f44712826ceb525`, using the exact retail 8.20 profile;
-all patch writes passed readback. The non-time-accelerated installer was used.
+The blocker occurs inside PPR mounting before the app process starts.
+Header validation and `verifyImage` emulation pass; two G6 key-index hooks
+apply, but the mount does not return. Tests used official kstuff-lite 1.11
+and ppr-patch revision `fd4c8224563130e9698d3b2b2f44712826ceb525`
+with the exact retail 8.20 profile. This does not establish compatibility
+with other firmware or identify the cause of the stalled mount.
 
-The next launch created `PPSA99002-app0` and `PPSA99002-app0-nest` mount entries,
-but the package mount did not finish. SlopFin never appeared in the process
-list. Subsequent file operations and Remote Play authentication timed out,
-although the payload loader and read-only kernel log probes remained responsive.
-This is a console package-mount blocker, not a successful launch. Do not treat
-this download as a working replacement for the folder build yet. Do not modify
-the selector while that mount is outstanding; recovery requires a console restart.
-
-A repeat test booted the official 1.11 source with observation counters enabled
-and reinstalled the exact selector after its preflight passed. Two snapshots
-confirmed the same stalled state:
-
-| Runtime observation | Result |
-| --- | --- |
-| Plaintext package header validation | Passed; one profile match |
-| `verifyImage` mailbox | One request, emulated successfully; no malformed outputs |
-| G6 key-index interception | Two traps, both applied; no index or copy errors |
-| Mount lifecycle | Hook stage 9; one key pair outstanding; no cleanup or return |
-| SlopFin startup | Not reached |
-
-Stage 9 means the one-shot session was armed before calling the original
-package-mount function. These counters narrow the failure to the mount/read
-pipeline after header validation; they do not identify a specific A53 queue
-failure or prove runtime compatibility. A separate installed-native-app check
-was rejected before PPR mounting, so native regression after the selector
-install remains unverified. The diagnostic payload was temporary; the normal
-official 1.11 autoload entry was restored and read back before the repeat launch.
-
-Folder launch and playback were tested separately. The original PPSA99001
-folder, saved HTTPS account settings and previous autoloader backup were
-preserved. See [compatibility](COMPATIBILITY.md) for the app's playback results.
+Use the folder build for normal use. A stalled package mount can require a
+console restart; do not change selectors while package I/O is outstanding.
+[Compatibility](../COMPATIBILITY.md) covers the separate folder playback results.
 
 ## Installation requirements (experimental)
 
@@ -93,7 +65,7 @@ make fpkg PS5_CLANG=/usr/bin/clang
 ```
 
 For the optional software-audio build, first follow the dependency preparation
-in [getting started](GETTING_STARTED.md), then build with `SOFTWARE_AUDIO=1`.
+in the [build guide](BUILD.md), then build with `SOFTWARE_AUDIO=1`.
 Output is `dist/native-pkg/UP9000-PPSA99001_00-SLOPFIN000000000.pkg`, plus its
 checksum, input manifest, build log and verification report.
 
@@ -103,7 +75,7 @@ plaintext/no-auth package markers, native Kraken layout and license-free
 homebrew data; no proprietary publishing SDK or `right.sprx` is bundled.
 The engine adjusts executable signatures/version padding and installed-package
 metadata only in the packaged copy. The folder build remains byte-for-byte
-unchanged. Our additional verifier reconstructs every compressed block, walks
+unchanged. The additional verifier reconstructs every compressed block, walks
 inner file paths, checks all source files and verifies container artwork.
 
 For an isolated install test that preserves the normal title registration:

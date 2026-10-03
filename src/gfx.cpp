@@ -1409,7 +1409,7 @@ bool output_mode(int &width, int &height, double &hz) noexcept
 }
 
 /* Do not call sceVideoOutConfigureOutputMode_ or SetFlipRate experimentally: tested calls froze
- * output. See docs/HDR.md. */
+ * output. See docs/development/HDR.md. */
 
 bool write_display(const std::uint32_t *frame, const char *path) noexcept
 {

@@ -2,7 +2,7 @@
 
 Updated 2026-10-03. The app uses a custom C++ interface, VideoOut framebuffer,
 native hardware video decode, platform audio decode and a PCM output sink.
-See [compatibility](docs/COMPATIBILITY.md) for validated scope rather than
+See [compatibility](../COMPATIBILITY.md) for validated scope rather than
 assuming every platform capability is integrated.
 
 ## Pipeline
@@ -41,10 +41,11 @@ The console build is the product. `make host` builds the same interface for
 Linux: `gfx`, `app`, `text`, `icons`, `images`, `ime`, `pad`, `http`,
 `jellyfin` and `config` are compiled unmodified, and `host/` implements the PS5
 C ABI they already call on top of SDL2 and POSIX. The tiled copy and the
-ARGB-to-ABGR scan-out conversion run on both, so a capture taken on Linux is
-what the console would send over HDMI. `player` and `audio` are console-only;
-`host/host_player.cpp` stands in so the playback overlay is drivable.
-See [docs/HOST_BUILD.md](docs/HOST_BUILD.md).
+ARGB-to-ABGR scanout conversion run on both, so Linux captures exercise the
+shared drawing and pixel-layout code. They cannot validate HDMI signalling,
+console timing or the system keyboard. `player` and `audio` are console-only;
+`host/host_player.cpp` simulates the playback overlay.
+See [host build](HOST_BUILD.md).
 
 ## Ownership
 
@@ -78,14 +79,14 @@ HDR math, scaling, URL handling and bitrate measurement.
 - Do not close an audio port underneath the thread blocked in its output call.
 - Condition-based worker synchronization is preferable to short-sleep spinning.
 - Return from `main` is unsafe on this runtime; failure paths park explicitly.
-- Detailed ABI findings and investigation rules live in [CLAUDE.md](CLAUDE.md).
+- Detailed ABI findings and investigation rules live in [CLAUDE.md](../../CLAUDE.md).
 
 ---
 
 ## Playback and refresh details
 
 Video decode uses pipeline depth 3 to improve serial HEVC throughput. A returned
-picture is read only from a frame slot the decoder owns; see [video decode](docs/VIDEO_DECODE.md).
+picture is read only from a frame slot the decoder owns; see [video decode](VIDEO_DECODE.md).
 
 Home refreshes Continue Watching and Next Up after playback and every 30 seconds.
 Partial refreshes preserve library rows and artwork warming. Search sections are
@@ -93,4 +94,4 @@ rebuilt only when result data changes, rather than on every rendered frame.
 
 Optional CPU decoders and experimental HDMI compressed output are separate
 from native audio decoding. Their integration and validation limits are recorded
-in [audio](docs/AUDIO.md) and [software audio](docs/SOFTWARE_AUDIO.md).
+in [audio](AUDIO.md) and [software audio](SOFTWARE_AUDIO.md).
