@@ -4,7 +4,7 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
-command -v cargo >/dev/null || { echo 'Native packaging needs Rust/Cargo; see docs/NATIVE_FPKG.md.' >&2; exit 2; }
+command -v cargo >/dev/null || { echo 'Native packaging needs Rust/Cargo; see docs/development/NATIVE_FPKG.md.' >&2; exit 2; }
 engine="$root/.deps/fpkg/ps5upload"
 revision=a364f7a473bfd6aa5582e7474bfce54fb88a0f5a
 mkdir -p "$(dirname "$engine")" "$root/dist/native-pkg"

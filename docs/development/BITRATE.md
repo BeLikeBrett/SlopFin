@@ -1,4 +1,4 @@
-# Bitrate and debug measurements — GPT continuation
+# Bitrate and debug measurements
 
 The player now distinguishes these quantities:
 

@@ -47,7 +47,7 @@ export TITLE_ID APP_NAME APP_CATEGORY CONTENT_SUFFIX
 # ---------------------------------------------------------------- host build
 # The Linux preview: the same renderer, screens, input handling and Jellyfin
 # client, on a backend that implements the PS5 C ABI over SDL2 and POSIX.
-# See docs/HOST_BUILD.md. player.cpp and audio.cpp stay on the console; host/
+# See docs/development/HOST_BUILD.md. player.cpp and audio.cpp stay on the console; host/
 # supplies a stand-in so the playback overlay is drivable here.
 HOST_BIN := build/host/slopfin
 HOST_SRC := \

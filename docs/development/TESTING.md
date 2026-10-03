@@ -2,7 +2,7 @@
 
 ## Host checks
 
-From `app/`:
+Run from the repository root:
 
 ```sh
 make test
@@ -29,9 +29,11 @@ development libraries: `bash tools/test-software-audio.sh`.
 
 ## Console evidence
 
-Coordinate with the person/agent owning the console before deploying. Record
-the trace's build stamp, item and audio/subtitle indexes, quality limit, actual
-server video/audio delivery, SDR/HDR mode and overlay state.
+When sharing a development console, coordinate deployments and close the app
+before replacing files. Record the build stamp, item and audio/subtitle
+indexes, quality limit, actual server delivery codecs, SDR/HDR mode and
+overlay state. Host checks cannot validate hardware decoding, HDMI output or
+the system keyboard.
 
 | Tool | Evidence |
 | --- | --- |

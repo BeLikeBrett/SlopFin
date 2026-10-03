@@ -1,100 +1,59 @@
-# Build and run SlopFin
+# Install and connect
 
-## Use a release download
+You need a jailbroken PS5, a homebrew loader that can launch app folders, and
+a Jellyfin account with access to movies or TV. Firmware **8.20** is the main
+tested environment.
 
-Download the [public preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.002).
-The folder ZIP is the recommended option: extract it and transfer the entire
-PPSA99001 folder to your loader's homebrew directory (commonly
-`/data/homebrew/`). Let the loader register it, then launch SlopFin.
-The native package is an optional experimental installer format; read
-[native FPKG](NATIVE_FPKG.md) before using it. Do not register the folder and
-native package with the same title ID simultaneously.
+## Install the folder download
 
-After the initial folder installation, **Settings → Updates** can download and
-install future GitHub releases on the console. Keep elfldr running and leave
-the console on during installation. See [updates and recovery](UPDATES.md).
+1. Open [Releases](https://github.com/BeLikeBrett/SlopFin/releases) and download
+   the folder ZIP from a published preview.
+2. Extract it and transfer the **complete `PPSA99001` folder** to your loader's
+   homebrew directory, commonly `/data/homebrew/`.
+3. Let your loader register the title, then open SlopFin from the PS5 menu.
 
-You do not need to compile SlopFin to try a release. The following sections
-are for contributors and users who want to build from source.
+For an upgrade, close SlopFin before replacing files. Keep
+`/data/slopfin/config.json`; it contains your sign-in and settings.
 
-## Requirements
+Use the folder build for normal use. Native FPKG is experimental and currently
+stalls before app startup on the test console.
+[Native package details](development/NATIVE_FPKG.md).
 
-- A jailbroken PS5 with FTP (normally port 2121) and elfldr (normally port 9021).
-  Firmware 8.20 is the main tested environment; verify your loader's app support.
-- A reachable Jellyfin server and an account with access to movie or TV libraries.
-- A Linux/WSL build host with Make, Python 3, Clang/lld, LLVM utilities, curl,
-  tar and unzip. `make doctor` checks the required tools. Clang 18 or the
-  equivalent installed toolchain can be selected with `PS5_CLANG`.
+## Enter your server
 
-Run from the cloned repository root containing the Makefile. The app already
-has a title ID and presentation assets; `make init` is unnecessary.
+First launch shows a **Server address** field and **Continue**. Select the field
+to open the PlayStation keyboard. Confirm your entry, then choose Continue.
 
-```sh
-cp .env.example .env                 # set PS5_HOST to your console's address
-make doctor
-make test
-make PS5_CLANG=/usr/bin/clang
-make deploy PS5_CLANG=/usr/bin/clang
-bash tools/launch.sh
-```
+| Example | Connection |
+| --- | --- |
+| `media.example.com` | HTTPS on port 443 |
+| `https://media.example.com` | The same HTTPS connection |
+| `https://media.example.com/jellyfin` | HTTPS with a server base path |
+| `192.168.1.20` | HTTP on Jellyfin's default port 8096 |
+| `http://192.168.1.20:8096` | Explicit local connection |
 
-The build downloads pinned public SDK dependencies into ignored `.deps/` and
-creates the runtime shim. No proprietary SDK installation is required.
-Deployment stages the complete `dist/PPSA99001/` folder; `eboot.bin` alone lacks
-its runtime, metadata and assets. Console helpers read `PS5_HOST` from the
-environment or the local `.env`; no developer's console address is built in.
-Capture helpers additionally need Pillow, and HDR previews need NumPy.
+Include the protocol when you need to override the default. HTTPS verifies
+certificates and never falls back to HTTP automatically. Self-signed
+certificates and IPv6 addresses are unsupported.
 
-For optional CPU E-AC-3/DTS-core/TrueHD decoding, first prepare the dependency:
+## Sign in
 
-```sh
-make sdk-archives PS5_CLANG=/usr/bin/clang
-PS5_CLANG=/usr/bin/clang bash tools/build-software-audio.sh
-make PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
-make deploy PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
-```
+Choose **Quick Connect** and approve the code from an already signed-in Jellyfin
+client, or use **Username and password**. Both fields are editable; **Show
+password** lets you review the entry. Select Sign in when ready.
 
-Both builds retain server fallback. See [software audio](SOFTWARE_AUDIO.md)
-for limits and [NOTICE](../NOTICE.md) for linked-library redistribution terms.
-Optional image formats have additional tooling described in [FFPKG](FFPKG.md)
-and [deployment](DEPLOYMENT.md); folder deployment does not need them.
+If a connection or sign-in fails, your fields remain available to correct.
+Circle returns from password sign-in to Quick Connect and clears the password.
 
-Read [compatibility](COMPATIBILITY.md) and [testing](TESTING.md) before treating
-build success as hardware validation. Keep `.env`, saved logins and captures
-private. Account settings live at `/data/slopfin/config.json` on the console.
+## Start watching
 
-### Controller text entry
+Use the sidebar to choose a library. Triangle opens Search; Square opens your
+profile menu. [Controls](CONTROLS.md) explains DualSense seeking and playback
+shortcuts. [Compatibility](COMPATIBILITY.md) covers codecs and output limits.
 
-On PS5, search, server address and account fields open the system keyboard.
-Confirm to return the text to SlopFin; cancel keeps the previous value. Search
-keeps its current library scope and Triangle reopens the keyboard to edit.
-Search uses only the PlayStation keyboard, requested below the search field.
-Artwork is hidden while typing to leave that area clear. The system controls
-its final placement. Movies, Series and Episodes have their
-own horizontal rows; Up/Down switches rows, Left/Right browses a row, and Cross
-opens the selected item. TV libraries show series and matching episodes; movie
-libraries show movies. Each type has a separate result limit so episode matches
-cannot crowd out titles. The Linux preview has no replacement keyboard.
+The next preview adds in-app folder updates and circular avatar cropping.
+The updater is still awaiting its final console test; use
+[published release downloads](https://github.com/BeLikeBrett/SlopFin/releases)
+until then. [Update status](UPDATES.md).
 
-Username sign-in shows a form with editable Username and Password fields.
-The password stays hidden by default; Show password reveals it and also lets
-you type visibly in the system keyboard. Choose Sign in after reviewing the
-fields. An error keeps the fields available to correct and retry. Circle
-returns to Quick Connect and clears the entered password.
-
-### First-launch server setup
-
-A fresh install opens one Server address text field and one Continue button.
-Select the field to open the PS5 keyboard. Confirm to review the address, then
-Continue to sign in. Cancellation and connection errors keep your entry.
-
-Enter `media.example.com` directly; a dotted server name defaults to HTTPS on
-port 443. `https://media.example.com` works too. A bare IPv4 address defaults
-to HTTP on Jellyfin's port 8096. Explicit protocols and ports are respected;
-HTTPS is never silently downgraded. Copied `/web/index.html` links, surrounding
-whitespace and custom base paths are normalized. DNS names and HTTPS use the
-PS5 HTTP/SSL stack for API calls, artwork and streamed playback, with certificate
-verification left enabled. IPv6 and self-signed certificates remain unsupported.
-Saved bare-IP configurations retain the existing LAN socket transport.
-Changing servers clears the previous account only after the new server has
-been reached successfully; equivalent addresses preserve the session.
+For a source build, use the [developer build guide](development/BUILD.md).

@@ -1,8 +1,8 @@
 # Capability recipes
 
 > **Tooling/platform reference.** Inherited native-app examples below are not
-> SlopFin playback support claims. Use the [documentation index](README.md) and
-> [current compatibility table](COMPATIBILITY.md). On this host, build the app
+> SlopFin playback support claims. Use the [documentation index](../README.md) and
+> [current compatibility table](../COMPATIBILITY.md). On this host, build the app
 > with `PS5_CLANG=/usr/bin/clang`; its configured title is PPSA99001.
 
 The root app intentionally proves only the smallest graphical baseline. Add

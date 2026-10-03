@@ -131,5 +131,5 @@ jobs:
             gh release create "$GITHUB_REF_NAME" release/* \
               --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
               --title "SlopFin $GITHUB_REF_NAME — preview" \
-              --notes "Folder build is recommended. Native FPKG is experimental; see docs/NATIVE_FPKG.md for console validation status and requirements. FFmpeg source is included; SlopFin source is available with this tag."
+              --notes "Folder build is recommended. Native FPKG is experimental; see docs/development/NATIVE_FPKG.md for console validation status and requirements. FFmpeg source is included; SlopFin source is available with this tag."
           fi

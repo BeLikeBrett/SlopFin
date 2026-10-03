@@ -1,11 +1,11 @@
 # Application configuration and versioning
 
 > **Tooling/platform reference.** Inherited native-app examples below are not
-> SlopFin playback support claims. Use the [documentation index](README.md) and
-> [current compatibility table](COMPATIBILITY.md). On this host, build the app
+> SlopFin playback support claims. Use the [documentation index](../README.md) and
+> [current compatibility table](../COMPATIBILITY.md). On this host, build the app
 > with `PS5_CLANG=/usr/bin/clang`; its configured title is PPSA99001.
 
-[`sce_sys/param.json`](../sce_sys/param.json) is the single source of truth for
+[`sce_sys/param.json`](../../sce_sys/param.json) is the single source of truth for
 application identity, Shell metadata, and release versioning. The build
 validates it and copies it unchanged into `dist/<TITLE_ID>/sce_sys/param.json`.
 There is no second project manifest to keep synchronized.
