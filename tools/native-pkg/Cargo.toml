@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Brett
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "slopfin-package-check"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "slopfin-package-check"
+path = "verify_payload.rs"
+
+[dependencies]
+ps5upload-fpkg = { path = "../../.deps/fpkg/ps5upload/engine/crates/ps5upload-fpkg" }

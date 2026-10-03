@@ -1,0 +1,15 @@
+/*
+ * SlopFin - application symbol visibility policy.
+ * Copyright (C) 2026 BlackBearReloaded
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * An application exports nothing, and the FSELF converter enforces that: it
+ * accepts only undefined dynamic symbols. Linking the SDK's libcxxabi pulls in
+ * C++ ABI symbols and typeinfo that would otherwise be published, so every
+ * defined symbol is made local here. Undefined imports are unaffected.
+ */
+
+{
+    local:
+        *;
+};
