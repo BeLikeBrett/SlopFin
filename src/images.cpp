@@ -673,6 +673,13 @@ const gfx::Bitmap *acquire(const std::string &item_id, const std::string &tag, K
     return nullptr;
 }
 
+bool failed(const std::string &item_id, const std::string &tag, Kind kind) noexcept
+{
+    std::lock_guard<std::mutex> guard(g_mutex);
+    const auto found = g_entries.find(make_key(item_id, kind, tag));
+    return found != g_entries.end() && found->second.failed && !found->second.pending;
+}
+
 void prefetch(const std::string &item_id, const std::string &tag, Kind kind,
               int target_height) noexcept
 {

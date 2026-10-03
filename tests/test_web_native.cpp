@@ -7,7 +7,7 @@
 #include <cstdio>
 namespace
 {
-int created = 0, deleted = 0, closed = 0, aborted = 0, pools = 0;
+int created = 0, deleted = 0, closed = 0, aborted = 0, pools = 0, response_code = 200;
 bool fail_send = false;
 std::string method, uploaded, address;
 } // namespace
@@ -82,9 +82,17 @@ extern "C"
         uploaded.assign(size ? static_cast<const char *>(body) : "", size);
         return fail_send ? -1 : 0;
     }
+    int sceHttpGetAllResponseHeaders(int, char **headers, std::size_t *size)
+    {
+        static char text[] =
+            "HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com/file\r\n";
+        *headers = text;
+        *size = sizeof(text) - 1;
+        return 0;
+    }
     int sceHttpGetStatusCode(int, int *status)
     {
-        *status = 200;
+        *status = response_code;
         return 0;
     }
     int sceHttpReadData(int, void *body, std::size_t size)
@@ -128,11 +136,19 @@ int main()
                             {"X-Emby-Authorization: test"}, "{}", "application/json"));
         assert(method == "POST" && uploaded == "{}");
     }
+    response_code = 302;
+    {
+        WebRequest request;
+        assert(request.open("https://github.com/BeLikeBrett/SlopFin/releases/download/file", "GET",
+                            {}, {}, {}));
+        assert(request.status() == 302);
+        assert(request.location() == "https://release-assets.githubusercontent.com/file");
+    }
     fail_send = true;
     {
         WebRequest request;
         assert(!request.open("https://example.test/", "GET", {}, {}, {}));
     }
-    assert(pools == 1 && created == 3 && deleted == 3 && closed == 3);
+    assert(pools == 1 && created == 4 && deleted == 4 && closed == 4);
     std::puts("Native HTTPS request, upload, cancellation and cleanup tests passed");
 }

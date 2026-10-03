@@ -124,3 +124,9 @@ instrument said did not exist.
 
 HTTPS/DNS preview builds also require the libcurl development package.
 `make test-server-network` runs the optional live hostname/TLS integration test.
+
+For isolated picture-picker previews, set `SLOPFIN_PHOTOS` to a fixture folder.
+Without it, the host picker uses your Pictures directory. Crop rendering and
+JPEG export are shared with the PS5; `make test` exercises both with synthetic
+images and does not upload them to a server. Update checking and staging also
+run in the preview, but installation and relaunch use the PS5 helper.
