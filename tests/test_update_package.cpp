@@ -8,6 +8,20 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <cerrno>
+#include <sys/stat.h>
+
+/* Match the PS5 application's restricted path-based metadata calls. */
+extern "C" int lstat(const char *, struct stat *) noexcept
+{
+    errno = EPERM;
+    return -1;
+}
+extern "C" int stat(const char *, struct stat *) noexcept
+{
+    errno = EPERM;
+    return -1;
+}
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #define STB_IMAGE_IMPLEMENTATION

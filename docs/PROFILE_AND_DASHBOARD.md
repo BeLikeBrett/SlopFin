@@ -1,7 +1,6 @@
 # Profile, dashboard and the detail pages
 
-*Opus 5, 2026-09-15.* What was built at Brett's request, how it is laid out,
-and what has and has not been exercised on the console.
+Updated 2026-10-03. Current profile controls and dated console validation.
 
 ## Series pages and detail pages
 
@@ -28,9 +27,9 @@ and what has and has not been exercised on the console.
   show it; Settings → Account leads to the same places.
 - **Square** opens the menu: Profile, Dashboard (administrators), Sign Out.
   The choices are pills that drop in one after another, centred under the badge
-  and a little narrower than it; the focused pill is white with dark ink.
-- Focus style everywhere in lists is a soft light pill (`ui::focus_pill`).
-  Brett removed the purple focus bar; do not bring it back.
+  and a little narrower than it; focus uses a dark surface and cyan outline.
+- Lists share dark surfaces, cyan outlines and smooth focus transitions
+  (`ui::focus_pill`). Label alignment uses visible glyph bounds.
 
 ## Profile screen
 
@@ -42,15 +41,22 @@ and what has and has not been exercised on the console.
   SlopFin's root and jail directories at the real root vnode. Built from
   `payloads/sandbox/` by `make`. Directory listing uses `sceKernelGetdents` with a
   64 KiB buffer (the gallery's filesystem refuses 8 KiB with EINVAL).
-- The chosen picture is centre-cropped, shrunk to 512×512 and re-encoded as a
-  JPEG (`vendor/stb_image_write.h`) before upload, because the process heap holds
-  about 10 MiB. Upload is `POST /UserImage?userId=` with a **base64** body.
-  Verified end to end on the console (59 KB JPEG stored); Brett's original
-  picture was restored byte for byte afterwards.
+- Select a picture to open **Adjust your picture**, with a large circular
+  crop and matching avatar preview. Move with the D-pad, zoom with L1/R1 or
+  the triggers, reset with Triangle, save with Cross or return with Circle.
+  The crop stays within the image bounds.
+- The selected region is resized to at most 512×512 and encoded as JPEG
+  (`vendor/stb_image_write.h`); image buffers use flexible memory. Upload is
+  `POST /UserImage?userId=` with a **base64** body. The earlier upload path was
+  console-tested with the original restored afterwards. The new editor
+  was console-tested through movement, zoom, reset and cancel; synthetic host
+  tests verify the exported JPEG without changing a production avatar.
 - **Change password** asks the system keyboard for the current, new and repeated
   password and posts `/Users/Password?userId=` with `CurrentPw`/`NewPw`. **Not
   run against the server**: a wrong current password counts as a failed sign-in.
 - **Remove picture** is `DELETE /UserImage`. Not run.
+
+![Circular avatar editor captured on PS5](images/avatar-crop-console.png)
 
 ## Dashboard
 

@@ -73,6 +73,19 @@ class Updates(unittest.TestCase):
             out.writestr(item, b"/etc/passwd")
         self.assertNotEqual(self.stage(archive).returncode, 0)
 
+    def test_reject_symlinked_storage(self):
+        archive = self.archive()
+        linked_archive = self.root / "linked.zip"
+        linked_archive.symlink_to(archive)
+        self.assertNotEqual(self.stage(linked_archive).returncode, 0)
+        stage = self.root / "staged"
+        stage.mkdir(exist_ok=True)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (stage / "assets").symlink_to(outside)
+        self.assertNotEqual(self.stage(archive).returncode, 0)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def prepare_install(self):
         self.assertEqual(self.stage(self.archive()).returncode, 0)
         target = self.root / "installed"

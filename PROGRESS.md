@@ -1786,3 +1786,17 @@ bands.
   validation is pending the new public release. Details and recovery are in docs/UPDATES.md.
 - Host tests, Linux preview, lint and native app build pass. Native FPKG remains
   blocked at the package mount; this work does not establish a native launch.
+
+## 2026-10-03 — Updater sandbox checks
+
+- The 01.000.001 tag passed release CI, and the native checker found it. The
+  real download stopped before writing an archive because the app sandbox
+  denied `lstat` on `/data`. The release was returned to draft status.
+- Changed shared storage checks to open with `O_NOFOLLOW`, then inspect the
+  descriptor with `fstat`. Directory checks also require `O_DIRECTORY`;
+  checksum and extraction reads inspect the same descriptor they read.
+  Package tests deny path-based stat calls to reproduce the application
+  restriction, and reject archive and staging symlinks.
+- Preparing 01.000.002 with the corrected updater and current interface guides.
+  Host updater checks and Linux build pass. The console is offline; native
+  download/install/relaunch of the published build still needs a fresh boot.

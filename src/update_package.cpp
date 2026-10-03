@@ -159,16 +159,22 @@ bool stage_archive(const std::string &archive, const std::string &stage, const R
     if (sf_update_hash_file(archive.c_str(), hash) < 0 || release.digest != hash)
         return fail("The download did not match GitHub's checksum. Please try again.");
     struct stat st = {};
-    if (stat(archive.c_str(), &st) < 0 || st.st_size < 22 ||
-        static_cast<std::size_t>(st.st_size) != release.size || release.size > 32u * 1024u * 1024u)
-        return fail("The download was incomplete.");
-    Buffer zip;
-    zip.data = static_cast<unsigned char *>(bigalloc::allocate(release.size));
-    if (!zip.data)
-        return fail("Not enough memory to prepare the update.");
     int fd = open(archive.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0)
         return fail("Could not read the update.");
+    if (fstat(fd, &st) < 0 || st.st_size < 22 ||
+        static_cast<std::size_t>(st.st_size) != release.size || release.size > 32u * 1024u * 1024u)
+    {
+        close(fd);
+        return fail("The download was incomplete.");
+    }
+    Buffer zip;
+    zip.data = static_cast<unsigned char *>(bigalloc::allocate(release.size));
+    if (!zip.data)
+    {
+        close(fd);
+        return fail("Not enough memory to prepare the update.");
+    }
     std::size_t have = 0;
     while (have < release.size)
     {

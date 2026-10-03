@@ -32,13 +32,20 @@ static inline int sf_update_dirs(const char *path)
         if (*p == '/')
         {
             *p = 0;
-            struct stat s;
-            if (lstat(tmp, &s) == 0)
+            /* The PS5 app sandbox denies lstat; metadata on opened files is available. */
+            int fd = open(tmp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (fd < 0 && errno == ENOENT)
             {
-                if (!S_ISDIR(s.st_mode))
+                if (mkdir(tmp, 0755) < 0 && errno != EEXIST)
                     return -1;
+                fd = open(tmp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
             }
-            else if (errno != ENOENT || mkdir(tmp, 0755) < 0)
+            if (fd < 0)
+                return -1;
+            struct stat s;
+            const int ok = fstat(fd, &s) == 0 && S_ISDIR(s.st_mode);
+            close(fd);
+            if (!ok)
                 return -1;
             *p = '/';
         }
@@ -46,12 +53,16 @@ static inline int sf_update_dirs(const char *path)
 }
 static inline int sf_update_hash_file(const char *path, char hex[65])
 {
-    struct stat st;
-    if (lstat(path, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size > 64 * 1024 * 1024)
-        return -1;
     int fd = open(path, O_RDONLY | O_NOFOLLOW);
     if (fd < 0)
         return -1;
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        st.st_size > 64 * 1024 * 1024)
+    {
+        close(fd);
+        return -1;
+    }
     sf_sha256 s;
     sf_sha_init(&s);
     unsigned char buf[32768];
@@ -68,12 +79,15 @@ static inline int sf_update_copy(const char *from, const char *to)
 {
     if (sf_update_dirs(to) < 0)
         return -1;
-    struct stat st;
-    if (lstat(from, &st) < 0 || !S_ISREG(st.st_mode))
-        return -1;
     int in = open(from, O_RDONLY | O_NOFOLLOW);
     if (in < 0)
         return -1;
+    struct stat st;
+    if (fstat(in, &st) < 0 || !S_ISREG(st.st_mode))
+    {
+        close(in);
+        return -1;
+    }
     int out = open(to, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (out < 0)
     {

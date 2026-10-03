@@ -2,13 +2,17 @@
 
 ## Use a release download
 
-Download the [public preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.000).
+Download the [public preview](https://github.com/BeLikeBrett/SlopFin/releases/tag/01.000.002).
 The folder ZIP is the recommended option: extract it and transfer the entire
 PPSA99001 folder to your loader's homebrew directory (commonly
 `/data/homebrew/`). Let the loader register it, then launch SlopFin.
 The native package is an optional experimental installer format; read
 [native FPKG](NATIVE_FPKG.md) before using it. Do not register the folder and
 native package with the same title ID simultaneously.
+
+After the initial folder installation, **Settings → Updates** can download and
+install future GitHub releases on the console. Keep elfldr running and leave
+the console on during installation. See [updates and recovery](UPDATES.md).
 
 You do not need to compile SlopFin to try a release. The following sections
 are for contributors and users who want to build from source.
@@ -64,8 +68,9 @@ private. Account settings live at `/data/slopfin/config.json` on the console.
 On PS5, search, server address and account fields open the system keyboard.
 Confirm to return the text to SlopFin; cancel keeps the previous value. Search
 keeps its current library scope and Triangle reopens the keyboard to edit.
-Search uses only the PlayStation keyboard, requested at the top-right of the screen.
-The system controls its final placement. Movies, Series and Episodes have their
+Search uses only the PlayStation keyboard, requested below the search field.
+Artwork is hidden while typing to leave that area clear. The system controls
+its final placement. Movies, Series and Episodes have their
 own horizontal rows; Up/Down switches rows, Left/Right browses a row, and Cross
 opens the selected item. TV libraries show series and matching episodes; movie
 libraries show movies. Each type has a separate result limit so episode matches

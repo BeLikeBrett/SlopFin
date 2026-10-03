@@ -45,13 +45,7 @@ namespace slopfin::trace
 
 void begin() noexcept
 {
-    /*
-     * When the console and the workstation disagree about what is running,
-     * every other measurement is worthless. An hour went into changes that
-     * were built, signed, uploaded and apparently installed, and were not what
-     * the console was executing. The first line of every trace says which
-     * binary this is.
-     */
+    /* Record the build stamp so captures can be matched to the running binary. */
     append("main entered, built " __DATE__ " " __TIME__, true);
 }
 

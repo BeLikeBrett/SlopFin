@@ -18,6 +18,8 @@ in [validation history](../PROGRESS.md).
 | Playback controls | Pause, seek, progress reporting, audio/subtitle selection, quality limits and autoplay | Restarts can take time; bitrate ceilings are not constant media rates. Unsupported picture subtitles can require video transcoding. |
 | Intro skipping | Server Intro segments and validated named chapter fallback | Requires usable server metadata; coverage is not guaranteed for every episode. See [intro skipping](INTRO_SKIPPING.md). |
 | Text / artwork | UTF-8 titles, ellipsis, bundled Noto Sans and artwork fallbacks | Font coverage is chiefly Latin, Greek and Cyrillic; missing scripts are not fully supported. Unusual aspect ratios and missing metadata need broader review. |
+| Profile pictures | Circular crop preview with movement, zoom and JPEG export | Console/USB gallery access needs the bundled sandbox helper and elfldr. Crop selection/export is tested; new-editor production upload was not exercised. |
+| Updates | GitHub folder downloads, SHA-256 verification, backup/rollback and restart | Requires elfldr on port 9021 and a matching `/data/homebrew/PPSA99001` folder install. Native packages use their installer. See [updates](UPDATES.md). |
 | Diagnostics | Local crash/session reports; optional explicitly configured report receiver | No custom receiver is required. Nothing uploads automatically. See [diagnostics](DIAGNOSTICS.md). |
 
 Before a public release, test fresh login and playback against another Jellyfin

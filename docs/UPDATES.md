@@ -10,7 +10,7 @@ running. SlopFin sends its bundled installer helper to the local console; it
 does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem.
 
-This feature first ships in **01.000.001**. Earlier releases need a one-time
+This feature first ships in **01.000.002**. Earlier releases need a one-time
 manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.
@@ -45,6 +45,8 @@ outside the application folder and are not replaced.
 The previous files are kept at `/data/slopfin/update/backup`. If SlopFin cannot
 open after an interrupted installation, close it and reinstall the complete
 release folder through your usual loader, or restore the backed-up files.
+If an interrupted helper left `/data/slopfin/update/install.lock`, remove that
+file only after SlopFin is closed and the console has been restarted.
 Do not copy files over a running app. A power interruption during installation
 can require this manual recovery; the helper cannot run while the console is off.
 
