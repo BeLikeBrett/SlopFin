@@ -23,8 +23,10 @@ the main console setup; this record does not certify other firmware or HDMI devi
 - CPU audio fixtures and limited movie/soak trials:
   [software audio](SOFTWARE_AUDIO.md). `tests/test_delivery_summary.cpp` records the
   Avatar HEVC/TrueHD-copy console session used for its fixtures.
-- AC-3 channel ordering and compressed-audio byte comparison:
-  [audio](AUDIO.md). Byte-correct HDMI packing does not prove audible receiver output.
+- AC-3 channel ordering, compressed-audio byte comparison and **audible native
+  passthrough** on the test TV: AC-3 5.1, E-AC-3 7.1 and DTS 5.1 tones, with DTS
+  codec badge, recorded on 2026-09-15. [Audio](AUDIO.md) links the original listening
+  log. TrueHD passthrough trials produced beeping/silence and did not pass.
 - Intro skips on two episodes, including with controls visible:
   [Intro checks](../INTRO_SKIPPING.md). The new consistent Square routing is tested
   separately in `tests/test_player_controls.cpp`.

@@ -17,7 +17,17 @@ from the source track's label.
 ## HDMI passthrough
 
 AC-3, E-AC-3 and DTS core can be packed into IEC 61937 bursts for the compressed
-AudioOut path. TV/receiver compatibility and physical lip sync remain experimental.
+AudioOut path. On **2026-09-15**, the user listened to AC-3 5.1, E-AC-3 7.1 and
+DTS 5.1 test tones through the test TV. DTS also showed the codec badge. This
+confirms native compressed passthrough bypassing SlopFin PCM for those trials;
+it is stronger evidence than successful port opening or byte packing alone.
+Other receivers and physical lip sync still need validation.
+
+The TrueHD trials were different: experimental encoded tones beeped or went
+silent, and a real Avatar TrueHD/Atmos sample remained silent. Mode changes,
+port formats, channel reorderings and byte swapping did not establish audible
+TrueHD/MAT playback. TV codec recognition alone was not a success.
+[Original listening/test log](../../tools/bitstream/README.md).
 
 | Format | Carrier | Burst |
 | --- | --- | --- |
