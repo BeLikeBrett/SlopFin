@@ -41,7 +41,7 @@ CPU or GPU. SlopFin does not transcode video or audio into another streaming cod
 | H.264, HEVC Main/Main10 video | PS5 **hardware** video decoder | Rendered video; SDR or HDR10 path | Console playback tested, including selected 4K sources. Rendering currently reduces to 1920-wide pictures. |
 | AAC, MP3, AC-3 audio | PS5 **platform audio decoder** | 48 kHz PCM sound | Console decoder path; accepted rates/layouts only. Platform API does not establish whether each codec uses dedicated hardware. |
 | E-AC-3, DTS core, TrueHD audio with PS5 decoding enabled | PS5 **CPU software** (FFmpeg) | 48 kHz, 16-bit PCM sound | Decoder fixtures and movie trials exercised. Atmos objects, DTS:X and full 24-bit output are not preserved. |
-| AC-3, E-AC-3, DTS core with HDMI passthrough | **TV / AV receiver** | Compressed audio over HDMI | Burst packing matches FFmpeg. Audible receiver output and lip sync need validation on your equipment. No TrueHD / DTS-HD / DTS:X passthrough. |
+| AC-3, E-AC-3, DTS core with HDMI passthrough | **TV / AV receiver** | Compressed audio over HDMI | Native passthrough heard on the test TV (2026-09-15); packing matches FFmpeg. Other equipment/lip sync need checks. No TrueHD / DTS-HD / DTS:X passthrough. |
 | Unsupported codec, rate, layout or selected quality | **Jellyfin server converts first**, then PS5 decodes the compatible result | Compatible stream; video can stay unchanged when only audio needs conversion | Negotiated before playback. A decoder failure during playback may require changing settings and retrying. |
 
 Use **Settings → Audio & video** to toggle HDMI passthrough, PS5 software audio

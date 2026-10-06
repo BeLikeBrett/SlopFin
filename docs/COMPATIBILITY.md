@@ -25,7 +25,7 @@ conversion is rendering work, not video transcoding.
 | --- | --- | --- | --- |
 | AAC, MP3, AC-3 | PS5 platform audio decoder (`sceAudiodec`) | 48 kHz PCM | Native decoder path and channel probes. Do not call this hardware decoding merely because it uses a platform API. Unsupported rates/layouts request server conversion. |
 | E-AC-3, DTS core, TrueHD with PS5 software decoding | PS5 CPU, using FFmpeg | 48 kHz S16 PCM, supported layouts up to eight channels | Synthetic PCM/reference checks and limited movie trials. Physical speaker routing needs broader checks. No Atmos objects, DTS:X or full 24-bit fidelity. |
-| AC-3, E-AC-3, DTS core with HDMI passthrough | TV / AV receiver | Compressed IEC 61937 bursts | Byte packing compared with FFmpeg; audible receiver playback/lip sync remain equipment-dependent and unverified generally. DTS carries only the core. |
+| AC-3, E-AC-3, DTS core with HDMI passthrough | TV / AV receiver | Compressed IEC 61937 bursts | AC-3 5.1, E-AC-3 7.1 and DTS 5.1 test tones heard on the test TV (2026-09-15); DTS badge confirmed. Packing matches FFmpeg. Other equipment/lip sync need checks. DTS carries only the core. |
 | Other audio, unsupported rates/layouts or an explicit compatible conversion choice | Jellyfin server converts; PS5 then decodes the result | Negotiated compatible audio | The server uses its own CPU or GPU configuration. SlopFin does not locally re-encode to another streaming codec. |
 
 **Settings → Audio & video** saves these choices:
@@ -44,6 +44,8 @@ on the first upgrade; the saved setting then takes precedence.
 A format outside the advertised capabilities is negotiated with Jellyfin **before**
 playback. A mid-stream decoder failure is not a guaranteed automatic server retry;
 turn off the affected local option or select a compatible conversion and restart.
+The recorded TrueHD passthrough attempts produced beeping or silence, including
+a real TrueHD/Atmos movie sample. They did not establish working TrueHD passthrough.
 [Audio evidence](development/AUDIO.md) · [Software decoder](development/SOFTWARE_AUDIO.md).
 
 ## App support
