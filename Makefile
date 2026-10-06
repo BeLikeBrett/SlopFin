@@ -179,6 +179,9 @@ test-playback: test-updates
 
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_avatar_editor.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp src/pad.cpp src/bigalloc.cpp src/config.cpp src/json.cpp src/ui_common.cpp src/background.cpp src/ime.cpp src/jellyfin.cpp src/http.cpp src/web_transport.cpp src/trace.cpp src/crash.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2 libcurl) -lz $(HOST_TEST_LDFLAGS) -o build/tests/avatar_editor_tests
 	@SLOPFIN_DATA="$(CURDIR)/build/tests/avatar-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/avatar_editor_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_player_controls.cpp $(filter-out src/app.cpp host/host_main.cpp,$(HOST_SRC)) $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/player_controls_tests
+	@rm -rf build/tests/player-controls-config
+	@SLOPFIN_DATA="$(CURDIR)/build/tests/player-controls-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/player_controls_tests
 
 # Compatibility alias for contributors using the standard unit-test target.
 test-unit: test-playback

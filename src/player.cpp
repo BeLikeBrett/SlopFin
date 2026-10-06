@@ -8,6 +8,7 @@
  */
 
 #include "player.hpp"
+#include "playback_options.hpp"
 
 #include "audio.hpp"
 #include "bigalloc.hpp"
@@ -1297,9 +1298,10 @@ class TransportProducer
                     audio::submit(unit.data.data(), unit.data.size(), unit.pts);
                     if (audio::failed())
                     {
-                        set_state(player::State::failed,
-                                  "CPU audio decode failed. Disable the audio trial and retry with "
-                                  "server conversion.");
+                        set_state(
+                            player::State::failed,
+                            "PS5 audio decode failed. Turn off PS5 audio decoding in Settings > "
+                            "Audio & video, then retry with Jellyfin conversion.");
                         video.close();
                         return;
                     }
@@ -1437,20 +1439,23 @@ void *playback_entry(void *) noexcept
         g_status.delivery_info = delivery;
     }
     const audio::Codec audio_codec = delivered_audio_codec(plan);
-    if (!audio::start(audio_codec, audio_codec == audio::Codec::truehd))
+    const bool audio_started = audio::start(audio_codec, audio_codec == audio::Codec::truehd);
+    if (!audio_started)
         trace::mark("player: continuing without audio");
-    if (audio::bitstream())
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        g_status.delivery_info += audio_codec == audio::Codec::dts
-                                      ? " | Bitstream to TV (DTS core)"
-                                      : " | Bitstream to TV (TV decodes Dolby)";
-    }
-    else if (audio_codec == audio::Codec::truehd || audio_codec == audio::Codec::eac3 ||
-             audio_codec == audio::Codec::dts)
-    {
-        std::lock_guard<std::mutex> guard(g_mutex);
-        g_status.delivery_info += " | Console CPU decode -> PCM (trial)";
+        g_status.video_decode_info = "PS5 hardware (H.264 / HEVC)";
+        if (!audio_started)
+            g_status.audio_decode_info = "Audio output failed";
+        else if (audio::bitstream())
+            g_status.audio_decode_info = audio_codec == audio::Codec::dts
+                                             ? "TV / receiver via HDMI passthrough (DTS core)"
+                                             : "TV / receiver via HDMI passthrough";
+        else if (audio_codec == audio::Codec::truehd || audio_codec == audio::Codec::eac3 ||
+                 audio_codec == audio::Codec::dts)
+            g_status.audio_decode_info = "PS5 CPU software (FFmpeg) -> 48 kHz PCM";
+        else
+            g_status.audio_decode_info = "PS5 platform audio decoder -> 48 kHz PCM";
     }
     bool decoder_ready = false;
     set_state(player::State::opening, "Buffering");
@@ -1982,30 +1987,18 @@ jellyfin::PlaybackRequest current_request() noexcept
     return g_request;
 }
 
+bool software_audio_available() noexcept
+{
+#ifdef SLOPFIN_SOFTWARE_AUDIO
+    return true;
+#else
+    return false;
+#endif
+}
+
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept
 {
-    request.allow_software_audio = false;
-    request.allow_bitstream = true;
-    if (auto *marker = std::fopen("/data/slopfin-no-bitstream", "rb"))
-    {
-        request.allow_bitstream = false;
-        std::fclose(marker);
-    }
-#ifdef SLOPFIN_SOFTWARE_AUDIO
-    if (auto *marker = std::fopen("/data/slopfin-software-audio", "rb"))
-    {
-        request.allow_software_audio = true;
-        std::fclose(marker);
-    }
-#endif
-    if (auto *marker = std::fopen("/data/slopfin-dv-hdr10", "rb"))
-    {
-        std::fclose(marker);
-        request.allow_dv_hdr10_base = true;
-    }
-    else
-        request.allow_dv_hdr10_base = false;
-    return request;
+    return apply_preferences(std::move(request), config::current(), software_audio_available());
 }
 
 bool restart(const jellyfin::PlaybackRequest &request, bool preserve_output) noexcept

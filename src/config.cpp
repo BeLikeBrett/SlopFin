@@ -105,6 +105,7 @@ void load() noexcept
     const int file = ::open(config_path().c_str(), O_RDONLY);
     const bool missing = file < 0 && errno == ENOENT;
     bool parsed = false;
+    bool migrated = false;
     if (file >= 0)
     {
         constexpr std::size_t kMaxConfigBytes = 1024u * 1024u;
@@ -143,6 +144,29 @@ void load() noexcept
             g_settings.user_id = std::string{root->str("userId")};
             g_settings.device_id = std::string{root->str("deviceId")};
             g_settings.trigger_feedback = root->num("triggerFeedback", 1.0) != 0.0;
+            g_settings.audio_passthrough = root->num("audioPassthrough", 1.0) != 0.0;
+            g_settings.software_audio = root->num("softwareAudio", 0.0) != 0.0;
+            g_settings.dv_hdr10_base = root->num("dvHdr10Base", 0.0) != 0.0;
+#ifndef SLOPFIN_HOST
+            // Carry marker-based choices forward once; saved settings take precedence.
+            if (root->find("audioPassthrough") == nullptr &&
+                access("/data/slopfin-no-bitstream", F_OK) == 0)
+            {
+                g_settings.audio_passthrough = false;
+                migrated = true;
+            }
+            if (root->find("softwareAudio") == nullptr &&
+                access("/data/slopfin-software-audio", F_OK) == 0)
+            {
+                g_settings.software_audio = true;
+                migrated = true;
+            }
+            if (root->find("dvHdr10Base") == nullptr && access("/data/slopfin-dv-hdr10", F_OK) == 0)
+            {
+                g_settings.dv_hdr10_base = true;
+                migrated = true;
+            }
+#endif
             if (const json::Value *look = root->find("subtitleLook"); look != nullptr)
             {
                 auto &c = g_settings.subtitle_look;
@@ -181,6 +205,8 @@ void load() noexcept
         if (missing || parsed)
             save();
     }
+    else if (migrated)
+        save();
 }
 
 void save() noexcept
@@ -202,6 +228,10 @@ void save() noexcept
     text += "  \"deviceId\": \"" + json::escape(g_settings.device_id) + "\",\n";
     text +=
         "  \"triggerFeedback\": " + std::string{g_settings.trigger_feedback ? "1" : "0"} + ",\n";
+    text +=
+        "  \"audioPassthrough\": " + std::string{g_settings.audio_passthrough ? "1" : "0"} + ",\n";
+    text += "  \"softwareAudio\": " + std::string{g_settings.software_audio ? "1" : "0"} + ",\n";
+    text += "  \"dvHdr10Base\": " + std::string{g_settings.dv_hdr10_base ? "1" : "0"} + ",\n";
     {
         const auto &c = g_settings.subtitle_look;
         text +=

@@ -29,6 +29,9 @@ struct Settings
     /* Whether the triggers load up while seeking. Hardware that has no trigger
        effects ignores it. */
     bool trigger_feedback = true;
+    bool audio_passthrough = true;
+    bool software_audio = false;
+    bool dv_hdr10_base = false;
     /* Seconds sooner each title's subtitles are shown, keyed by item id; a
        title at its original timing has no entry (subtitle_timing.hpp). */
     std::map<std::string, double> subtitle_offsets;

@@ -8,6 +8,7 @@
  */
 
 #include "../src/player.hpp"
+#include "../src/playback_options.hpp"
 
 #include "../src/audio.hpp"
 #include "../src/audiocaps.hpp"
@@ -171,6 +172,8 @@ bool start(const jellyfin::PlaybackRequest &request, const std::string &title,
     g_status.media_source_id = request.media_source_id;
     g_status.colour_info = "BT.709 8-bit (host preview)";
     g_status.delivery_info = "host preview, no decode";
+    g_status.video_decode_info = "Simulated on Linux; no video decode";
+    g_status.audio_decode_info = "Simulated on Linux; no audio decode";
     restart_clock(request.start_seconds);
 
     if (!g_fetching.exchange(true))
@@ -212,10 +215,14 @@ jellyfin::PlaybackRequest current_request() noexcept
     return g_request;
 }
 
-/* The preview has no console markers: it negotiates as a default build. */
+bool software_audio_available() noexcept
+{
+    return false;
+}
+
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept
 {
-    return request;
+    return apply_preferences(std::move(request), config::current(), software_audio_available());
 }
 
 bool restart(const jellyfin::PlaybackRequest &request, bool) noexcept

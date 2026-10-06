@@ -1,27 +1,64 @@
 # SlopFin compatibility
 
-Updated 2026-10-03. Most console evidence comes from firmware 8.20 and a limited
-set of servers and displays. A successful build or decoder export does not
-establish playback compatibility on another setup. Developer validation methods are in [testing](development/TESTING.md).
+Updated 2026-10-05. Console evidence comes mainly from PS5 firmware 8.20.
+**Implemented**, **decoder-tested** and **verified physical output** are different
+claims. A Linux test cannot prove HDMI behaviour on a PS5.
 
-| Area | Current implementation | Limits |
+## Video
+
+| Source | Where decoding / conversion happens | Current result | Remaining limits |
+| --- | --- | --- | --- |
+| H.264 | PS5 hardware decodes; PS5 CPU converts pixels for rendering | Console playback tested, including selected 4K sources | Current converted picture is usually at most 1920 pixels wide. |
+| HEVC Main / Main10 | PS5 hardware decodes; PS5 CPU converts pixels | SDR and PQ Main10 console playback tested | Decode support does not imply full-detail 4K presentation. |
+| HDR10 | PS5 renders a ten-bit HDR surface or tone maps to SDR | Surface registration and live switches tested on firmware 8.20 | HDMI metadata, brightness and different displays/receivers still need physical validation. |
+| Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Selected Profile 7 / 8.1 files exercised | Enable **Dolby Vision HDR10 fallback**. No native Dolby Vision output. |
+| Other codecs, incompatible DV, HLG or HDR10+ | Jellyfin server converts to a supported stream | Server conversion path | No validated native HLG path or HDR10+ dynamic metadata output. |
+
+The server may repackage compatible video without re-encoding it (**remux**).
+Changing only the audio format can leave the video unchanged. SlopFin's CPU pixel
+conversion is rendering work, not video transcoding.
+[Video evidence](development/VIDEO_DECODE.md) · [HDR evidence](development/HDR.md).
+
+## Audio
+
+| Source / selected path | Who decodes it? | Output | Tested scope / limits |
+| --- | --- | --- | --- |
+| AAC, MP3, AC-3 | PS5 platform audio decoder (`sceAudiodec`) | 48 kHz PCM | Native decoder path and channel probes. Do not call this hardware decoding merely because it uses a platform API. Unsupported rates/layouts request server conversion. |
+| E-AC-3, DTS core, TrueHD with PS5 software decoding | PS5 CPU, using FFmpeg | 48 kHz S16 PCM, supported layouts up to eight channels | Synthetic PCM/reference checks and limited movie trials. Physical speaker routing needs broader checks. No Atmos objects, DTS:X or full 24-bit fidelity. |
+| AC-3, E-AC-3, DTS core with HDMI passthrough | TV / AV receiver | Compressed IEC 61937 bursts | Byte packing compared with FFmpeg; audible receiver playback/lip sync remain equipment-dependent and unverified generally. DTS carries only the core. |
+| Other audio, unsupported rates/layouts or an explicit compatible conversion choice | Jellyfin server converts; PS5 then decodes the result | Negotiated compatible audio | The server uses its own CPU or GPU configuration. SlopFin does not locally re-encode to another streaming codec. |
+
+**Settings → Audio & video** saves these choices:
+
+| Setting | On | Off / default |
 | --- | --- | --- |
-| Server connection | IPv4, DNS, verified HTTPS, explicit ports and base paths | IPv6 and self-signed certificates are unsupported. Dotted names default to HTTPS/443; bare IPv4 defaults to HTTP/8096. HTTPS is never silently downgraded. |
-| Libraries | Server-provided movie/TV library IDs and names; movie, series and episode browsing | Music albums, audiobooks, photos and live TV are unsupported. Large libraries and unusual metadata need more testing. Long sidebars scroll to the selected library. |
-| Search | Separate Movies, Series and Episodes rows with independent limits and per-library scope | Search quality depends on Jellyfin metadata. The system keyboard's final placement is controlled by PS5. |
-| Login | Quick Connect and username/password; saved device/account settings | Quick Connect requires server support and approval. The Linux preview has no console keyboard. |
-| Video | H.264, HEVC Main/Main10; MPEG-TS delivery through copy/remux or server transcoding | 4K decoding does not guarantee full-detail 4K presentation; CPU conversion and rendering can limit performance. |
-| SDR / HDR10 | SDR output, PQ tone mapping, experimental ten-bit HDR10 and live switching | HDMI metadata, brightness, display/receiver combinations and HDR capability negotiation need broader validation. See [HDR evidence](development/HDR.md). |
-| Dolby Vision / HLG / HDR10+ | Selected Dolby Vision PQ base layers can fall back to HDR10 | No native Dolby Vision HDMI output, validated HLG path or HDR10+ dynamic metadata. Other profiles require server conversion. |
-| Audio | Native AAC/MP3/AC-3; PCM output; experimental AC-3/E-AC-3/DTS-core HDMI bitstream; optional CPU E-AC-3/DTS-core/TrueHD with `SOFTWARE_AUDIO=1` and the documented opt-in marker | Output paths and channel mappings need physical speaker/receiver checks. No general Atmos or DTS:X preservation claim. Unsupported formats/rates use server fallback. See [audio evidence](development/AUDIO.md) and [software audio](development/SOFTWARE_AUDIO.md). |
-| Playback controls | Pause, seek, progress reporting, audio/subtitle selection, quality limits and autoplay | Restarts can take time; bitrate ceilings are not constant media rates. Unsupported picture subtitles can require video transcoding. |
-| Intro skipping | Server Intro segments and validated named chapter fallback | Requires usable server metadata; coverage is not guaranteed for every episode. See [intro skipping](INTRO_SKIPPING.md). |
-| Text / artwork | UTF-8 titles, ellipsis, bundled Noto Sans and artwork fallbacks | Font coverage is chiefly Latin, Greek and Cyrillic; missing scripts are not fully supported. Unusual aspect ratios and missing metadata need broader review. |
-| Profile pictures | Next preview: circular crop, movement, zoom and JPEG export | Console/USB gallery access needs the bundled sandbox helper and elfldr. Crop selection/export is tested; new-editor production upload was not exercised. |
-| Updates | Next preview: GitHub folder downloads, verification, backup/rollback and restart | Final console update test is pending. Requires elfldr on port 9021 and a matching `/data/homebrew/PPSA99001` folder install. Native packages use their installer. See [updates](UPDATES.md). |
-| Diagnostics | Local crash/session reports; optional explicitly configured report receiver | No custom receiver is required. Nothing uploads automatically. See [diagnostics](DIAGNOSTICS.md). |
+| HDMI audio passthrough | Send supported compressed audio for the TV/receiver to decode | Off uses local PCM decoding or Jellyfin conversion. Default **On** preserves existing behaviour. |
+| Decode TrueHD / DTS / E-AC-3 on PS5 | Use the included FFmpeg CPU decoder for compatible tracks | Default **Off**: request Jellyfin conversion if there is no supported passthrough/native path. Builds without FFmpeg show **Not included**. |
+| Dolby Vision HDR10 fallback | Admit tested HDR10-compatible base layers | Default **Off**: ask Jellyfin to convert incompatible video. |
 
-Before a public release, test fresh login and playback against another Jellyfin
-installation, mixed movie/TV libraries, missing artwork, a long library list,
-a server base path, stereo and surround outputs, and an SDR-only display.
-Record actual delivery codecs and output behavior for each result.
+TrueHD cannot pass through: when compatible CPU decoding is enabled it wins over
+server TrueHD → E-AC-3 conversion. DTS/E-AC-3 passthrough takes priority when both
+settings are on. Choices apply to the next playback. Old marker choices are imported
+on the first upgrade; the saved setting then takes precedence.
+
+A format outside the advertised capabilities is negotiated with Jellyfin **before**
+playback. A mid-stream decoder failure is not a guaranteed automatic server retry;
+turn off the affected local option or select a compatible conversion and restart.
+[Audio evidence](development/AUDIO.md) · [Software decoder](development/SOFTWARE_AUDIO.md).
+
+## App support
+
+| Area | Supported | Not supported / requirements |
+| --- | --- | --- |
+| Media libraries | Movies, series and episodes | Music albums, audiobooks, books/comics, photos and live TV are not implemented. |
+| Connection | IPv4, DNS, verified HTTPS, ports and server base paths | No IPv6 or self-signed certificates. Hostnames default to HTTPS/443; bare IPv4 to HTTP/8096. |
+| Sign-in | Quick Connect and username/password; saved account | Quick Connect requires server approval. |
+| Subtitles | Text styling/timing; server burn-in for picture subtitles | Burning subtitles can force server video transcoding. |
+| Skip Intro | Jellyfin Intro segments or validated named chapters; **Square** skips | Needs timestamps on the server. Open track/quality panels hide the button. |
+| Avatar editor | Circular crop, movement, zoom and JPEG export | USB/console gallery needs the sandbox helper and elfldr. New-editor upload was not exercised against the production server. |
+| Folder updates | GitHub download, digest/ZIP checks, backup/rollback and restart helper | Requires elfldr and a matching folder install. Final console download/install test pending for this build. |
+| Native package | Build and payload checks | Mounting stalls before launch on the tested console; use the folder ZIP. |
+
+Text coverage is chiefly Latin, Greek and Cyrillic. Other firmware, unusual metadata,
+large libraries and display/receiver combinations need independent testing.
+[Validation record](development/VALIDATION.md).

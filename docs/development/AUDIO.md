@@ -30,8 +30,8 @@ for byte with FFmpeg's SPDIF muxer. Never scale, mix, reorder or PCM-capture a
 compressed burst ring. Codec rates/layouts outside the implemented path need
 server fallback. DTS-HD lossless, DTS:X and TrueHD passthrough are unavailable.
 
-`/data/slopfin-no-bitstream` disables passthrough for the next playback.
-Remove the marker to restore ordinary negotiation.
+**Settings → Audio & video → HDMI audio passthrough** enables or disables
+this path for the next playback. Old marker preferences migrate once on upgrade.
 
 ## Optional CPU decoding
 
@@ -48,5 +48,6 @@ buffering and source delivery gaps.
 
 Run `make test` for framing and audio ownership checks. Software fixtures test
 sample counts and channel identity; native sink probes exercise AudioOut.
+The platform audio API does not prove dedicated hardware decode for each codec.
 Physical listening and receiver/display checks are still required.
 [Testing workflow](TESTING.md).

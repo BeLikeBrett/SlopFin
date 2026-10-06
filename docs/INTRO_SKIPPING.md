@@ -4,14 +4,14 @@ SlopFin shows **Skip intro** while playback is inside an episode's detected
 intro. It seeks to that intro's end, so cold opens and different intro lengths
 can be handled without a fixed-duration skip.
 
-- **Cross** skips with the normal playback controls hidden.
-- **Square** skips when those controls are visible; Cross keeps its normal role.
+- **Square** skips with or without the playback controls visible.
+- **Cross** keeps its pause/select role.
 - **Circle** dismisses the prompt when the normal controls are hidden.
 
 A failed seek keeps the button available for another attempt. Open audio,
 subtitle or quality panels temporarily hide it.
 
-![Skip Intro control](images/skip-intro-control.png)
+
 
 ## Set up your server
 

@@ -61,7 +61,8 @@ int main()
         contains(value(lines, "Plays as"), "audio converted", "Backrooms: how");
         contains(value(lines, "Video"), "Copied (HEVC)", "Backrooms: video copied");
         contains(value(lines, "Video"), "HDR10 base", "Backrooms: DV base layer");
-        contains(value(lines, "Audio"), "DTS-HD MA converted to AAC", "Backrooms: audio");
+        contains(value(lines, "Audio"), "DTS-HD MA converted by Jellyfin to AAC",
+                 "Backrooms: audio");
         contains(value(lines, "Why"), "repackaged", "Backrooms: first reason");
     }
 
@@ -87,7 +88,7 @@ int main()
         const auto lines = describe(p, 1);
         contains(value(lines, "Plays as"), "nothing is re-encoded", "Avatar: how");
         contains(value(lines, "Audio"), "Copied (TrueHD)", "Avatar: audio copied");
-        contains(value(lines, "Audio"), "decoded on this PS5", "Avatar: CPU decode");
+        contains(value(lines, "Audio decode"), "PS5 CPU software decoder", "Avatar: CPU decode");
         contains(value(lines, "Subtitles"), "drawn by SlopFin", "Avatar: text subtitles");
     }
 
@@ -101,6 +102,17 @@ int main()
         const auto lines = describe(p, 3);
         contains(value(lines, "Plays as"), "encoded again", "PGS: how");
         contains(value(lines, "Subtitles"), "into the picture", "PGS: subtitles");
+    }
+
+    // Copying audio is not evidence of where it gets decoded.
+    for (const char *codec : {"dts", "eac3", "ac3"})
+    {
+        auto p = plan("VideoCodec=hevc&AudioCodec=" + std::string(codec));
+        p.audio_codec = codec;
+        contains(value(describe(p, -1, true), "Audio decode"), "TV / receiver", "HDMI decode");
+        const auto local = value(describe(p, -1, false), "Audio decode");
+        contains(local, std::string(codec) == "ac3" ? "platform audio" : "CPU software",
+                 "Local decode");
     }
 
     {

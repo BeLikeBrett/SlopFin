@@ -156,11 +156,24 @@ int main()
     assert(truehd_profile->find("DeviceProfile")
                ->find("TranscodingProfiles")
                ->at(0)
+               ->str("AudioCodec") == "truehd,ac3,aac");
+    assert(truehd_profile->find("DeviceProfile")
+               ->find("TranscodingProfiles")
+               ->at(0)
+               ->str("MaxAudioChannels") == "8");
+    // Turning the CPU decoder off preserves server TrueHD -> E-AC-3 for HDMI.
+    truehd.allow_software_audio = false;
+    assert(playback_plan(truehd).valid);
+    truehd_profile = slopfin::json::parse(bodies.back());
+    assert(truehd_profile->find("DeviceProfile")
+               ->find("TranscodingProfiles")
+               ->at(0)
                ->str("AudioCodec") == "eac3");
     assert(truehd_profile->find("DeviceProfile")
                ->find("TranscodingProfiles")
                ->at(0)
                ->str("MaxAudioChannels") == "6");
+    truehd.allow_software_audio = true;
     // With no bitstream port, the console's own decoder is still the fallback.
     truehd.allow_bitstream = false;
     assert(playback_plan(truehd).valid);

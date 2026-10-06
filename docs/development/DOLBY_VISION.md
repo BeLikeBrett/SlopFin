@@ -1,9 +1,8 @@
 # Dolby Vision base-layer fallback
 
 SlopFin does not output native Dolby Vision. An experimental option admits
-selected **HDR10-compatible PQ base layers** for HEVC decoding. Enable it with
-`/data/slopfin-dv-hdr10` before playback; removing the marker restores normal
-negotiation.
+selected **HDR10-compatible PQ base layers** for HEVC decoding. Enable it in **Settings → Audio & video → Dolby Vision HDR10 fallback**
+before playback; turn it off to restore normal negotiation.
 
 The source must pass profile, base-layer compatibility, transfer, primaries
 and bit-depth checks. The selected media version remains pinned through the

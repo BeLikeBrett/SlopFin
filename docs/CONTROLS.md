@@ -35,15 +35,15 @@ The picture pauses while you aim a seek and resumes in its previous state
 when the seek commits after you release. Moving back to the starting position
 cancels the seek. Restarting a stream can take time, especially with transcoding.
 
-When Skip Intro is visible, **Cross** skips with the normal controls hidden;
-**Square** skips when those controls are open. Circle dismisses an intro or
+When Skip Intro is visible, **Square** always skips. Outside intros, Square
+toggles subtitles. **Cross** keeps its pause/select role. Circle dismisses an intro or
 Up Next card when the normal controls are hidden.
 
 ## Text and pictures
 
 Text fields use the PlayStation keyboard. Confirm applies the text; cancel
-keeps the previous value. The next preview requests the search keyboard below
+keeps the previous value. SlopFin requests the search keyboard below
 the field and clears artwork while typing; the PS5 controls final placement.
 
-In the next preview's picture editor, D-pad moves the circular crop,
+In the picture editor, D-pad moves the circular crop,
 L1/R1 or the triggers zoom, Triangle resets, Cross saves and Circle goes back.
