@@ -37,8 +37,8 @@ paths; test ordinary PCM/SDR playback before diagnosing an experimental output.
 ## Picture selection or updates cannot open
 
 The console's elfldr must be running on port 9021 for the helper to start.
-In-app updates are still in the next preview's validation phase. For a published
-release, use the full folder download. [Updates and recovery](UPDATES.md).
+Folder preview 01.000.003 includes Settings → Updates. Final console install/restart
+verification is pending for this build. The complete folder ZIP also supports manual installation. [Updates and recovery](UPDATES.md).
 
 If a problem persists, attach a short reproduction and a redacted
 [diagnostic report](DIAGNOSTICS.md). For compiler or package-tool issues, use

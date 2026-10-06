@@ -10,7 +10,7 @@ Change picture opens a gallery of JPEG/PNG images from PS5 captures and USB
 storage. Gallery access needs elfldr running on port 9021; the app uses its
 bundled helper to access those folders.
 
-The next preview adds **Adjust your picture**:
+**Adjust your picture** opens the circular editor:
 
 | Control | Action |
 | --- | --- |

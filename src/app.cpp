@@ -355,6 +355,7 @@ struct View
     int diagnostics_row = 0;
     int diagnostics_hold = 0;
     int playback_row = 0;
+    int audio_row = 0;
     std::string report_line;
     Screen page_shown = Screen::connecting;
     bool page_back = false; /* going back moves the other way */
@@ -1151,9 +1152,10 @@ void *worker(void *) noexcept
                 request = g_shared.delivery_request;
                 key = g_shared.delivery_key;
             }
-            const jellyfin::PlaybackPlan plan =
-                jellyfin::playback_plan(player::with_console_options(request));
-            std::vector<details::Line> lines = delivery::describe(plan, request.subtitle_index);
+            request = player::with_console_options(std::move(request));
+            const jellyfin::PlaybackPlan plan = jellyfin::playback_plan(request);
+            std::vector<details::Line> lines =
+                delivery::describe(plan, request.subtitle_index, request.allow_bitstream);
             std::lock_guard<std::mutex> guard(g_shared.mutex);
             /* A different title opened meanwhile: this answer is not for it. */
             if (key == g_shared.delivery_key)
@@ -4382,8 +4384,7 @@ void draw_transport_badge(const player::Status &status, int y) noexcept
 /* Defined with the player's input, which is where the machine is driven. */
 void advance_autoplay(const player::Status &status) noexcept;
 
-/* A deliberately small playback affordance: it should be noticed, not become
-   a second OSD. Cross performs the jump; Circle can quietly dismiss it. */
+/* Square skips regardless of whether the timeline is visible. */
 void draw_skip_intro() noexcept
 {
     const float t = std::clamp(g_view.intro_in.value(), 0.0f, 1.0f);
@@ -4401,7 +4402,7 @@ void draw_skip_intro() noexcept
                                      gfx::rgba(0x0c, 0x0d, 0x12, fade(0x00)));
     gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 1, gfx::rgba(0xff, 0xff, 0xff, fade(0x24)));
     gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 2, gfx::rgba(0x62, 0xd5, 0xf4, fade(0xd8)));
-    const auto button = g_view.osd_visible ? icons::Icon::ps_square : icons::Icon::ps_cross;
+    constexpr auto button = icons::Icon::ps_square;
     icons::draw(button, x + 20, y + 25, 26, gfx::with_alpha(ui::hint_colour(button), fade(0xff)));
     text::draw(x + 62, y + 12, "Skip intro", 27, Weight::bold,
                gfx::rgba(0xff, 0xff, 0xff, fade(0xf2)));
@@ -4804,7 +4805,7 @@ void draw_player() noexcept
         }
         const int audio_channels = audio_track ? audio_track->channels : source.audio_channels;
 
-        std::string first = "Source";
+        std::string first = "Original file";
         if (source.width > 0)
             first += "    " + std::to_string(source.width) + "x" + std::to_string(source.height);
         if (!source.video_codec.empty())
@@ -4814,7 +4815,7 @@ void draw_player() noexcept
         if (source.bitrate > 0)
             first += "    " + megabits(source.bitrate);
 
-        std::string second = "Playing";
+        std::string second = "Stream received";
         if (status.width > 0)
             second += "   " + std::to_string(status.width) + "x" + std::to_string(status.height);
         /* delivery_info already reads "Video x copy | Audio y | Server: reasons". */
@@ -4838,7 +4839,8 @@ void draw_player() noexcept
 
         char pipeline[160];
         std::snprintf(pipeline, sizeof(pipeline),
-                      "Pipeline   %.2f fps    decode %llu ms    convert %llu ms    a/v %d ms",
+                      "Playback   %.2f fps    decode submit %llu ms    pixel conversion %llu ms    "
+                      "video ahead %+d ms",
                       status.frame_rate, static_cast<unsigned long long>(status.decode_us / 1000),
                       static_cast<unsigned long long>(status.convert_us / 1000),
                       status.audio_lead_ms);
@@ -4888,15 +4890,15 @@ void draw_player() noexcept
                     if (status.holds[hold] == 0)
                         continue;
                     char part[48] = {};
-                    (void)std::snprintf(part, sizeof(part), "%s%u held %u%%   ",
+                    (void)std::snprintf(part, sizeof(part), "%s%u refreshes: %u%%   ",
                                         hold == 5 ? ">" : "",
                                         hold == 5 ? 4u : static_cast<unsigned>(hold),
                                         status.holds[hold] * 100u / total);
                     cadence_line += part;
                 }
                 char tail[64] = {};
-                (void)std::snprintf(tail, sizeof(tail), "  %ld dropped of %ld shown",
-                                    status.dropped, status.shown);
+                (void)std::snprintf(tail, sizeof(tail), "  %ld dropped / %ld shown", status.dropped,
+                                    status.shown);
                 cadence_line += tail;
             }
         }
@@ -4913,15 +4915,22 @@ void draw_player() noexcept
         }
 
         std::string rates =
-            "Bitrate    Limit " + (status.max_bitrate > 0 ? megabits(status.max_bitrate)
+            "Quality ceiling  " + (status.max_bitrate > 0 ? megabits(status.max_bitrate)
                                                           : std::string{"Auto (120 Mb/s ceiling)"});
-        rates += " | Media " + (status.measured_bitrate > 0
-                                    ? megabits(static_cast<long long>(status.measured_bitrate))
-                                    : std::string{"measuring..."});
-        rates += " | Download " + (status.download_bitrate > 0
-                                       ? megabits(static_cast<long long>(status.download_bitrate))
-                                       : std::string{"measuring..."});
-        std::vector<std::string> lines{first, second, rates};
+        rates +=
+            " | Stream bitrate " + (status.measured_bitrate > 0
+                                        ? megabits(static_cast<long long>(status.measured_bitrate))
+                                        : std::string{"measuring..."});
+        rates +=
+            " | Network rate " + (status.download_bitrate > 0
+                                      ? megabits(static_cast<long long>(status.download_bitrate))
+                                      : std::string{"measuring..."});
+        std::vector<std::string> lines{first, second};
+        if (!status.video_decode_info.empty())
+            lines.push_back("Video decode   " + status.video_decode_info);
+        if (!status.audio_decode_info.empty())
+            lines.push_back("Audio decode   " + status.audio_decode_info);
+        lines.push_back(rates);
         if (!reasons.empty())
             lines.push_back("Reason     " + reasons);
         lines.emplace_back(pipeline);
@@ -5118,8 +5127,8 @@ int idle_index(int minutes) noexcept
 }
 
 constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback",    "Controller", "Server",
-                                         "Account",   "Diagnostics", "Updates"};
-constexpr int kSettingsMenuCount = 7;
+                                         "Account",   "Diagnostics", "Updates",    "Audio & video"};
+constexpr int kSettingsMenuCount = 8;
 
 /* A screen's single action row, focused, with the menu's look. */
 void draw_settings_action(int y, const std::string &label, const std::string &value) noexcept
@@ -5187,6 +5196,53 @@ void draw_settings(const std::string &server_name) noexcept
     const std::string address = server_address::origin(settings.host, settings.port);
     switch (g_view.settings_page)
     {
+    case 8:
+    {
+        text::draw(kContentX, kSafeY + 96, "Audio & video", 38, Weight::bold, gfx::palette::text);
+        const bool software = player::software_audio_available();
+        const char *const rows[] = {"HDMI audio passthrough", "Decode TrueHD / DTS / E-AC-3 on PS5",
+                                    "Dolby Vision HDR10 fallback"};
+        const char *const values[] = {settings.audio_passthrough ? "On" : "Off",
+                                      !software                 ? "Not included"
+                                      : settings.software_audio ? "On"
+                                                                : "Off",
+                                      settings.dv_hdr10_base ? "On" : "Off"};
+        ui::focus_pill(kContentX - 28, kGridTop + g_view.audio_row * 84 - 6, 1120, 66,
+                       ui::FocusGroup::settings, 8);
+        for (int i = 0; i < 3; ++i)
+        {
+            const int y = kGridTop + i * 84;
+            const bool focused = i == g_view.audio_row;
+            const auto colour = focused ? gfx::palette::text : gfx::palette::text_dim;
+            ui::control_label(kContentX, y - 6, 920, 66, rows[i], 30, Weight::medium, colour);
+            const std::string shown =
+                focused && (i != 1 || software)
+                    ? "\xe2\x80\xb9  " + std::string(values[i]) + "  \xe2\x80\xba"
+                    : values[i];
+            text::draw(kContentX + 1080 - text::measure(shown, 28, Weight::regular),
+                       text::centered_y(y - 6, 66, rows[i], 30, Weight::medium), shown, 28,
+                       Weight::regular, colour);
+        }
+        const char *const help[] = {
+            "Send AC-3, E-AC-3 and DTS core to your TV or receiver to decode. Turn off if it "
+            "produces silence. Receiver output still needs testing on your setup.",
+            !software
+                ? "This build has no software decoder. Install the complete public folder build."
+                : "Decode these formats on the PS5 to 48 kHz PCM instead of asking Jellyfin "
+                  "to convert the audio. "
+                  "TrueHD uses PCM; passthrough takes priority for DTS / E-AC-3. "
+                  "Atmos objects, DTS:X and full 24-bit output are not preserved.",
+            "Try the HDR10-compatible video layer in supported Dolby Vision files. This does "
+            "not output Dolby Vision. Leave off for Jellyfin conversion; HDR signalling still "
+            "needs display testing."};
+        text::draw_wrapped(kContentX, kGridTop + 280, 1100, 4, 34, help[g_view.audio_row], 24,
+                           Weight::regular, gfx::palette::text_dim);
+        text::draw(kContentX, kGridTop + 470, "Changes apply when you next start playback.", 22,
+                   Weight::regular, gfx::palette::text_faint);
+        if (g_view.audio_row != 1 || software)
+            ui::draw_button_hints(kContentX, kGridTop + 530, {{icons::Icon::ps_cross, "Toggle"}});
+        break;
+    }
     case 1:
         draw_subtitle_settings();
         return;
@@ -5381,17 +5437,18 @@ void draw_settings(const std::string &server_name) noexcept
     default:
     {
         text::draw(kContentX, kSafeY + 96, "Settings", 38, Weight::bold, gfx::palette::text);
+        const int first = std::max(0, g_view.settings_index - 6);
         if (!g_view.sidebar_focused)
-            ui::focus_pill(kContentX - 28, kGridTop + g_view.settings_index * 84 - 6, 620, 68,
-                           ui::FocusGroup::settings, g_view.settings_page);
-        for (int i = 0; i < kSettingsMenuCount; ++i)
+            ui::focus_pill(kContentX - 28, kGridTop + (g_view.settings_index - first) * 84 - 6, 620,
+                           68, ui::FocusGroup::settings, g_view.settings_page);
+        for (int i = first; i < std::min(kSettingsMenuCount, first + 7); ++i)
         {
             const bool focused = i == g_view.settings_index && !g_view.sidebar_focused;
-            const int y = kGridTop + i * 84;
+            const int y = kGridTop + (i - first) * 84;
             ui::control_label(kContentX, y - 6, 560, 68, kSettingsMenu[i], 34, Weight::medium,
                               focused ? gfx::palette::text : gfx::palette::text_dim);
         }
-        text::draw(kContentX, kGridTop + kSettingsMenuCount * 84 + 40,
+        text::draw(kContentX, kGridTop + 7 * 84 + 40,
                    "SlopFin " + update::status().current + "   unofficial Jellyfin client", 20,
                    Weight::regular, gfx::palette::text_faint);
         return;
@@ -6883,12 +6940,10 @@ void handle_player_input() noexcept
         return;
     }
 
-    /* Cross/Circle belong to the intro over a bare picture. With controls
-       open, the card advertises Square so Cross keeps its pause/select role. */
+    /* Square always skips; Cross keeps its pause/select role. */
     if (g_view.intro_visible && !g_view.panel_open)
     {
-        if ((!g_view.osd_visible && pad::pressed(pad::Button::cross)) ||
-            (g_view.osd_visible && pad::pressed(pad::Button::square)))
+        if (pad::pressed(pad::Button::square))
         {
             const double target = g_view.playing_item.intro_end_seconds;
             if (player::seek(target))
@@ -6904,7 +6959,7 @@ void handle_player_input() noexcept
                 g_view.intro_seek_failed = true;
                 trace::mark("intro: seek failed; prompt remains available");
             }
-            /* Consume Cross even on failure; it must not also pause playback. */
+            /* Consume the skip press even when the seek fails. */
             return;
         }
         else if (!g_view.osd_visible && pad::pressed(pad::Button::circle))
@@ -7395,6 +7450,25 @@ void handle_settings_input() noexcept
     }
     switch (g_view.settings_page)
     {
+    case 8:
+        if (pad::pressed(pad::Button::down))
+            g_view.audio_row = (g_view.audio_row + 1) % 3;
+        else if (pad::pressed(pad::Button::up))
+            g_view.audio_row = (g_view.audio_row + 2) % 3;
+        else if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::left) ||
+                 pad::pressed(pad::Button::right))
+        {
+            if (g_view.audio_row == 0)
+                settings.audio_passthrough = !settings.audio_passthrough;
+            else if (g_view.audio_row == 1 && player::software_audio_available())
+                settings.software_audio = !settings.software_audio;
+            else if (g_view.audio_row == 2)
+                settings.dv_hdr10_base = !settings.dv_hdr10_base;
+            else
+                return;
+            config::save();
+        }
+        return;
     case 1:
         handle_subtitle_settings_input();
         return;

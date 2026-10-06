@@ -124,12 +124,10 @@ inline std::string explain(const std::string &reason)
     return reason;
 }
 
-/*
- * Lines for the sheet. A copied TrueHD, E-AC-3 or DTS track can only have been
- * accepted because this console decodes it itself (the SOFTWARE_AUDIO build
- * with its marker), so a copy of one of those says so.
- */
-inline std::vector<details::Line> describe(const jellyfin::PlaybackPlan &plan, int subtitle_index)
+/* Separate server conversion from the device that decodes the delivered stream.
+   The sheet describes negotiation; live playback reports the actual output path. */
+inline std::vector<details::Line> describe(const jellyfin::PlaybackPlan &plan, int subtitle_index,
+                                           bool passthrough = false)
 {
     std::vector<details::Line> out;
     const auto pair = [&out](std::string key, std::string value)
@@ -176,14 +174,22 @@ inline std::vector<details::Line> describe(const jellyfin::PlaybackPlan &plan, i
 
     std::string audio;
     if (convert)
-        audio = audio_from + " converted to " + details::codec_name(audio_to);
+        audio = audio_from + " converted by Jellyfin to " + details::codec_name(audio_to);
     else
     {
         audio = "Copied (" + audio_from + ")";
-        if (plan.audio_codec == "truehd" || plan.audio_codec == "eac3" || plan.audio_codec == "dts")
-            audio += "  \xc2\xb7  decoded on this PS5";
     }
     pair("Audio", audio);
+    pair("Video decode", "PS5 hardware decoder (H.264 / HEVC)");
+    const std::string delivered = convert ? audio_to : plan.audio_codec;
+    if (passthrough && (delivered == "ac3" || delivered == "eac3" || delivered == "dts"))
+        pair("Audio decode", "TV / receiver via HDMI passthrough (requested)");
+    else if (delivered == "truehd" || delivered == "eac3" || delivered == "dts")
+        pair("Audio decode", "PS5 CPU software decoder (FFmpeg) to PCM");
+    else if (delivered == "aac" || delivered == "mp3" || delivered == "ac3")
+        pair("Audio decode", "PS5 platform audio decoder to PCM");
+    else
+        pair("Audio decode", "Delivery format not confirmed");
 
     if (subtitle_index < 0)
         pair("Subtitles", "Off");

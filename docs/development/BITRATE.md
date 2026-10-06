@@ -2,17 +2,17 @@
 
 The player now distinguishes these quantities:
 
-- **Source:** Jellyfin's declared media-source average, which may include tracks
+- **Original file:** Jellyfin's declared media-source average, which may include tracks
   that are not selected for this playback. It is not a current network rate.
-- **Limit:** the selected total streaming bitrate ceiling sent to PlaybackInfo.
+- **Quality ceiling:** the selected total streaming bitrate ceiling sent to PlaybackInfo.
   Automatic currently uses the client's 120 Mb/s ceiling. Selecting a higher
   ceiling does not upscale or increase the bitrate of a lower-rate source.
-- **Media:** compressed selected audio/video payload per media second, measured
+- **Stream bitrate:** compressed selected audio/video payload per media second, measured
   over three-second DTS windows (PTS fallback), excluding MPEG-TS overhead.
   Buffering, pause and slow rendering do not lower this measure. Variable-rate
   scenes and encoder buffering can produce short windows above a nominal limit.
-- **Download:** MPEG-TS bytes read per wall-clock second, including delivery
-  stalls and decode backpressure. It can differ substantially from Media.
+- **Network rate:** MPEG-TS bytes read per wall-clock second, including delivery
+  stalls and decode backpressure. It can differ substantially from the stream bitrate.
 
 A bitrate change restarts the stream. The Limit updates with the new request;
 Media and Download reset and show `measuring...` until a window is available.

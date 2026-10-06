@@ -27,7 +27,7 @@ PS5_CLANG=/usr/bin/clang bash tools/build-software-audio.sh
 make PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
 ```
 
-See [software audio](SOFTWARE_AUDIO.md) for its opt-in marker and limits.
+See [software audio](SOFTWARE_AUDIO.md) for its Settings toggle and limits.
 
 ## Deploy to a development console
 

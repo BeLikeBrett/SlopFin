@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "config.hpp"
+#include "playback_options.hpp"
 #include "diagnostics.hpp"
 #include <cassert>
 #include <cstdlib>
@@ -30,6 +31,10 @@ int main()
     auto &settings = slopfin::config::current();
     assert(!settings.device_id.empty() && !settings.signed_in());
     assert(!slopfin::diagnostics::destination(settings.report_server).valid());
+    assert(settings.audio_passthrough && !settings.software_audio && !settings.dv_hdr10_base);
+    settings.audio_passthrough = false;
+    settings.software_audio = true;
+    settings.dv_hdr10_base = true;
     settings.host = "https://media.example.com/jellyfin";
     settings.port = 443;
     settings.token = "test-token";
@@ -41,6 +46,15 @@ int main()
     struct stat metadata = {};
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
+    assert(!settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    slopfin::jellyfin::PlaybackRequest request;
+    request.item_id = "episode";
+    request.start_seconds = 12.5;
+    auto effective = slopfin::player::apply_preferences(request, settings, true);
+    assert(!effective.allow_bitstream && effective.allow_software_audio &&
+           effective.allow_dv_hdr10_base);
+    assert(effective.item_id == "episode" && effective.start_seconds == 12.5);
+    assert(!slopfin::player::apply_preferences(request, settings, false).allow_software_audio);
     assert(settings.signed_in() && settings.host == "https://media.example.com/jellyfin");
     assert(settings.report_server == "https://reports.example.com:8443");
     assert(!slopfin::config::autoplay_enabled("show"));
@@ -72,6 +86,10 @@ int main()
     }
     slopfin::config::load();
     assert(settings.device_id == "legacy" && settings.port == 8096);
+    assert(settings.audio_passthrough && !settings.software_audio && !settings.dv_hdr10_base);
+    effective = slopfin::player::apply_preferences(request, settings, true);
+    assert(effective.allow_bitstream && !effective.allow_software_audio &&
+           !effective.allow_dv_hdr10_base);
     assert(settings.report_server.empty() && settings.autoplay_series_overrides.empty());
     const auto receiver = slopfin::diagnostics::destination("http://reports.example.com:8103/base");
     assert(receiver.valid() && receiver.port == 8103 &&

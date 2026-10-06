@@ -1,8 +1,8 @@
 # Updating SlopFin
 
-**Status:** the updater is in draft preview 01.000.002 and still needs its final
-console download/install test. Published previews currently use manual folder
-installation. The instructions below describe the upcoming updater.
+**Status:** preview 01.000.003 includes the updater. Host download/archive,
+verification and rollback tests pass. Final console download/install/relaunch
+verification is pending for this build; elfldr must be running for that check.
 
 Folder builds have **Settings → Updates**. Check for a release, choose
 **Download update**, then **Install and restart** after verification finishes.
@@ -14,7 +14,7 @@ running. SlopFin sends its bundled installer helper to the local console; it
 does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem.
 
-This feature first ships in **01.000.002**. Earlier releases need a one-time
+The first combined public build with this feature is **01.000.003**. Earlier releases need a one-time
 manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.

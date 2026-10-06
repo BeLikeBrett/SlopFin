@@ -5,6 +5,7 @@
 | Install and connect my server | [Getting started](GETTING_STARTED.md) |
 | Learn the DualSense controls | [Controls](CONTROLS.md) |
 | Check video, audio and HDR support | [Compatibility](COMPATIBILITY.md) |
+| Understand decoding, conversion and playback stats | [Playback stats](PLAYBACK_STATS.md) |
 | Get Skip Intro working | [Intro skipping](INTRO_SKIPPING.md) |
 | Set autoplay and idle prompts | [Autoplay](AUTOPLAY.md) |
 | Change my profile or use the server dashboard | [Profile and dashboard](PROFILE_AND_DASHBOARD.md) |

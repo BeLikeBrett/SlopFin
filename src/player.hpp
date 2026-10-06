@@ -63,6 +63,8 @@ struct Status
     long dropped = 0;
     std::string colour_info;
     std::string delivery_info;
+    std::string video_decode_info;
+    std::string audio_decode_info;
     int queued = 0;
     /* Rises each time the display takes a newly decoded picture. */
     long shown = 0;
@@ -104,10 +106,10 @@ jellyfin::PlaybackRequest current_request() noexcept;
    server delivers one continuous stream per request. */
 bool restart(const jellyfin::PlaybackRequest &request, bool preserve_output = false) noexcept;
 
-/* The request as this console would negotiate it: the CPU audio decoder and
-   the Dolby Vision base-layer path, where their markers switch them on. Play
+/* The request as this console would negotiate it, using saved preferences. Play
    and the Details sheet both go through it, so their answers cannot differ. */
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept;
+bool software_audio_available() noexcept;
 bool seek(double seconds) noexcept;
 
 /* Switches to a text subtitle (or off, with -1) without restarting the stream.

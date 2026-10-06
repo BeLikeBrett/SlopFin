@@ -1,9 +1,14 @@
 # Optional FFmpeg audio decoder
 
-This experimental path decodes **E-AC-3, DTS core and TrueHD** on the PS5 CPU
+This optional path decodes **E-AC-3, DTS core and TrueHD** on the PS5 CPU
 and feeds the production AudioOut queue. It is compiled into the public builds
-but is enabled for movie trials only when `/data/slopfin-software-audio` exists.
-Remove that marker before the next playback to restore ordinary negotiation.
+and is enabled in **Settings → Audio & video → Decode TrueHD / DTS / E-AC-3 on PS5**.
+It defaults to Off. Changes apply on the next playback; no marker file is required.
+TrueHD uses this decoder when enabled and compatible, even if HDMI passthrough is on.
+Passthrough takes priority for DTS/E-AC-3.
+
+Decoding makes PCM sound. It does not re-encode audio into a new codec. Jellyfin
+performs any requested codec conversion.
 
 ## Build and test
 

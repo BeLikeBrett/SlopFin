@@ -974,16 +974,16 @@ std::string playback_delivery(PlaybackPlan &plan) noexcept
                 plan.dv_hdr10_base = false;
                 plan.bit_depth = static_cast<int>(info->num("BitDepth", 8));
             }
-            std::string line = "Video " + std::string{info->str("VideoCodec")} +
-                               (info->flag("IsVideoDirect") ? " copy" : " transcode");
+            std::string line =
+                "Video " + std::string{info->str("VideoCodec")} +
+                (info->flag("IsVideoDirect") ? " copied by Jellyfin" : " converted by Jellyfin");
             if (plan.dv_hdr10_base)
                 line += " (DV HDR10 base)";
             line += " | Audio " + plan.audio_codec;
             if (info->flag("IsAudioDirect"))
                 line += " copy";
             else
-                line += " -> " + std::string{info->str("AudioCodec")} +
-                        " transcode (native client decoder)";
+                line += " -> " + std::string{info->str("AudioCodec")} + " converted by Jellyfin";
             std::string reasons;
             if (const auto *values = info->find("TranscodeReasons"); values != nullptr)
                 for (std::size_t j = 0; j < values->size(); ++j)
@@ -1039,15 +1039,16 @@ PlaybackPlan playback_plan(const PlaybackRequest &request) noexcept
         const bool source_is_truehd = plan.audio_codec == "truehd";
         // Restrict the first movie trial to the tested 48 kHz codecs/layout
         // sizes. A user channel limit still requires server conversion.
-        /* Convert TrueHD to E-AC-3 for bitstream output. TrueHD MAT passthrough is unsupported;
-         * preserve PCM/server fallback. */
-        const bool truehd_to_bitstream = source_is_truehd && request.allow_bitstream;
-        const bool software_audio = request.allow_software_audio && !truehd_to_bitstream &&
+        const bool software_audio = request.allow_software_audio &&
                                     plan.audio_sample_rate == 48000 && plan.audio_channels >= 1 &&
                                     plan.audio_channels <= 8 &&
                                     (channels <= 0 || plan.audio_channels <= channels) &&
                                     (source_is_truehd || plan.audio_codec == "eac3" ||
                                      (plan.audio_codec == "dts" && plan.audio_profile == "DTS"));
+        // TrueHD cannot pass through. An enabled, compatible CPU decoder takes priority
+        // over converting TrueHD to E-AC-3 on the server for HDMI passthrough.
+        const bool truehd_to_bitstream =
+            source_is_truehd && request.allow_bitstream && !software_audio;
         /* Bitstream: the TV decodes E-AC-3 itself, and DTS from its core,
            so any DTS profile can be copied, DTS-HD MA included. */
         const bool bitstream_audio = request.allow_bitstream && plan.audio_sample_rate == 48000 &&

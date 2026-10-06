@@ -8,6 +8,7 @@
  */
 
 #include "audio.hpp"
+#include "config.hpp"
 #include "audio_buffer_gate.hpp"
 #include "software_audio.hpp"
 #include "adts_frames.hpp"
@@ -191,12 +192,7 @@ bool bitstream_candidate(Codec codec) noexcept
 {
     if (codec != Codec::ac3 && codec != Codec::eac3 && codec != Codec::dts)
         return false;
-    if (std::FILE *marker = std::fopen("/data/slopfin-no-bitstream", "rb"))
-    {
-        std::fclose(marker);
-        return false;
-    }
-    return true;
+    return slopfin::config::current().audio_passthrough;
 }
 
 /* Mode numbers from the library's ExConfigureOutput table. */

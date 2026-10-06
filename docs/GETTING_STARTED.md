@@ -51,9 +51,12 @@ Use the sidebar to choose a library. Triangle opens Search; Square opens your
 profile menu. [Controls](CONTROLS.md) explains DualSense seeking and playback
 shortcuts. [Compatibility](COMPATIBILITY.md) covers codecs and output limits.
 
-The next preview adds in-app folder updates and circular avatar cropping.
-The updater is still awaiting its final console test; use
-[published release downloads](https://github.com/BeLikeBrett/SlopFin/releases)
-until then. [Update status](UPDATES.md).
+Use **Settings → Audio & video** for optional audio decoding, HDMI passthrough
+and Dolby Vision HDR10 fallback. [Playback stats](PLAYBACK_STATS.md) explains who
+decodes or converts each stream.
+
+Folder builds from 01.000.003 include **Settings → Updates**. Older public
+01.000.000 builds need one manual folder upgrade to obtain it.
+[Update status and requirements](UPDATES.md).
 
 For a source build, use the [developer build guide](development/BUILD.md).
