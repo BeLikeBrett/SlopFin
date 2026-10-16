@@ -1256,36 +1256,6 @@ std::vector<int> visible_requests() noexcept
     return out;
 }
 
-bool can_request(const Title &title, bool from_requests, bool is4k = false) noexcept
-{
-    if (!g_view.authenticated || g_view.submitting)
-        return false;
-    if (title.availability == Availability::unknown ||
-        (title.availability == Availability::partial && title.media_type == "tv"))
-        return title.tmdb_id != 0 &&
-               request::can_request(g_view.permissions, title.media_type == "tv", is4k);
-    if (from_requests && g_view.sheet_approval == 3)
-        return true; /* a declined request can be asked for again */
-    return false;
-}
-
-const char *request_action_label(const Title &title, bool from_requests) noexcept
-{
-    if (title.availability == Availability::available && !title.jellyfin_id.empty())
-        return "Open in Jellyfin";
-    if (g_view.submitting)
-        return "Sending request…";
-    if (!g_view.authenticated)
-        return "Sign in under Settings > Requests";
-    if (can_request(title, from_requests))
-        return title.media_type == "tv" ? "Choose seasons" : "Request movie";
-    if (title.availability == Availability::available)
-        return title.jellyfin_id.empty() ? "Available on request server" : "Open in Jellyfin";
-    if (from_requests && g_view.sheet_approval != 0)
-        return approval_label(g_view.sheet_approval);
-    return "Requested";
-}
-
 void open_keyboard(Field field) noexcept
 {
     if (g_field != Field::none || ime::busy())

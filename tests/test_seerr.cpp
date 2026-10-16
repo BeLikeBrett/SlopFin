@@ -189,7 +189,6 @@ int main()
         R"({"id":12,"name":"A show","mediaType":"tv","mediaInfo":{"status":5,"jellyfinMediaId":"0123456789abcdef0123456789abcdef"}})");
     const auto title = read_title(*available);
     assert(title.jellyfin_id == "0123456789abcdef0123456789abcdef");
-    assert(request_action_label(title, false) == std::string("Open in Jellyfin"));
     const auto invalid = json::parse(R"({"jellyfinMediaId":"../../outside"})");
     assert(jellyfin_id(*invalid).empty());
     settings.seerr_auth = 2;
