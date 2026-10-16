@@ -55,7 +55,7 @@ HOST_SRC := \
 	src/app.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp \
 	src/ime.cpp src/http.cpp src/web_transport.cpp src/jellyfin.cpp src/json.cpp src/pad.cpp \
 	src/bigalloc.cpp src/config.cpp src/subtitles.cpp src/telemetry.cpp \
-	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp src/update.cpp src/update_package.cpp
+	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp src/seerr.cpp src/update.cpp src/update_package.cpp
 HOST_CXXFLAGS ?= -std=c++20 -O2 -g -DSLOPFIN_HOST -Wall -Wextra \
 	-Wno-unused-parameter -pthread $(shell pkg-config --cflags sdl2)
 HOST_LDFLAGS ?= -pthread $(shell pkg-config --libs sdl2 libcurl) -lz
@@ -91,7 +91,7 @@ host-run: $(HOST_BIN)
 test: test-unit test-integration test-server-network
 
 .PHONY: test-playback test-updates
-test-playback: test-updates
+test-playback: test-updates test-services
 	@mkdir -p build/tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Isrc tests/test_config.cpp src/config.cpp src/json.cpp -o build/tests/config_tests
 	@build/tests/config_tests
@@ -332,3 +332,13 @@ test-server-network:
 .PHONY: fpkg
 fpkg: app
 	@bash tools/build-native-pkg.sh
+
+.PHONY: test-services
+test-services:
+	@mkdir -p build/tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_background.cpp src/background.cpp -o build/tests/background_tests
+	@build/tests/background_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_download.cpp -o build/tests/update_download_tests
+	@build/tests/update_download_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_seerr.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/seerr_tests
+	@build/tests/seerr_tests

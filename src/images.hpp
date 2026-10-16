@@ -29,6 +29,9 @@ enum class Kind : std::uint8_t
        the height asked for, so a grid of 4K screenshots stays small. The tag
        names the size, since one picture is wanted as a thumbnail and larger. */
     file,
+    /* Artwork from an absolute URL: the id is the whole URL. Discover's TMDB
+       posters are not served by Jellyfin, so they come straight from TMDB. */
+    remote,
 };
 
 bool start() noexcept;

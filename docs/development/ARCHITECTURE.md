@@ -56,6 +56,7 @@ See [host build](HOST_BUILD.md).
 | `ime` | PS5 system keyboard lifecycle and text submission |
 | `icons` | Interface glyphs and the DualSense face buttons, as signed distance fields |
 | App data worker | Library, detail, search and sign-in requests |
+| Background service queues | Independent general, request-server and update workers; each queue is serial so a slow request server cannot block updates or account actions |
 | Artwork workers | HTTP image fetch/decode and cache population |
 | Transport worker | Stream read, demux, native audio decode/submission, bounded compressed-video queue |
 | Playback worker | Stream setup, native video decode, conversion and transport lifetime |

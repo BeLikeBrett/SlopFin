@@ -49,7 +49,7 @@ struct Address
         return web_transport(host) ? origin(host, port) : host + ":" + std::to_string(port);
     }
 };
-inline Address parse(std::string_view input)
+inline Address parse(std::string_view input, int local_port = 8096)
 {
     Address result;
     while (!input.empty() && std::isspace(static_cast<unsigned char>(input.front())))
@@ -180,14 +180,16 @@ inline Address parse(std::string_view input)
         std::transform(result.host.begin(), result.host.end(), result.host.begin(),
                        [](unsigned char c) { return std::tolower(c); });
     }
-    // Bare IPs use Jellyfin's LAN port. Names use HTTPS, unless a local
-    // Jellyfin port or single-label LAN hostname was explicitly supplied.
+    // Bare IPs use the service LAN port. Dotted names default to verified HTTPS.
     if (scheme.empty() && !numeric)
         scheme = (host.find('.') == std::string_view::npos ||
-                  (colon != std::string_view::npos && input.substr(colon + 1) == "8096"))
+                  (colon != std::string_view::npos &&
+                   input.substr(colon + 1) == std::to_string(local_port)))
                      ? "http://"
                      : "https://";
-    result.port = scheme == "https://" ? 443 : scheme == "http://" ? (numeric ? 8096 : 80) : 8096;
+    result.port = scheme == "https://"  ? 443
+                  : scheme == "http://" ? (numeric ? local_port : 80)
+                                        : local_port;
     if (colon != std::string_view::npos)
     {
         auto port = input.substr(colon + 1);

@@ -37,6 +37,7 @@ struct Step
     {
         wait,
         press,
+        hold,
         shot,
         search, /* submit a scoped search term */
         open,   /* open an item's detail page by id  */
@@ -104,6 +105,20 @@ std::vector<Step> parse_script(const std::string &text) noexcept
         const std::vector<std::string> words = split(piece, ' ');
         const std::string &head = words[0];
 
+        if (head == "hold" && words.size() > 1)
+        {
+            for (const auto &button : kButtons)
+                if (words[1] == button.name)
+                {
+                    Step step;
+                    step.kind = Step::Kind::hold;
+                    step.button = button.button;
+                    step.frames = words.size() > 2 ? std::max(1, std::atoi(words[2].c_str())) : 60;
+                    steps.push_back(step);
+                    break;
+                }
+            continue;
+        }
         if (head == "wait")
         {
             Step step;
@@ -179,9 +194,9 @@ void draw_icon_sheet() noexcept
     constexpr int kCell = 200;
     constexpr int kColumns = 8;
     static const char *names[] = {
-        "play",    "pause",  "skip_back", "skip_forward", "subtitles",  "audio",
-        "quality", "info",   "check",     "jellyfin",     "triangle",   "circle",
-        "cross",   "square", "search",    "chev_left",    "chev_right",
+        "play",   "pause", "skip_back", "skip_forward", "subtitles", "audio",     "quality",
+        "info",   "check", "jellyfin",  "triangle",     "circle",    "cross",     "square",
+        "search", "r2",    "chev_left", "chev_right",   "chev_up",   "chev_down",
     };
     const int count = static_cast<int>(icons::Icon::count);
     for (int i = 0; i < count; ++i)
@@ -317,6 +332,9 @@ int main(int argc, char **argv)
                 break;
             case Step::Kind::press:
                 slopfin::pad::inject(step.button);
+                break;
+            case Step::Kind::hold:
+                slopfin::pad::inject_hold(step.button, step.frames);
                 break;
             case Step::Kind::search:
                 slopfin::app::preview_search(step.path);

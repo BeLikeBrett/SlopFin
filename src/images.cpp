@@ -8,6 +8,7 @@
 
 #include "bigalloc.hpp"
 #include "gfx.hpp"
+#include "http.hpp"
 #include "jellyfin.hpp"
 #include "trace.hpp"
 
@@ -195,6 +196,8 @@ std::string make_key(const std::string &item_id, slopfin::images::Kind kind,
         return item_id + "|u" + tag;
     case slopfin::images::Kind::file:
         return item_id + "|f" + tag;
+    case slopfin::images::Kind::remote:
+        return item_id + "|r";
     }
     return item_id;
 }
@@ -213,6 +216,8 @@ const char *kind_name(slopfin::images::Kind kind) noexcept
         return "User";
     case slopfin::images::Kind::file:
         return "File";
+    case slopfin::images::Kind::remote:
+        return "Remote";
     }
     return "Primary";
 }
@@ -252,6 +257,39 @@ unsigned char *read_local_file(const std::string &path, std::size_t &size) noexc
         return nullptr;
     }
     size = have;
+    return bytes;
+}
+
+unsigned char *fetch_remote(const std::string &url, std::size_t &size) noexcept
+{
+    size = 0;
+    if (!url.starts_with("https://image.tmdb.org/t/p/"))
+        return nullptr;
+    slopfin::http::WebRequest request;
+    if (!request.open(url, "GET", {}, {}, {}) || request.status() != 200)
+        return nullptr;
+    constexpr std::size_t limit = 4u * 1024u * 1024u;
+    auto *bytes = static_cast<unsigned char *>(slopfin::bigalloc::allocate(limit));
+    if (bytes == nullptr)
+        return nullptr;
+    char chunk[16384];
+    long count = 0;
+    while ((count = request.read(chunk, sizeof(chunk))) > 0)
+    {
+        if (static_cast<std::size_t>(count) > limit - size)
+        {
+            count = -1;
+            break;
+        }
+        std::memcpy(bytes + size, chunk, static_cast<std::size_t>(count));
+        size += static_cast<std::size_t>(count);
+    }
+    if (count < 0 || size == 0)
+    {
+        slopfin::bigalloc::release(bytes);
+        size = 0;
+        return nullptr;
+    }
     return bytes;
 }
 
@@ -482,12 +520,17 @@ void *worker(void *) noexcept
             encoded = slopfin::jellyfin::user_image(job.item_id, job.tag);
             status = encoded.empty() ? 404 : 200;
         }
+        else if (std::strcmp(job.kind, "Remote") == 0)
+        {
+            local_bytes = fetch_remote(job.item_id, local_size);
+            status = local_bytes != nullptr ? 200 : 404;
+        }
         else
         {
             encoded = slopfin::jellyfin::image(job.item_id, job.tag, job.kind, job.height, &status);
         }
-        const unsigned char *source = local ? local_bytes : encoded.data();
-        const std::size_t source_size = local ? local_size : encoded.size();
+        const unsigned char *source = local_bytes != nullptr ? local_bytes : encoded.data();
+        const std::size_t source_size = local_bytes != nullptr ? local_size : encoded.size();
         const auto decode_began = std::chrono::steady_clock::now();
 
         slopfin::gfx::Bitmap bitmap;
@@ -497,8 +540,14 @@ void *worker(void *) noexcept
             int width = 0;
             int height = 0;
             int channels = 0;
-            unsigned char *pixels = stbi_load_from_memory(source, static_cast<int>(source_size),
-                                                          &width, &height, &channels, 4);
+            const bool valid = stbi_info_from_memory(source, static_cast<int>(source_size), &width,
+                                                     &height, &channels) &&
+                               width > 0 && height > 0 && width <= 8192 && height <= 8192 &&
+                               static_cast<std::uint64_t>(width) * height <= 64u * 1024u * 1024u;
+            unsigned char *pixels =
+                valid ? stbi_load_from_memory(source, static_cast<int>(source_size), &width,
+                                              &height, &channels, 4)
+                      : nullptr;
             if (local_bytes != nullptr)
             {
                 slopfin::bigalloc::release(local_bytes);
@@ -729,11 +778,14 @@ std::size_t cached_bytes() noexcept
 
 void set_playback(bool playing) noexcept
 {
-    long free_mib = available_memory_mib();
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (g_playing == playing)
+            return;
+    }
+    const long free_mib = available_memory_mib();
     g_free_mib.store(free_mib);
     std::lock_guard<std::mutex> guard(g_mutex);
-    if (g_playing == playing)
-        return;
     g_playing = playing;
     if (playing)
     {

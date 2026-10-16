@@ -25,6 +25,12 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   [Server setup](docs/INTRO_SKIPPING.md).
 - **Per-series autoplay:** each show can override the global setting. Cross
   starts the offered next episode; Circle dismisses it while controls are hidden.
+- **Discover and requests:** connect Seerr or Jellyseerr to find titles, request
+  movies or missing TV seasons, and follow download progress. Available titles
+  open in Jellyfin when the request server supplies their library ID.
+  [Connect your request server](docs/DISCOVER.md).
+- **Category shortcuts:** hold L2/R2 and press Up/Down to move between libraries.
+  An animated trigger hint shows the shortcut and the selected category.
 - **Profile and server dashboard:** crop avatars with D-pad and trigger zoom.
   Administrators can manage sessions, libraries and tasks from the controller.
   [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
@@ -75,8 +81,10 @@ devices need independent testing.
 
 ## Updates
 
-**01.000.003** includes these settings, one-button intro skipping, circular avatar
-cropping and **Settings → Updates**. Earlier public 01.000.000 installs need
+The next preview, **01.000.004**, adds Discover, request tracking, category shortcut
+feedback and download retries with clearer update errors. **01.000.003** introduced
+playback settings, one-button intro skipping, circular avatar cropping and
+**Settings → Updates**. Earlier public 01.000.000 installs need
 one complete folder upgrade to obtain the updater. Later folder updates can be
 checked and installed in the app with elfldr running. Console installation/restart
 verification is still pending for this build; host archive and rollback tests pass.

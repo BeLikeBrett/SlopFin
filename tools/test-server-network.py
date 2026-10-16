@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -45,6 +46,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
+        self.flush_headers()
+        self.wfile.flush()
+        time.sleep(0.05)
+        self.send_header("Set-Cookie", "other=ignored; Path=/")
+        self.send_header("sEt-CoOkIe", "connect.sid=test-session; Path=/; HttpOnly")
         self.end_headers()
         self.wfile.write(body)
 

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "update.hpp"
 #include "update_package.hpp"
+#include "update_download.hpp"
+#include "trace.hpp"
 #include "update/files.h"
 #include "background.hpp"
 #include "http.hpp"
@@ -63,7 +65,7 @@ void initialize()
 #ifdef SLOPFIN_HOST
                        const auto param = json::parse(small_file("sce_sys/param.json"));
 #else
-        const auto param=json::parse(small_file("/app0/sce_sys/param.json"));
+            const auto param = json::parse(small_file("/app0/sce_sys/param.json"));
 #endif
                        std::lock_guard<std::mutex> lock(mutex);
                        state.current =
@@ -80,9 +82,15 @@ bool busy(Phase p)
 }
 void failure(std::string message)
 {
+    trace::mark("update: " + message);
     std::lock_guard<std::mutex> lock(mutex);
     state.phase = Phase::error;
     state.message = std::move(message);
+}
+void run_update(std::function<void()> job) noexcept
+{
+    if (!background::run(std::move(job), background::Lane::updates))
+        failure("The update worker could not start. Restart SlopFin and try again.");
 }
 [[maybe_unused]] bool save(const std::string &path, std::string_view text)
 {
@@ -147,7 +155,7 @@ void check() noexcept
         state.received = state.total = 0;
         current = state.current;
     }
-    background::run(
+    run_update(
         [current]
         {
             http::WebRequest request;
@@ -207,63 +215,74 @@ void download() noexcept
         state.total = selected.size;
         state.message = "Downloading from GitHub...";
     }
-    background::run(
+    run_update(
         [selected]
         {
             const std::string folder = base(), path = folder + "/release.zip";
             unlink((folder + "/staged/manifest").c_str());
             if (sf_update_dirs(path.c_str()) < 0)
             {
-                failure("Could not create the update folder. Check free space.");
+                const auto code = errno;
+                trace::mark("update: prepare storage errno=" + std::to_string(code));
+                failure(code == ENOSPC
+                            ? "There is not enough free space to create the update folder."
+                            : "The PS5 denied access to the update folder. Reinstall the current "
+                              "folder build and retry.");
                 return;
             }
-            auto request = open_download(selected.url);
-            if (!request)
+            DownloadResult downloaded;
+            for (unsigned attempt = 0; attempt < 3; ++attempt)
             {
-                failure("Could not download the release. Check your connection and try again.");
-                return;
-            }
-            const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-            if (fd < 0)
-            {
-                failure("Could not save the download. Check free space.");
-                return;
-            }
-            char buffer[65536];
-            std::size_t received = 0;
-            long n = 0;
-            bool ok = true;
-            while ((n = request->read(buffer, sizeof(buffer))) > 0)
-            {
-                if (static_cast<std::size_t>(n) > selected.size - received)
+                auto request = open_download(selected.url);
+                if (!request)
                 {
-                    ok = false;
-                    break;
+                    downloaded.failure = DownloadFailure::network;
+                    continue;
                 }
-                std::size_t have = 0;
-                while (have < static_cast<std::size_t>(n))
-                {
-                    auto w = write(fd, buffer + have, static_cast<std::size_t>(n) - have);
-                    if (w <= 0)
+                downloaded = receive_archive(
+                    path, selected.size,
+                    [&](void *bytes, std::size_t size) { return request->read(bytes, size); },
+                    [&](std::size_t received)
                     {
-                        ok = false;
-                        break;
-                    }
-                    have += static_cast<std::size_t>(w);
-                }
-                if (!ok)
+                        std::lock_guard<std::mutex> lock(mutex);
+                        state.received = received;
+                    });
+                trace::mark("update: download attempt=" + std::to_string(attempt + 1) +
+                            " bytes=" + std::to_string(downloaded.received) + "/" +
+                            std::to_string(selected.size) +
+                            " failure=" + std::to_string(static_cast<int>(downloaded.failure)) +
+                            " errno=" + std::to_string(downloaded.system_error));
+                if (downloaded.failure != DownloadFailure::network &&
+                    downloaded.failure != DownloadFailure::truncated)
                     break;
-                received += static_cast<std::size_t>(n);
                 std::lock_guard<std::mutex> lock(mutex);
-                state.received = received;
+                state.received = 0;
+                state.message = "Connection interrupted. Retrying the download...";
             }
-            if (n < 0 || received != selected.size || fsync(fd) < 0)
-                ok = false;
-            close(fd);
-            if (!ok)
+            if (downloaded.failure != DownloadFailure::none)
             {
-                unlink(path.c_str());
-                failure("The download was interrupted or storage is full. Try again.");
+                switch (downloaded.failure)
+                {
+                case DownloadFailure::network:
+                case DownloadFailure::truncated:
+                    failure("The GitHub download was interrupted. Your current app is unchanged. "
+                            "Check your connection and try again.");
+                    break;
+                case DownloadFailure::oversized:
+                    failure(
+                        "GitHub returned a file with the wrong size. Check again for a release.");
+                    break;
+                default:
+                    failure(downloaded.system_error == ENOSPC
+                                ? "There is not enough free space to save the update. Free some "
+                                  "space and retry."
+                            : downloaded.system_error == EACCES || downloaded.system_error == EPERM
+                                ? "The PS5 denied access to update storage. Reinstall the current "
+                                  "folder build and retry."
+                                : "The PS5 could not finish saving the update. Your app is "
+                                  "unchanged; see Diagnostics.");
+                    break;
+                }
                 return;
             }
             {
@@ -296,7 +315,7 @@ void install() noexcept
 #endif
     }
 #ifndef SLOPFIN_HOST
-    background::run(
+    run_update(
         []
         {
             const std::string folder = base();

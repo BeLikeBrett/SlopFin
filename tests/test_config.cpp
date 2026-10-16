@@ -40,6 +40,10 @@ int main()
     settings.token = "test-token";
     settings.user_id = "test-user";
     settings.report_server = "https://reports.example.com:8443";
+    settings.seerr_host = "https://requests.example.com/base";
+    settings.seerr_port = 443;
+    settings.seerr_api_key = "request-key";
+    settings.seerr_auth = 2;
     settings.autoplay_series_overrides["show"] = false;
     settings.subtitle_offsets["episode"] = 1.5;
     slopfin::config::save();
@@ -47,6 +51,8 @@ int main()
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
     assert(!settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    assert(settings.seerr_host == "https://requests.example.com/base" &&
+           settings.seerr_api_key == "request-key" && settings.seerr_auth == 2);
     slopfin::jellyfin::PlaybackRequest request;
     request.item_id = "episode";
     request.start_seconds = 12.5;

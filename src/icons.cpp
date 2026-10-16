@@ -207,8 +207,13 @@ float field(Icon icon, Vec p) noexcept
     }
     case Icon::chevron_left:
     case Icon::chevron_right:
+    case Icon::chevron_up:
+    case Icon::chevron_down:
     {
-        const Vec q = icon == Icon::chevron_left ? p : Vec{1.0f - p.x, p.y};
+        const Vec q = icon == Icon::chevron_left    ? p
+                      : icon == Icon::chevron_right ? Vec{1.0f - p.x, p.y}
+                      : icon == Icon::chevron_up    ? Vec{p.y, p.x}
+                                                    : Vec{1.0f - p.y, p.x};
         return std::min(capsule(q, {0.62f, 0.20f}, {0.34f, 0.50f}, 0.065f),
                         capsule(q, {0.34f, 0.50f}, {0.62f, 0.80f}, 0.065f));
     }

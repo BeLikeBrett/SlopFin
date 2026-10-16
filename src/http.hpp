@@ -23,11 +23,17 @@ struct Response
 {
     int status = 0;
     std::string body;
+    /* Raw "Name: value" lines, in order. Needed for Set-Cookie, which is how a
+       session sign-in is captured. */
+    std::vector<std::string> headers;
 
     [[nodiscard]] bool ok() const noexcept
     {
         return status >= 200 && status < 300;
     }
+
+    /* The first value of `name`, case-insensitively, or empty. */
+    [[nodiscard]] std::string header(std::string_view name) const noexcept;
 };
 
 /* host is a bare address or name; port is explicit. path includes the query. */

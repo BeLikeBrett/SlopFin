@@ -28,6 +28,29 @@ std::size_t WebRequest::write(char *bytes, std::size_t size, std::size_t count, 
     self.pending_.insert(self.pending_.end(), bytes, bytes + length);
     return length;
 }
+std::size_t WebRequest::header(char *bytes, std::size_t size, std::size_t count, void *context)
+{
+    auto &self = *static_cast<WebRequest *>(context);
+    const std::size_t length = size * count;
+    std::string line(bytes, length);
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+        line.pop_back();
+    if (line.starts_with("HTTP/"))
+    {
+        self.response_headers_.clear();
+        self.headers_complete_ = false;
+        self.header_bytes_ = 0;
+    }
+    if (length > 65536u - self.header_bytes_)
+        return 0;
+    self.header_bytes_ += length;
+    if (line.empty())
+        self.headers_complete_ = true;
+    /* Preserve repeated Set-Cookie lines separately. */
+    if (!line.empty() && line.find(':') != std::string::npos)
+        self.response_headers_.push_back(line);
+    return length;
+}
 bool WebRequest::pump() noexcept
 {
     if (interrupted_)
@@ -86,13 +109,15 @@ bool WebRequest::open(const std::string &url, const std::string &method,
     curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, media ? 30L : 10L);
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, &WebRequest::write);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, this);
+    curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, &WebRequest::header);
+    curl_easy_setopt(easy, CURLOPT_HEADERDATA, this);
     // Host previews can trust an explicit CA bundle while still verifying TLS.
     if (const char *bundle = std::getenv("SSL_CERT_FILE"); bundle != nullptr && *bundle != '\0')
         curl_easy_setopt(easy, CURLOPT_CAINFO, bundle);
     // TLS verification stays enabled. Redirects are not followed with tokens.
     if (curl_multi_add_handle(static_cast<CURLM *>(multi_), easy) != CURLM_OK)
         return false;
-    while ((!status_ || (status_ >= 300 && status_ < 400 && location_.empty())) && !done_)
+    while ((status_ < 200 || !headers_complete_) && !done_)
         if (!pump())
             return false;
     return status_ != 0 && !failed_;
@@ -241,21 +266,24 @@ bool WebRequest::open(const std::string &url, const std::string &method,
     }
     if (sceHttpGetStatusCode(request, &status_) < 0)
         return false;
-    if (status_ >= 300 && status_ < 400)
+    /*
+     * Read the response headers for every reply, not only redirects: the
+     * session cookie a sign-in sets arrives here, and Discover needs it.
+     */
+    char *raw = nullptr;
+    std::size_t length = 0;
+    if (sceHttpGetAllResponseHeaders(request, &raw, &length) >= 0 && raw != nullptr &&
+        length <= 65536)
     {
-        char *raw = nullptr;
-        std::size_t length = 0;
-        if (sceHttpGetAllResponseHeaders(request, &raw, &length) < 0 || raw == nullptr ||
-            length > 65536)
-            return false;
         std::string_view all(raw, length);
         for (std::size_t start = 0; start < all.size();)
         {
             const auto end = all.find("\r\n", start);
             const auto line =
                 all.substr(start, end == std::string_view::npos ? all.size() - start : end - start);
-            if (line.size() >= 9)
+            if (!line.empty() && line.find(':') != std::string_view::npos)
             {
+                response_headers_.emplace_back(line);
                 std::string name(line.substr(0, 9));
                 std::transform(name.begin(), name.end(), name.begin(),
                                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -281,7 +309,10 @@ long WebRequest::read(void *buffer, std::size_t capacity) noexcept
 {
     if (interrupted_)
         return -1;
-    return sceHttpReadData(request_, buffer, capacity);
+    const long count = sceHttpReadData(request_, buffer, capacity);
+    if (count < 0)
+        trace::mark("https: read failed " + std::to_string(count));
+    return count;
 }
 void WebRequest::interrupt() noexcept
 {

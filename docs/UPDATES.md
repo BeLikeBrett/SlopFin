@@ -1,8 +1,8 @@
 # Updating SlopFin
 
-**Status:** preview 01.000.003 includes the updater. Host download/archive,
-verification and rollback tests pass. Final console download/install/relaunch
-verification is pending for this build; elfldr must be running for that check.
+**Status:** preview 01.000.003 includes the updater. The 01.000.004 revision adds
+download retries and clearer failures; its final console install/restart check
+is pending. Use manual folder installation if the updater fails.
 
 Folder builds have **Settings → Updates**. Check for a release, choose
 **Download update**, then **Install and restart** after verification finishes.
@@ -14,7 +14,7 @@ running. SlopFin sends its bundled installer helper to the local console; it
 does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem.
 
-The first combined public build with this feature is **01.000.003**. Earlier releases need a one-time
+Build **01.000.003** introduced the updater. Earlier releases need a one-time
 manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.
@@ -58,3 +58,11 @@ Native FPKG installations require their package installer. The folder updater
 refuses to replace a folder that does not match the running app. Native package
 mounting remains experimental on the test console; see
 [native package status](development/NATIVE_FPKG.md).
+
+## Download errors
+
+Interrupted downloads retry automatically. The app reports network, wrong-size,
+permission and full-storage failures separately. A failed download leaves the
+installed app unchanged; choose Download update again to retry. If staging or
+backup validation fails, download a fresh archive. Diagnostic logs record the
+failed stage and byte count without request credentials.

@@ -14,6 +14,13 @@
 Search separates Movies, Series and Episodes. Up/Down changes result rows;
 Left/Right browses within a row. A search inside a library keeps that scope.
 
+The L2/R2 hint above the sidebar lights the held trigger and briefly names the
+selected category when you use the shortcut.
+
+**Discover**, the request server, sits at the top of the sidebar. Triangle
+searches it, Cross opens a title, and Square swaps between its Search and My
+requests views. See [Discover](DISCOVER.md) for the whole of it.
+
 ## Playback and seeking
 
 | Control | Action |

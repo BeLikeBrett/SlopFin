@@ -76,8 +76,8 @@ tools/capture.sh out/ "wait 300; left; down x2; cross; wait 260; shot movies.png
 ```
 
 The script language is one step per frame: `wait N`, a button name (with
-`x3` to repeat), `shot NAME`, and `search TERM` (spaces allowed). The latter
-is a host-only preview hook that runs the real scoped Jellyfin request; it does
+`x3` to repeat), `hold BUTTON FRAMES`, `shot NAME`, and `search TERM` (spaces allowed).
+Search is a host-only preview hook that runs the real scoped Jellyfin or Discover request; it does
 not replace or simulate the PS5 keyboard. Presses are injected exactly as the console's
 `tools/press.sh` injects them, so a sequence run here and one run there are the
 same sequence.
