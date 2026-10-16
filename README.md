@@ -81,8 +81,9 @@ devices need independent testing.
 
 ## Updates
 
-The next preview, **01.000.004**, adds Discover, request tracking, category shortcut
-feedback and download retries with clearer update errors. **01.000.003** introduced
+The next preview, **01.000.005**, adds Discover with media/status filters, individual
+season requests and quality-profile selection, plus request tracking, category
+shortcut feedback and download retries with clearer update errors. **01.000.003** introduced
 playback settings, one-button intro skipping, circular avatar cropping and
 **Settings → Updates**. Earlier public 01.000.000 installs need
 one complete folder upgrade to obtain the updater. Later folder updates can be

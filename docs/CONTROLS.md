@@ -18,8 +18,9 @@ The L2/R2 hint above the sidebar lights the held trigger and briefly names the
 selected category when you use the shortcut.
 
 **Discover**, the request server, sits at the top of the sidebar. Triangle
-searches it, Cross opens a title, and Square swaps between its Search and My
-requests views. See [Discover](DISCOVER.md) for the whole of it.
+searches it, Cross opens a title, Square swaps Browse / My requests, and R3 opens
+media/status filters. In a title, choose seasons and quality with the D-pad;
+Options focuses the request button. See [Discover](DISCOVER.md).
 
 ## Playback and seeking
 

@@ -11,6 +11,7 @@ slopfin::config::Settings settings;
 std::deque<std::function<void()>> jobs;
 int saved = 0, calls = 0;
 bool cancelled = false;
+slopfin::pad::Button pressed_button = slopfin::pad::Button::count;
 std::string last_post;
 std::function<slopfin::http::Response(std::string_view, std::string_view,
                                       const std::vector<std::string> &, std::string_view)>
@@ -60,6 +61,13 @@ bool take_cancelled() noexcept
     return out;
 }
 } // namespace slopfin::ime
+namespace slopfin::pad
+{
+bool pressed(Button button) noexcept
+{
+    return button == pressed_button;
+}
+} // namespace slopfin::pad
 namespace slopfin::http
 {
 Response get(std::string_view host, int, std::string_view path,
@@ -185,4 +193,128 @@ int main()
     const auto doc = json::parse(
         R"({"id":3,"media":{"mediaType":"tv","status":4,"downloadStatus":[{"size":100,"sizeLeft":150}]}})");
     assert(!read_request(*doc).downloading);
+    // Actual season state and active requests determine what can be submitted.
+    const auto detail = json::parse(R"({"seasons":[
+        {"seasonNumber":0,"episodeCount":4,"name":"Specials"},
+        {"seasonNumber":1,"episodeCount":10},{"seasonNumber":2,"episodeCount":8},
+        {"seasonNumber":3,"episodeCount":6},{"seasonNumber":4,"episodeCount":0}],
+        "mediaInfo":{"seasons":[{"seasonNumber":1,"status":5,"status4k":1}],
+        "requests":[{"status":1,"is4k":false,"seasons":[{"seasonNumber":2,"status":1}]},
+                    {"status":2,"is4k":true,"seasons":[{"seasonNumber":1,"status":2}]}]}})");
+    request::Options options;
+    options.loaded = options.advanced = options.allow4k = true;
+    options.seasons = request::read_seasons(*detail);
+    assert(options.seasons.size() == 4);
+    assert(!options.seasons[1].selectable(false) && !options.seasons[2].selectable(false));
+    assert(options.seasons[3].selectable(false) && options.seasons[0].selectable(false));
+    assert(!options.seasons[1].selectable(true) && options.seasons[2].selectable(true));
+    options.servers = {{9, "TV", false, true, 4, "/tv", {{4, "1080p"}, {8, "Any"}}},
+                       {10, "4K TV", true, true, 19, "/tv4k", {{19, "2160p"}}}};
+    const auto body = json::parse(request::payload("tv", 123, false, options, {1, 2, 3}, 0, 0));
+    assert(body && body->num("serverId") == 9 && body->num("profileId") == 4);
+    assert(body->str("rootFolder") == "/tv" && body->find("seasons")->size() == 1);
+    assert(body->find("seasons")->at(0)->number == 3);
+    assert(request::payload("tv", 123, false, options, {}, 0, 0).empty());
+    assert(request::payload("tv", 123, true, options, {3}, 0, 0).empty());
+    const auto fourk = json::parse(request::payload("tv", 123, true, options, {2, 3}, 1, 0));
+    assert(fourk && fourk->flag("is4k") && fourk->num("profileId") == 19);
+    options.advanced = false;
+    const auto limited = json::parse(request::payload("movie", 12, false, options, {}, 0, 0));
+    assert(limited && !limited->find("profileId") && !limited->find("serverId"));
+    options.partial = false;
+    const auto all = json::parse(request::payload("tv", 123, false, options, {3}, 0, 0));
+    assert(all->str("seasons") == "all");
+    assert(request::advanced(2) && request::advanced(8192) && !request::advanced(32));
+    assert(request::can_request(524288, false, false) == false);
+    assert(request::can_request(524288, true, false) && !request::can_request(524288, true, true));
+    assert(request::can_request(4096, true, true) && !request::can_request(4096, false, true));
+    // Browse and request filters operate on the displayed media, without mixing types.
+    Title movie, series;
+    movie.media_type = "movie";
+    movie.name = "Movie";
+    series.media_type = "tv";
+    series.name = "Series";
+    series.availability = Availability::available;
+    series.requested = true;
+    g_view.results = {movie, series};
+    g_view.media_filter = 2;
+    g_view.availability_filter = 3;
+    assert(visible_results() == std::vector<int>{1});
+    g_view.availability_filter = 1;
+    assert(visible_results().empty());
+    g_view.media_filter = 0;
+    assert(visible_results() == std::vector<int>{0});
+    g_view.media_filter = g_view.availability_filter = 0;
+    settings.seerr_auth = 2;
+    settings.seerr_api_key = "test-key";
+    sync_connection();
+    g_model.permissions = g_view.permissions = 2;
+    g_model.user_id = 7;
+    g_model.authenticated = g_view.authenticated = true;
+    handler = [](std::string_view method, std::string_view path, const auto &,
+                 std::string_view) -> http::Response
+    {
+        if (path == "/api/v1/tv/123")
+            return {
+                200,
+                R"({"seasons":[{"seasonNumber":1,"episodeCount":8},{"seasonNumber":2,"episodeCount":10}],"mediaInfo":{"seasons":[{"seasonNumber":1,"status":5}]}})",
+                {}};
+        if (path == "/api/v1/service/sonarr")
+            return {
+                200,
+                R"([{"id":0,"name":"TV","is4k":false,"isDefault":true,"activeProfileId":4,"activeDirectory":"/tv"}])",
+                {}};
+        if (path == "/api/v1/service/sonarr/0")
+            return {200, R"({"profiles":[{"id":4,"name":"1080p"},{"id":8,"name":"HEVC"}]})", {}};
+        if (method == "POST" && path == "/api/v1/request")
+            return {201, R"({"status":1})", {}};
+        if (path.starts_with("/api/v1/request?"))
+            return {200, R"({"results":[]})", {}};
+        return {404, {}, {}};
+    };
+    g_view.sheet = {};
+    g_view.sheet.tmdb_id = 123;
+    g_view.sheet.media_type = "tv";
+    g_view.sheet.name = "A show";
+    load_options();
+    drain();
+    snapshot();
+    assert(g_view.options.loaded && g_view.options.error.empty());
+    assert(g_view.server_index == 0 && g_view.seasons == std::vector<int>{2});
+    assert(g_view.profile_index == 0 && profile_label() == "1080p (default)");
+    change_sheet_row({SheetKind::profile}, 1);
+    assert(g_view.profile_index == 1 && profile_label() == "HEVC");
+    change_sheet_row({SheetKind::profile}, 1);
+    assert(g_view.profile_index == 0);
+    change_sheet_row({SheetKind::profile}, -1);
+    assert(g_view.profile_index == 1);
+    change_sheet_row({SheetKind::season, 0}, 1);
+    assert(g_view.seasons == std::vector<int>{2});
+    change_sheet_row({SheetKind::season, 1}, 1);
+    assert(g_view.seasons.empty());
+    change_sheet_row({SheetKind::season, 1}, 1);
+    submit(g_view.sheet);
+    drain();
+    const auto submitted = json::parse(last_post);
+    assert(submitted && submitted->num("serverId", -1) == 0 && submitted->num("profileId") == 8);
+    assert(submitted->find("seasons")->size() == 1 &&
+           submitted->find("seasons")->at(0)->number == 2);
+    assert(!g_model.submitting);
+    // A late options response must not replace a newer title's selection.
+    const auto epoch = g_model.options_epoch;
+    job_options(connection_snapshot(), g_view.sheet, g_model.options_wanted - 1, 2, true);
+    assert(g_model.options_epoch == epoch);
+    open_filters();
+    g_view.draft_media = 2;
+    pressed_button = pad::Button::circle;
+    filters_input();
+    assert(g_view.media_filter == 0 && !g_view.filters_open);
+    open_filters();
+    g_view.draft_media = 2;
+    g_view.draft_status = 3;
+    g_view.filter_row = 3;
+    pressed_button = pad::Button::cross;
+    filters_input();
+    assert(g_view.media_filter == 2 && g_view.availability_filter == 3 && !g_view.filters_open);
+    pressed_button = pad::Button::count;
 }
