@@ -44,6 +44,10 @@ metadata until last. An installation error restores files already replaced.
 Sign-in, preferences, subtitle offsets and per-series autoplay settings live
 outside the application folder and are not replaced.
 
+The complete GitHub download/install/restart flow was checked on firmware 8.20
+with 1.08 and 1.09. The latter also recovered staging and handoff files owned
+by an older FTP installation; the protected account configuration stayed unchanged.
+
 ## Recovery
 
 The previous files are kept at `/data/slopfin/update/backup`. If SlopFin cannot
