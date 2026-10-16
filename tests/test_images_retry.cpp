@@ -95,6 +95,20 @@ int main()
     g_warm_queue.clear();
     g_warm_queued.clear();
 
+    // Speculative artwork cannot jump ahead of visible posters; acquisition promotes it once.
+    g_entries.clear();
+    g_queue.clear();
+    images::prefetch("next", "tag", images::Kind::primary, 480);
+    assert(g_queue.empty() && g_prefetch_queue.size() == 1);
+    images::acquire("visible", "tag", images::Kind::primary, 480);
+    assert(g_queue.size() == 1 && g_queue.back().item_id == "visible");
+    images::acquire("next", "tag", images::Kind::primary, 480);
+    assert(g_prefetch_queue.empty() && g_queue.size() == 2);
+    images::acquire("next", "tag", images::Kind::primary, 480);
+    assert(g_queue.size() == 2);
+    g_queue.clear();
+    g_entries.clear();
+
     // Eviction releases just enough, counted in bytes. A poster is under a MiB,
     // and crediting releases in whole MiB would credit nothing and empty the
     // cache to cover a two-MiB shortfall.

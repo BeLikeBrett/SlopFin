@@ -14,12 +14,12 @@
 Search separates Movies, Series and Episodes. Up/Down changes result rows;
 Left/Right browses within a row. A search inside a library keeps that scope.
 
-The L2/R2 hint above the sidebar lights the held trigger and briefly names the
-selected category when you use the shortcut.
+A compact L2/R2 hint at the bottom of the sidebar lights while a trigger is held.
 
 **Discover**, the request server, sits at the top of the sidebar. Triangle
-searches it, Cross opens a title, Square swaps Browse / My requests, and R3 opens
-media/status filters. In a title, choose seasons and quality with the D-pad;
+searches it, Cross opens a title, Square swaps Browse / My requests, and L1/R1
+changes catalog pages. Media and sorting choices sit beside search. In a title,
+choose seasons and quality with the D-pad; Triangle opens a season’s episode guide.
 Options focuses the request button. See [Discover](DISCOVER.md).
 
 ## Playback and seeking

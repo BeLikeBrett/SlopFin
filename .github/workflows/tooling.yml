@@ -87,9 +87,8 @@ jobs:
         run: |
           mkdir -p dist/release
           (cd dist && python3 -m zipfile -c "release/SlopFin-$CONTENT_VERSION-folder.zip" "$TITLE_ID")
-          cp "dist/native-pkg/${CONTENT_ID}.pkg" "dist/release/SlopFin-$CONTENT_VERSION-experimental.pkg"
           cp .deps/audio/ffmpeg-9.0.1.tar.xz dist/release/ffmpeg-9.0.1-source.tar.xz
-          (cd dist/release && sha256sum *.zip *.pkg *.tar.xz > SHA256SUMS)
+          (cd dist/release && sha256sum *.zip *.tar.xz > SHA256SUMS)
 
       - name: Upload build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -131,5 +130,5 @@ jobs:
             gh release create "$GITHUB_REF_NAME" release/* \
               --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
               --title "SlopFin $GITHUB_REF_NAME — preview" \
-              --notes "Folder build is recommended. Native FPKG is experimental; see docs/development/NATIVE_FPKG.md for console validation status and requirements. FFmpeg source is included; SlopFin source is available with this tag."
+              --notes "Download the folder ZIP and place PPSA99001 in /data/homebrew/. Existing users can check Settings → Updates with ELF Loader running. See README.md for features and docs/GETTING_STARTED.md for setup. FFmpeg source is included; SlopFin source is available with this tag."
           fi

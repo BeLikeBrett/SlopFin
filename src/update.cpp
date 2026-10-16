@@ -84,7 +84,7 @@ void failure(std::string message)
 {
     trace::mark("update: " + message);
     std::lock_guard<std::mutex> lock(mutex);
-    state.phase = Phase::error;
+    state.phase = state.phase == Phase::installing ? Phase::ready : Phase::error;
     state.message = std::move(message);
 }
 void run_update(std::function<void()> job) noexcept
@@ -339,8 +339,9 @@ void install() noexcept
             unlink((folder + "/result").c_str());
             if (!http::send_bytes("127.0.0.1", 9021, payload))
             {
-                failure("The payload loader (elfldr, port 9021) did not answer. Start it and try "
-                        "again.");
+                failure(
+                    "ELF Loader (elfldr) is not running on port 9021. Start ELF Loader from your "
+                    "jailbreak tools, then retry Install. The verified download is saved.");
                 return;
             }
             for (unsigned i = 0; i < 150; ++i)

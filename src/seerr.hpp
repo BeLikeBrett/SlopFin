@@ -34,8 +34,11 @@ struct Title
     std::string jellyfin_id;
     std::string poster_path; /* TMDB path, empty when there is none */
     int year = 0;
+    std::string release_date;
+    double popularity = 0;
     double rating = 0.0; /* TMDB audience score out of 10 */
     Availability availability = Availability::unknown;
+    Availability availability4k = Availability::unknown;
     bool requested = false;
 };
 
@@ -49,6 +52,7 @@ struct Request
     std::string jellyfin_id;
     std::string poster_path;
     std::string requested_by;
+    int requested_by_id = 0;
     Availability availability = Availability::unknown;
     bool is4k = false;
     std::string profile_name;

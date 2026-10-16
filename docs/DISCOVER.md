@@ -28,17 +28,20 @@ Jellyfin sign-in.
 | Triangle | Search using the PlayStation keyboard |
 | D-pad | Browse titles |
 | Cross | Open a title, then choose its action |
-| Square or L1/R1 | Switch Browse / My requests; Square is shown beside the destination tab |
-| R3 | Open media and status filters |
+| Square | Switch Browse / My requests; shown beside the destination tab |
+| L1 / R1 | Previous / next catalog page |
 | Circle | Close the title or return to the sidebar |
 
 Availability badges come from the request server. Processing can include
 waiting for a download; it does not mean bytes are currently arriving.
-Filters select Movies, Series or both. Browse also filters by availability;
-My requests filters by downloading, processing, available, awaiting approval or
-declined. Choose values with Left/Right and apply them. Circle cancels without
-changing the current filters. Filters act on the loaded results (the first
-search/trending page or the latest 60 requests).
+Choose Movies & series, Movies or Series beside the search field. The adjacent
+sort control cycles Trending, Popular, Top rated, Newest and Upcoming. Changes
+apply immediately. These catalogs use the server's discovery endpoints and
+support page navigation with L1/R1; search uses the server's relevance order.
+Choosing a catalog control clears the search. Top rated requires at least 200
+votes; Newest excludes future dates and requires 10 votes to reduce empty entries.
+When browsing both types, SlopFin combines the same page of each catalog.
+My requests has no filters.
 
 ## Seasons and quality
 
@@ -54,8 +57,10 @@ Open a title to review its request options before sending anything:
   an ordinary service; profile names come from your server.
 - **Seasons:** Up/Down moves through the list; Cross toggles an individual
   missing season. Available and pending seasons are labelled and cannot be
-  selected again. Specials can be selected separately. Square selects missing
-  regular seasons or clears the selection. If the server disables partial
+  selected again. **Triangle** or Right opens the focused season’s episode guide,
+  including available and pending seasons. Episode entries are read-only;
+  requests are made by season. Specials can be selected separately. Square
+  selects missing regular seasons or clears the selection. If the server disables partial
   requests, SlopFin follows its all-missing-seasons policy.
 
 **Options** focuses the request button. Review the selected profile and season
@@ -68,15 +73,22 @@ contain that item and allow your account to access it.
 
 ## Follow downloads
 
-My requests shows the signed-in request account's latest 60 requests, newest
-first. Up/Down selects a request; R3 opens filters. Triangle refreshes immediately.
+My requests loads the signed-in account's requests, newest first (up to 2,000
+entries). Up/Down selects a request; Triangle refreshes immediately.
 Season counts, 4K and quality-profile names appear when supplied by the server.
 
-The list refreshes about every five seconds without moving your selection.
+The list refreshes about every five seconds during downloads, or every 30 seconds
+otherwise, without moving your selection.
 Active download entries show progress, remaining bytes, a measured speed and
 the server's ETA when available. Speed appears after a second sample. Names
 and artwork fill in as detail lookups finish. Progress depends on the request
 server's Sonarr/Radarr and downloader integration.
+
+Open a request and choose **Cancel request** to review removal. Seerr allows
+ordinary users to remove their own pending requests; administrators and request
+managers can remove other request states. The confirmation explains that library
+files stay and downloads already sent to Sonarr/Radarr may continue. The server
+makes the final permission decision.
 
 The address, API key or session is saved in the console's protected
 `/data/slopfin/config.json`. Passwords are used only for sign-in and are not
