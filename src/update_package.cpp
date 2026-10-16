@@ -15,6 +15,24 @@ namespace slopfin::update
 {
 std::uint64_t version_number(std::string_view t) noexcept
 {
+    if (t.size() >= 4 && t.size() <= 9 && t[0] >= '1' && t[0] <= '9')
+    {
+        const auto dot = t.find('.');
+        if ((dot == 1 || dot == 2) && t.size() - dot - 1 >= 2 && t.size() - dot - 1 <= 6)
+        {
+            unsigned major = 0, release = 0;
+            for (std::size_t i = 0; i < t.size(); ++i)
+            {
+                if (i == dot)
+                    continue;
+                if (t[i] < '0' || t[i] > '9')
+                    return 0;
+                auto &part = i < dot ? major : release;
+                part = part * 10 + static_cast<unsigned>(t[i] - '0');
+            }
+            return major * 1000000ULL + release;
+        }
+    }
     if (t.size() != 10 || t[2] != '.' || t[6] != '.')
         return 0;
     std::uint64_t n = 0;
@@ -27,6 +45,14 @@ std::uint64_t version_number(std::string_view t) noexcept
         n = n * 10 + static_cast<unsigned>(t[i] - '0');
     }
     return n;
+}
+std::string display_version(std::string_view text) noexcept
+{
+    if (!version_number(text))
+        return std::string(text);
+    const auto number = version_number(text);
+    const std::string release = std::to_string(number % 1000000);
+    return std::to_string(number / 1000000) + "." + (release.size() < 2 ? "0" : "") + release;
 }
 bool trusted_download(std::string_view url) noexcept
 {
@@ -112,7 +138,12 @@ Release select_release(std::string_view feed, std::string_view current) noexcept
             if (!std::all_of(digest.begin() + 7, digest.end(), [](char c)
                              { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
                 continue;
-            best = {std::string(tag),
+            char platform[11];
+            std::snprintf(platform, sizeof(platform), "%02u.%03u.%03u",
+                          static_cast<unsigned>(candidate / 1000000),
+                          static_cast<unsigned>(candidate / 1000 % 1000),
+                          static_cast<unsigned>(candidate % 1000));
+            best = {platform,
                     expected,
                     std::string(digest.substr(7)),
                     static_cast<std::size_t>(size),
@@ -165,7 +196,7 @@ bool write_file(const std::string &path, const void *data, std::size_t size)
 {
     if (sf_update_dirs(path.c_str()) < 0)
         return false;
-    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (fd < 0)
         return false;
     const auto *bytes = static_cast<const unsigned char *>(data);
@@ -177,7 +208,8 @@ bool write_file(const std::string &path, const void *data, std::size_t size)
             break;
         have += static_cast<std::size_t>(n);
     }
-    const bool ok = have == size && fsync(fd) == 0;
+    // The installer runs under a different UID; staged assets contain no account data.
+    const bool ok = have == size && fchmod(fd, 0644) == 0 && fsync(fd) == 0;
     const int closed = close(fd);
     return ok && closed == 0;
 }

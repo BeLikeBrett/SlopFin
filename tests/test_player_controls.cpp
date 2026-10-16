@@ -58,6 +58,17 @@ int main()
     press(pad::Button::cross, handle_settings_input);
     assert(g_view.settings_page == 8);
     press(pad::Button::circle, handle_settings_input);
+    g_view.settings_index = 0;
+    for (int frame = 0; frame < 120; ++frame)
+        scroll_settings_menu(1.0f, 1.0f / 60.0f);
+    assert(g_view.settings_index == 8);
+    scroll_settings_menu(0, 1.0f / 60.0f);
+    scroll_settings_menu(-1, 1.0f / 60.0f);
+    assert(g_view.settings_index == 7);
+    for (int frame = 0; frame < 120; ++frame)
+        scroll_settings_menu(-1.0f, 1.0f / 60.0f);
+    assert(g_view.settings_index == 0);
+    scroll_settings_menu(0, 1.0f / 60.0f);
     g_view.settings_index = 8;
     gfx::clear(gfx::palette::background);
     draw_settings("Fixture");

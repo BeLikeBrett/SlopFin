@@ -11,7 +11,7 @@ does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem. Localhost-only loaders work; port 9021
 does not need to be accessible from another device.
 
-Build **01.000.007** fixes GitHub downloads. Versions **01.000.006 and earlier**
+Build **1.08** fixes GitHub downloads and installer file permissions. Versions **1.07 and earlier**
 need a one-time manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.
@@ -21,7 +21,9 @@ Future published folder releases can be installed from inside the app.
 
 The source is [BeLikeBrett/SlopFin releases](https://github.com/BeLikeBrett/SlopFin/releases).
 The checker includes public preview releases and displays their Preview label.
-It accepts a higher version in the PS5 `NN.NNN.NNN` format, the matching folder
+Versions are displayed as **1.08**. Internally the PS5 requires `01.000.008`;
+new GitHub tags and downloads use the short label. The checker accepts both tag
+styles, compares the full version and requires the matching folder
 ZIP name, and GitHub's SHA-256 asset digest. Builds without a valid version or
 releases missing a digest are not update candidates.
 

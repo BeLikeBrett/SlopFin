@@ -845,6 +845,20 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
     std::lock_guard<std::mutex> guard(g_mutex);
     if (!current(connection) || token != g_model.options_wanted)
         return;
+    if (options.error.empty())
+    {
+        for (auto &result : g_model.results)
+            if (result.tmdb_id == title.tmdb_id && result.media_type == title.media_type)
+            {
+                result.availability = availability_of(options.status);
+                result.availability4k = availability_of(options.status4k);
+                result.jellyfin_id = options.jellyfin_id;
+                result.requested = result.availability != Availability::unknown ||
+                                   result.availability4k != Availability::unknown;
+                remember(result);
+                ++g_model.search_epoch;
+            }
+    }
     g_model.options = std::move(options);
     ++g_model.options_epoch;
 }
@@ -948,7 +962,9 @@ void job_requests(Connection connection) noexcept
                     {
                         auto &availability =
                             request.is4k ? title.availability4k : title.availability;
-                        availability = request.availability;
+                        if (availability != Availability::available ||
+                            request.availability == Availability::available)
+                            availability = request.availability;
                         title.requested =
                             title.requested || request.approval == 1 || request.approval == 2;
                         if (!request.is4k && !request.jellyfin_id.empty())
@@ -1570,6 +1586,7 @@ void load_options(bool is4k = false) noexcept
     g_view.server_index = g_view.profile_index = -1;
     g_view.sheet_row = g_view.season_scroll = 0;
     g_view.sheet_error.clear();
+    g_view.toast.clear();
     unsigned long token;
     bool partial;
     {
@@ -2031,6 +2048,7 @@ void draw_header() noexcept
     const char *names[] = {"Browse", "My requests"};
     constexpr int w = 250, h = 60;
     const int x = ui::kContentRight - 520, y = kHeaderY - 4;
+    icons::draw(icons::Icon::ps_square, x - 42, y + 18, 24, icons::button::square);
     for (int i = 0; i < 2; ++i)
     {
         const int bx = x + i * 270;
@@ -2038,9 +2056,7 @@ void draw_header() noexcept
             ui::focus_pill(bx, y, w, h, ui::FocusGroup::discover_tabs);
         else
             gfx::rounded_rect(bx, y, w, h, 14, gfx::palette::control);
-        if (g_view.mode != i)
-            icons::draw(icons::Icon::ps_square, bx + 16, y + 18, 24, icons::button::square);
-        const int inset = g_view.mode == i ? 16 : 50;
+        constexpr int inset = 16;
         ui::control_label(bx + inset, y, w - inset - 12, h, names[i], 24, Weight::medium,
                           g_view.mode == i ? gfx::palette::text : gfx::palette::text_dim);
     }
@@ -2081,11 +2097,25 @@ void draw_field() noexcept
     text::draw(ui::kContentX, kFieldY + 86, summary, 20, Weight::regular, gfx::palette::text_dim);
     if (g_view.mode == 0)
     {
-        const std::string page = "L1   Page " + std::to_string(g_view.page) + " / " +
-                                 std::to_string(g_view.pages) + "   R1";
-        text::draw(ui::kContentRight - text::measure(page, 20, Weight::medium), kFieldY + 86,
-                   g_view.search_loading ? "Loading…" : page, 20, Weight::medium,
+        constexpr int width = 560, height = 42;
+        const int x = ui::kContentRight - width, y = kFieldY + 75;
+        const bool previous = g_view.page > 1 && !g_view.search_loading;
+        const bool next = g_view.page < g_view.pages && !g_view.search_loading;
+        gfx::rounded_rect(x, y, width, height, 12, gfx::palette::control);
+        const auto left_colour = previous ? gfx::palette::text : gfx::palette::text_faint;
+        const auto right_colour = next ? gfx::palette::text : gfx::palette::text_faint;
+        text::draw(x + 14, text::centered_y(y, height, "L1", 18, Weight::bold), "L1", 18,
+                   Weight::bold, left_colour);
+        ui::control_label(x + 50, y, 120, height, "Previous", 20, Weight::medium, left_colour);
+        const std::string page = g_view.search_loading ? "Loading…"
+                                                       : std::to_string(g_view.page) + " / " +
+                                                             std::to_string(g_view.pages);
+        text::draw(x + (width - text::measure(page, 20, Weight::medium)) / 2,
+                   text::centered_y(y, height, page, 20, Weight::medium), page, 20, Weight::medium,
                    gfx::palette::text_dim);
+        ui::control_label(x + width - 118, y, 64, height, "Next", 20, Weight::medium, right_colour);
+        text::draw(x + width - 40, text::centered_y(y, height, "R1", 18, Weight::bold), "R1", 18,
+                   Weight::bold, right_colour);
     }
 }
 
@@ -2393,8 +2423,6 @@ void draw_sheet() noexcept
         text::draw_ellipsized(x + 40, y + 752, 264, config::current().seerr_user, 24,
                               Weight::medium, gfx::palette::text);
     }
-    text::draw(tx, y + 260, "REQUEST OPTIONS", 19, Weight::bold, gfx::palette::text_faint);
-    ui::draw_button_hints(tx + 520, y + 260, {{icons::Icon::r2, "Review request", "OPTIONS"}});
     const auto rows = sheet_rows();
     const int count = static_cast<int>(rows.size());
     g_view.sheet_row = std::clamp(g_view.sheet_row, 0, count);
@@ -2499,7 +2527,7 @@ void draw_sheet() noexcept
         : !g_view.options.profile_error.empty() ? g_view.options.profile_error
         : title.media_type == "tv"
             ? "Cross selects seasons. Triangle opens episodes. Square selects missing seasons."
-            : "Left / Right changes the quality profile before requesting.";
+            : "";
     text::draw_wrapped(tx, y + 690, tw, 2, 27, note, 20, Weight::regular,
                        !g_view.sheet_error.empty() || !g_view.options.error.empty()
                            ? gfx::palette::danger
@@ -2677,7 +2705,7 @@ bool handle_input() noexcept
 void draw() noexcept
 {
     ++g_view.frames;
-    if (g_view.mode == 1 && std::chrono::steady_clock::now() >= g_view.refresh_at)
+    if (std::chrono::steady_clock::now() >= g_view.refresh_at)
     {
         refresh_requests();
     }

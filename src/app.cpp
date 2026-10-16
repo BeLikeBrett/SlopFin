@@ -13,6 +13,7 @@
 #include "bigalloc.hpp"
 #include "account.hpp"
 #include "update.hpp"
+#include "update_package.hpp"
 #include "audiocaps.hpp"
 #include "autoplay.hpp"
 #include "bitstream_probe.hpp"
@@ -317,6 +318,8 @@ struct View
     int setup_index = 0; /* server_setup and sign_in menus */
     int settings_index = 0;
     int settings_page = 0;
+    float settings_stick_steps = 0.0f;
+    int settings_stick_direction = 0;
     int account_row = 0; /* the row focused on the Account screen */
     /* Where Circle goes from the Profile and Dashboard screens. */
     Screen return_screen = Screen::home;
@@ -5355,14 +5358,15 @@ void draw_settings(const std::string &server_name) noexcept
     {
         const auto info = update::status();
         text::draw(kContentX, kSafeY + 96, "Updates", 38, Weight::bold, gfx::palette::text);
-        text::draw(kContentX, kGridTop, "Installed  " + info.current, 30, Weight::medium,
-                   gfx::palette::text);
+        text::draw(kContentX, kGridTop, "Installed  " + update::display_version(info.current), 30,
+                   Weight::medium, gfx::palette::text);
         text::draw(kContentX, kGridTop + 48, "BeLikeBrett / SlopFin on GitHub", 22, Weight::regular,
                    gfx::palette::text_dim);
         if (!info.version.empty())
             text::draw(kContentX, kGridTop + 108,
-                       "Available  " + info.version + (info.preview ? "   Preview" : ""), 26,
-                       Weight::medium, gfx::palette::text);
+                       "Available  " + update::display_version(info.version) +
+                           (info.preview ? "   Preview" : ""),
+                       26, Weight::medium, gfx::palette::text);
         const bool has_notes = !info.notes.empty();
         const bool busy = info.phase == update::Phase::checking ||
                           info.phase == update::Phase::downloading ||
@@ -5518,8 +5522,9 @@ void draw_settings(const std::string &server_name) noexcept
                        gfx::palette::text_dim);
         }
         text::draw(kContentX, kGridTop + 7 * 84 + 40,
-                   "SlopFin " + update::status().current + "   unofficial Jellyfin client", 20,
-                   Weight::regular, gfx::palette::text_faint);
+                   "SlopFin " + update::display_version(update::status().current) +
+                       "   unofficial Jellyfin client",
+                   20, Weight::regular, gfx::palette::text_faint);
         return;
     }
     }
@@ -7518,6 +7523,27 @@ void apply_account_choice(account::Choice choice, Screen from) noexcept
     }
 }
 
+void scroll_settings_menu(float axis, float seconds) noexcept
+{
+    const int direction = axis > 0 ? 1 : axis < 0 ? -1 : 0;
+    if (!direction)
+    {
+        g_view.settings_stick_steps = 0;
+        g_view.settings_stick_direction = 0;
+        return;
+    }
+    if (direction != g_view.settings_stick_direction)
+    {
+        g_view.settings_stick_steps = static_cast<float>(direction);
+        g_view.settings_stick_direction = direction;
+    }
+    else
+        g_view.settings_stick_steps += axis * 7.0f * seconds;
+    const int step = static_cast<int>(g_view.settings_stick_steps);
+    g_view.settings_stick_steps -= step;
+    g_view.settings_index = std::clamp(g_view.settings_index + step, 0, kSettingsMenuCount - 1);
+}
+
 void handle_settings_input() noexcept
 {
     if (g_view.settings_page == 9 && pad::pressed(pad::Button::circle))
@@ -7666,6 +7692,7 @@ void handle_settings_input() noexcept
     default:
         break;
     }
+    scroll_settings_menu(pad::scroll_axis(), frame_seconds());
     if (pad::pressed(pad::Button::down) && g_view.settings_index < kSettingsMenuCount - 1)
         ++g_view.settings_index;
     else if (pad::pressed(pad::Button::up) && g_view.settings_index > 0)

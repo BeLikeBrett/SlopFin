@@ -96,7 +96,7 @@ void run_update(std::function<void()> job) noexcept
 {
     if (sf_update_dirs(path.c_str()) < 0)
         return false;
-    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (fd < 0)
         return false;
     std::size_t have = 0;
@@ -107,7 +107,7 @@ void run_update(std::function<void()> job) noexcept
             break;
         have += static_cast<std::size_t>(n);
     }
-    const bool ok = have == text.size() && fsync(fd) == 0;
+    const bool ok = have == text.size() && fchmod(fd, 0644) == 0 && fsync(fd) == 0;
     const int closed = close(fd);
     return ok && closed == 0;
 }
