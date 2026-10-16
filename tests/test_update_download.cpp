@@ -69,7 +69,7 @@ int main()
     short_writes = interrupt_write = true;
     auto r = run(bytes.size());
     assert(r.failure == DownloadFailure::none && r.received == bytes.size());
-    struct stat st{};
+    struct stat st = {};
     assert(stat(path.c_str(), &st) == 0 && st.st_size == static_cast<long>(bytes.size()));
     assert((st.st_mode & 0777) == 0600);
     short_writes = false;
