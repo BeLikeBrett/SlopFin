@@ -425,5 +425,14 @@ int main()
     assert(sheet_action() == "Open in Jellyfin" && sheet_action_enabled());
     sheet_input();
     assert(g_open_item == std::string(32, 'a') && calls == before_calls);
+    g_view.sheet_from_requests = true;
+    g_view.sheet_request_id = active.id;
+    g_view.requests[0].approval = 4;
+    assert(profile_label() == "HD HEVC");
+    g_view.sheet.jellyfin_id = std::string(32, 'b');
+    g_view.options.jellyfin_id.clear();
+    assert(effective_title().jellyfin_id == std::string(32, 'b'));
+    g_view.is4k = true;
+    assert(effective_title().jellyfin_id.empty());
     pressed_button = pad::Button::count;
 }
