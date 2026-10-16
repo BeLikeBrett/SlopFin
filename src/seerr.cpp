@@ -23,6 +23,7 @@
 #include "ui_common.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -57,13 +58,31 @@ struct Connection
 };
 Connection g_connection;
 
+struct Episode
+{
+    int number = 0;
+    std::string name;
+    std::string overview;
+    std::string date;
+};
+struct EpisodeList
+{
+    std::vector<Episode> items;
+    bool loading = false;
+    std::string error;
+    unsigned long token = 0;
+};
 struct Model
 {
+    EpisodeList episodes;
+    unsigned long episodes_wanted = 0;
     std::vector<Title> results;
     long search_epoch = 0;  /* bumped whenever the results change */
     long search_wanted = 0; /* the newest query asked for */
     bool search_loading = false;
     std::string search_error;
+    int page = 1;
+    int pages = 1;
 
     std::vector<Request> requests;
     long requests_epoch = 0;
@@ -98,9 +117,16 @@ struct Model
        Only the background thread touches this, always under the lock. */
     std::unordered_map<std::string, Title> known_titles;
     std::unordered_set<std::string> detail_pending;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> detail_retry;
 };
 
 Model g_model;
+
+bool detail_ready(const std::string &key, std::chrono::steady_clock::time_point now) noexcept
+{
+    const auto it = g_model.detail_retry.find(key);
+    return it == g_model.detail_retry.end() || it->second <= now;
+}
 
 /* Download rates are estimated from one refresh to the next; worker only. */
 struct RateSample
@@ -123,15 +149,15 @@ struct View
     int grid_scroll = 0;
     int request_index = 0;
     int request_scroll = 0;
-    int filter = 0;
     int media_filter = 0;
-    int availability_filter = 0;
-    bool filter_focused = false;
-    bool filters_open = false;
-    int filter_row = 0;
-    int draft_media = 0;
-    int draft_status = 0;
-    motion::Spring tab_position;
+    int toolbar = 0;
+    int sort = 0;
+    bool cancel_confirm = false;
+    bool episodes_open = false;
+    int episode_season = 0;
+    int episode_index = 0;
+    EpisodeList episodes;
+    int user_id = 0;
     std::uint32_t permissions = 0;
     request::Options options;
     unsigned long options_seen = 0;
@@ -165,6 +191,8 @@ struct View
     std::vector<Request> requests;
     bool search_loading = false;
     std::string search_error;
+    int page = 1;
+    int pages = 1;
     bool requests_loading = false;
     std::string requests_error;
     std::string server_title;
@@ -312,6 +340,7 @@ void sync_connection() noexcept
     g_model.requests.clear();
     g_model.known_titles.clear();
     g_model.detail_pending.clear();
+    g_model.detail_retry.clear();
     ++g_model.search_wanted;
     ++g_model.search_epoch;
     ++g_model.requests_epoch;
@@ -323,6 +352,7 @@ void sync_connection() noexcept
     g_model.options = {};
     ++g_model.options_wanted;
     ++g_model.options_epoch;
+    ++g_model.episodes_wanted;
     g_model.pending_cookie.clear();
     g_model.pending_user.clear();
     g_model.search_error.clear();
@@ -470,11 +500,15 @@ Title read_title(const json::Value &node) noexcept
     if (date.empty())
         date = std::string{node.str("firstAirDate")};
     title.year = year_of(date);
+    title.release_date = date;
+    title.popularity = node.num("popularity", 0);
     if (const json::Value *info = node.find("mediaInfo"); info != nullptr)
     {
         const int status = static_cast<int>(info->num("status", 0));
         title.availability = availability_of(status);
-        title.requested = status >= 2 && status <= 5;
+        const int status4k = static_cast<int>(info->num("status4k", 0));
+        title.availability4k = availability_of(status4k);
+        title.requested = (status >= 2 && status <= 5) || (status4k >= 2 && status4k <= 5);
         title.jellyfin_id = jellyfin_id(*info);
     }
     return title;
@@ -491,7 +525,10 @@ Request read_request(const json::Value &node) noexcept
             if (const auto *season = seasons->at(i); season && season->num("seasonNumber", -1) >= 0)
                 request.seasons.push_back(static_cast<int>(season->num("seasonNumber")));
     if (const json::Value *by = node.find("requestedBy"); by != nullptr)
+    {
         request.requested_by = std::string{by->str("displayName")};
+        request.requested_by_id = static_cast<int>(by->num("id", 0));
+    }
     const json::Value *media = node.find("media");
     if (media != nullptr)
     {
@@ -595,41 +632,95 @@ void job_refresh_server(Connection connection) noexcept
     g_model.connection_error = error;
 }
 
-void job_search(Connection connection, std::string term, long generation) noexcept
+std::string catalog_path(const std::string &term, int media, int sort, int page) noexcept
+{
+    const std::string paging = "page=" + std::to_string(page);
+    if (!term.empty())
+        return "/api/v1/search?query=" + http::url_encode(term) + "&" + paging;
+    if (sort == 0)
+        return "/api/v1/discover/trending?" + paging +
+               (media == 0   ? ""
+                : media == 1 ? "&mediaType=movie"
+                             : "&mediaType=tv");
+    const std::string type = media == 2 ? "tv" : "movies";
+    if (sort == 4)
+        return "/api/v1/discover/" + type + "/upcoming?" + paging;
+    std::string order = sort == 2 ? "vote_average.desc" : "popularity.desc";
+    std::string extra;
+    if (sort == 2)
+        extra = "&voteCountGte=200";
+    if (sort == 3)
+    {
+        order = media == 2 ? "first_air_date.desc" : "primary_release_date.desc";
+        const auto today = std::chrono::year_month_day{
+            std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now())};
+        char date[16];
+        std::snprintf(date, sizeof(date), "%04d-%02u-%02u", static_cast<int>(today.year()),
+                      static_cast<unsigned>(today.month()), static_cast<unsigned>(today.day()));
+        extra = std::string(media == 2 ? "&firstAirDateLte=" : "&primaryReleaseDateLte=") + date +
+                "&voteCountGte=10";
+    }
+    return "/api/v1/discover/" + type + "?" + paging + "&sortBy=" + order + extra;
+}
+void job_search(Connection connection, std::string term, long generation, int media = 0,
+                int sort = 0, int page = 1) noexcept
 {
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         if (!current(connection) || generation != g_model.search_wanted)
             return;
     }
-    const auto path = term.empty() ? "/api/v1/discover/trending?page=1"
-                                   : "/api/v1/search?query=" + http::url_encode(term) + "&page=1";
-    const auto response = connection.host.empty() ? http::Response{} : api_get(connection, path);
     std::vector<Title> results;
     std::string error;
-    if (connection.host.empty())
-        error = "Set up your request server in Settings > Requests.";
-    else if (!response.ok())
-        error = response_error(response, "Search failed");
-    else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
+    int pages = 1;
+    const int feeds = term.empty() && media == 0 && sort != 0 ? 2 : 1;
+    for (int feed = 0; feed < feeds; ++feed)
     {
-        const auto *list = doc->find("results");
-        for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 100); ++i)
-            if (const auto *node = list->at(i))
-            {
-                const auto type = node->str("mediaType");
-                if (type == "movie" || type == "tv")
-                    results.push_back(read_title(*node));
-            }
+        const int type = feeds == 2 ? feed + 1 : media;
+        const auto response = connection.host.empty()
+                                  ? http::Response{}
+                                  : api_get(connection, catalog_path(term, type, sort, page));
+        if (connection.host.empty())
+            error = "Set up your request server in Settings > Requests.";
+        else if (!response.ok())
+            error = response_error(response, "Catalog could not be loaded");
+        else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
+        {
+            pages = std::max(pages, static_cast<int>(doc->num("totalPages", 1)));
+            const auto *list = doc->find("results");
+            for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 100); ++i)
+                if (const auto *node = list->at(i))
+                {
+                    auto title = read_title(*node);
+                    if (node->str("mediaType").empty())
+                        title.media_type = type == 2 ? "tv" : "movie";
+                    if (title.media_type == "movie" || title.media_type == "tv")
+                        results.push_back(std::move(title));
+                }
+        }
+        else
+            error = "The request server returned an invalid catalog.";
     }
-    else
-        error = "The request server returned an invalid search result.";
+    if (feeds == 2)
+        std::stable_sort(results.begin(), results.end(),
+                         [sort](const Title &a, const Title &b)
+                         {
+                             if (sort == 2)
+                                 return a.rating > b.rating;
+                             if (sort == 3)
+                                 return a.release_date > b.release_date;
+                             if (sort == 4)
+                                 return a.release_date < b.release_date;
+                             return a.popularity > b.popularity;
+                         });
     std::lock_guard<std::mutex> guard(g_mutex);
     if (!current(connection) || generation != g_model.search_wanted)
         return;
     for (const auto &title : results)
         remember(title);
     g_model.results = std::move(results);
+    g_model.page = page;
+    g_model.pages = std::clamp(pages, 1, 500);
     g_model.search_loading = false;
     g_model.search_error = error;
     ++g_model.search_epoch;
@@ -649,7 +740,14 @@ void job_detail(Connection connection, const std::string &type, int id) noexcept
         return;
     g_model.detail_pending.erase(key_for(type, id));
     if (!response.ok() || !doc)
+    {
+        if (g_model.detail_retry.size() >= 256)
+            g_model.detail_retry.clear();
+        g_model.detail_retry[key_for(type, id)] =
+            std::chrono::steady_clock::now() + std::chrono::seconds(60);
         return;
+    }
+    g_model.detail_retry.erase(key_for(type, id));
     Title title = read_title(*doc);
     title.media_type = type;
     title.tmdb_id = id;
@@ -768,25 +866,38 @@ void job_requests(Connection connection) noexcept
             return;
         user_id = g_model.user_id;
     }
-    const auto response =
-        user_id > 0 ? api_get(connection, "/api/v1/request?take=60&skip=0&sort=added&requestedBy=" +
-                                              std::to_string(user_id))
-                    : http::Response{};
     std::vector<Request> requests;
     std::string error;
+    int status = 0;
     if (user_id <= 0)
         error = "Connect your account in Settings > Requests to see your requests.";
-    else if (!response.ok())
-        error = response_error(response, "Requests could not be loaded");
-    else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
+    for (int skip = 0; user_id > 0 && skip < 2000; skip += 100)
     {
-        const auto *list = doc->find("results");
-        for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 60); ++i)
+        const auto response =
+            api_get(connection, "/api/v1/request?take=100&skip=" + std::to_string(skip) +
+                                    "&sort=added&requestedBy=" + std::to_string(user_id));
+        status = response.status;
+        if (!response.ok())
+        {
+            error = response_error(response, "Requests could not be loaded");
+            break;
+        }
+        const auto doc = json::parse(response.body);
+        const auto *list = doc ? doc->find("results") : nullptr;
+        if (!list)
+        {
+            error = "The request server returned an invalid requests list.";
+            break;
+        }
+        for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 100); ++i)
             if (const auto *node = list->at(i))
                 requests.push_back(read_request(*node));
+        if (list->size() < 100)
+            break;
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (!current(connection))
+            return;
     }
-    else
-        error = "The request server returned an invalid requests list.";
 
     const auto now = std::chrono::steady_clock::now();
     static unsigned long rate_generation = 0;
@@ -824,7 +935,7 @@ void job_requests(Connection connection) noexcept
                 request.name = found->second.name;
                 request.poster_path = found->second.poster_path;
             }
-            else if (wanted.size() < 4 && request.tmdb_id > 0 &&
+            else if (wanted.size() < 4 && request.tmdb_id > 0 && detail_ready(key, now) &&
                      (request.media_type == "movie" || request.media_type == "tv") &&
                      g_model.detail_pending.insert(key).second)
                 wanted.emplace_back(request.media_type, request.tmdb_id);
@@ -835,14 +946,18 @@ void job_requests(Connection connection) noexcept
                 for (const auto &request : requests)
                     if (title.tmdb_id == request.tmdb_id && title.media_type == request.media_type)
                     {
-                        title.availability = request.availability;
-                        if (!request.jellyfin_id.empty())
+                        auto &availability =
+                            request.is4k ? title.availability4k : title.availability;
+                        availability = request.availability;
+                        title.requested =
+                            title.requested || request.approval == 1 || request.approval == 2;
+                        if (!request.is4k && !request.jellyfin_id.empty())
                             title.jellyfin_id = request.jellyfin_id;
                     }
             ++g_model.search_epoch;
             g_model.requests = std::move(requests);
         }
-        if (response.status == 401 || response.status == 403)
+        if (status == 401 || status == 403)
         {
             g_model.authenticated = false;
             g_model.user_id = 0;
@@ -856,7 +971,7 @@ void job_requests(Connection connection) noexcept
                         background::Lane::requests);
 }
 
-void job_request(Connection connection, Title title, std::string body) noexcept
+void job_request(Connection connection, Title title, std::string body, bool is4k) noexcept
 {
     {
         std::lock_guard<std::mutex> guard(g_mutex);
@@ -881,8 +996,9 @@ void job_request(Connection connection, Title title, std::string body) noexcept
                 if (result.tmdb_id == title.tmdb_id && result.media_type == title.media_type)
                 {
                     result.requested = true;
-                    if (result.availability == Availability::unknown)
-                        result.availability = Availability::pending;
+                    auto &availability = is4k ? result.availability4k : result.availability;
+                    if (availability == Availability::unknown)
+                        availability = Availability::pending;
                 }
             ++g_model.search_epoch;
         }
@@ -950,7 +1066,10 @@ void refresh_server() noexcept
 void refresh_requests() noexcept
 {
     const auto connection = connection_snapshot();
-    g_view.refresh_at = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const bool downloading = std::any_of(g_view.requests.begin(), g_view.requests.end(),
+                                         [](const Request &item) { return item.downloading; });
+    g_view.refresh_at =
+        std::chrono::steady_clock::now() + std::chrono::seconds(downloading ? 5 : 30);
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         if (g_model.requests_loading || connection.host.empty())
@@ -965,7 +1084,7 @@ void refresh_requests() noexcept
     }
 }
 
-void start_search(const std::string &term) noexcept
+void start_search(const std::string &term, int page = 1) noexcept
 {
     const auto connection = connection_snapshot();
     long generation;
@@ -977,8 +1096,10 @@ void start_search(const std::string &term) noexcept
         g_model.results.clear();
         ++g_model.search_epoch;
     }
-    if (!background::run([connection, term, generation]
-                         { job_search(connection, term, generation); }, background::Lane::requests))
+    if (!background::run(
+            [connection, term, generation, media = g_view.media_filter, sort = g_view.sort, page]
+            { job_search(connection, term, generation, media, sort, page); },
+            background::Lane::requests))
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_model.search_loading = false;
@@ -1001,6 +1122,8 @@ void snapshot() noexcept
         {
             g_view.seen_search_epoch = g_model.search_epoch;
             g_view.results = g_model.results;
+            g_view.page = g_model.page;
+            g_view.pages = g_model.pages;
         }
         if (g_model.requests_epoch != g_view.seen_requests_epoch)
         {
@@ -1043,6 +1166,9 @@ void snapshot() noexcept
             g_view.settings_notice = g_model.notice;
         }
         g_view.permissions = g_model.permissions;
+        g_view.user_id = g_model.user_id;
+        if (g_view.episodes_open && g_view.episodes.token != g_model.episodes.token)
+            g_view.episodes = g_model.episodes;
         if (g_view.options_seen != g_model.options_epoch)
         {
             g_view.options_seen = g_model.options_epoch;
@@ -1093,13 +1219,7 @@ std::vector<int> visible_results() noexcept
         const auto &title = g_view.results[static_cast<std::size_t>(i)];
         if (!media_matches(title.media_type))
             continue;
-        const bool shown =
-            g_view.availability_filter == 0 ||
-            (g_view.availability_filter == 1 && title.availability == Availability::unknown) ||
-            (g_view.availability_filter == 2 && title.requested) ||
-            (g_view.availability_filter == 3 && title.availability == Availability::available);
-        if (shown)
-            out.push_back(i);
+        out.push_back(i);
     }
     return out;
 }
@@ -1111,18 +1231,7 @@ std::vector<int> visible_requests() noexcept
 {
     std::vector<int> out;
     for (int i = 0; i < static_cast<int>(g_view.requests.size()); ++i)
-    {
-        const auto &r = g_view.requests[static_cast<std::size_t>(i)];
-        if (!media_matches(r.media_type))
-            continue;
-        const bool shown = g_view.filter == 0 || (g_view.filter == 1 && r.downloading) ||
-                           (g_view.filter == 2 && r.availability == Availability::available) ||
-                           (g_view.filter == 3 && r.approval == 1) ||
-                           (g_view.filter == 4 && r.availability == Availability::processing) ||
-                           (g_view.filter == 5 && r.approval == 3);
-        if (shown)
-            out.push_back(i);
-    }
+        out.push_back(i);
     return out;
 }
 
@@ -1292,13 +1401,130 @@ void submit(const Title &title) noexcept
             return;
         g_model.submitting = true;
     }
-    if (!background::run([connection, title, body] { job_request(connection, title, body); },
+    if (!background::run([connection, title, body, is4k = g_view.is4k]
+                         { job_request(connection, title, body, is4k); },
                          background::Lane::requests))
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_model.submitting = false;
         g_model.notice = "The request worker could not start. Restart SlopFin.";
         ++g_model.notice_epoch;
+    }
+}
+
+bool can_cancel() noexcept
+{
+    if (!g_view.sheet_from_requests || g_view.submitting)
+        return false;
+    for (const auto &item : g_view.requests)
+        if (item.id == g_view.sheet_request_id)
+            return (g_view.permissions & (2u | 16u)) != 0 ||
+                   (item.requested_by_id == g_view.user_id && item.approval == 1);
+    return false;
+}
+void cancel_request() noexcept
+{
+    if (!can_cancel())
+        return;
+    const auto connection = connection_snapshot();
+    const int id = g_view.sheet_request_id;
+    long catalog_epoch;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (g_model.submitting)
+            return;
+        g_model.submitting = true;
+        catalog_epoch = ++g_model.search_wanted;
+    }
+    g_view.cancel_confirm = false;
+    g_view.sheet_open = false;
+    if (!background::run(
+            [connection, id, catalog_epoch, query = g_view.query, media = g_view.media_filter,
+             sort = g_view.sort, page = g_view.page]
+            {
+                {
+                    std::lock_guard<std::mutex> guard(g_mutex);
+                    if (!current(connection))
+                        return;
+                }
+                const auto response = http::send("DELETE", connection.host, connection.port,
+                                                 "/api/v1/request/" + std::to_string(id),
+                                                 auth_headers(connection), {}, "application/json");
+                {
+                    std::lock_guard<std::mutex> guard(g_mutex);
+                    if (!current(connection))
+                        return;
+                    g_model.submitting = false;
+                    g_model.notice = response.ok()
+                                         ? "Request removed"
+                                         : response_error(response, "Could not cancel request");
+                    ++g_model.notice_epoch;
+                }
+                if (response.ok())
+                {
+                    job_requests(connection);
+                    job_search(connection, query, catalog_epoch, media, sort, page);
+                }
+            },
+            background::Lane::requests))
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_model.submitting = false;
+        g_model.notice = "The request worker could not start. Try again.";
+        ++g_model.notice_epoch;
+    }
+}
+void open_episodes(int season) noexcept
+{
+    g_view.episodes_open = true;
+    g_view.episode_season = season;
+    g_view.episode_index = 0;
+    g_view.episodes = {};
+    g_view.episodes.loading = true;
+    const auto connection = connection_snapshot();
+    const int id = g_view.sheet.tmdb_id;
+    unsigned long token, wanted;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        wanted = ++g_model.episodes_wanted;
+        token = g_model.options_wanted;
+        g_model.episodes = {};
+        g_model.episodes.loading = true;
+        ++g_model.episodes.token;
+        g_view.episodes.token = g_model.episodes.token;
+    }
+    if (!background::run(
+            [connection, id, season, token, wanted]
+            {
+                if (!current_options(connection, token))
+                    return;
+                EpisodeList result;
+                const auto response = api_get(connection, "/api/v1/tv/" + std::to_string(id) +
+                                                              "/season/" + std::to_string(season));
+                const auto doc = json::parse(response.body);
+                const auto *items = doc ? doc->find("episodes") : nullptr;
+                if (!response.ok())
+                    result.error = response_error(response, "Episodes could not be loaded");
+                else if (!items)
+                    result.error = "The server returned an invalid season.";
+                else
+                    for (std::size_t i = 0; i < std::min<std::size_t>(items->size(), 500); ++i)
+                        if (const auto *item = items->at(i))
+                            result.items.push_back({static_cast<int>(item->num("episodeNumber", 0)),
+                                                    std::string(item->str("name")),
+                                                    std::string(item->str("overview")),
+                                                    std::string(item->str("airDate"))});
+                std::lock_guard<std::mutex> guard(g_mutex);
+                if (!current(connection) || g_model.options_wanted != token ||
+                    g_model.episodes_wanted != wanted)
+                    return;
+                result.token = g_model.episodes.token + 1;
+                g_model.episodes = std::move(result);
+            },
+            background::Lane::requests))
+    {
+        g_view.episodes.loading = false;
+        g_view.episodes.error = "The request worker could not start. Close and retry.";
     }
 }
 
@@ -1334,6 +1560,7 @@ void choose_default_server() noexcept
 void load_options(bool is4k = false) noexcept
 {
     const auto connection = connection_snapshot();
+    g_view.episodes_open = g_view.cancel_confirm = false;
     g_view.options = {};
     g_view.options_loading = true;
     g_view.is4k = is4k;
@@ -1374,7 +1601,8 @@ enum class SheetKind
     server,
     profile,
     all_seasons,
-    season
+    season,
+    cancel
 };
 struct SheetRow
 {
@@ -1384,6 +1612,8 @@ struct SheetRow
 std::vector<SheetRow> sheet_rows() noexcept
 {
     std::vector<SheetRow> rows;
+    if (can_cancel())
+        rows.push_back({SheetKind::cancel});
     if (!g_view.options.loaded || !g_view.options.error.empty())
         return rows;
     if (g_view.options.allow4k)
@@ -1411,6 +1641,9 @@ void change_sheet_row(const SheetRow &row, int step) noexcept
     g_view.sheet_error.clear();
     switch (row.kind)
     {
+    case SheetKind::cancel:
+        g_view.cancel_confirm = true;
+        break;
     case SheetKind::format:
         g_view.is4k = !g_view.is4k;
         choose_default_server();
@@ -1505,48 +1738,10 @@ void open_sheet_for_request(const Request &request) noexcept
     load_options(request.is4k);
 }
 
-void open_filters() noexcept
+void reload_catalog() noexcept
 {
-    g_view.filters_open = true;
-    g_view.filter_row = 0;
-    g_view.draft_media = g_view.media_filter;
-    g_view.draft_status = g_view.mode == 0 ? g_view.availability_filter : g_view.filter;
-}
-bool filters_input() noexcept
-{
-    if (pad::pressed(pad::Button::circle))
-    {
-        g_view.filters_open = false;
-        return true;
-    }
-    if (pad::pressed(pad::Button::up))
-        g_view.filter_row = std::max(0, g_view.filter_row - 1);
-    if (pad::pressed(pad::Button::down))
-        g_view.filter_row = std::min(3, g_view.filter_row + 1);
-    const bool confirm = pad::pressed(pad::Button::cross);
-    const int step = pad::pressed(pad::Button::left)                 ? -1
-                     : (pad::pressed(pad::Button::right) || confirm) ? 1
-                                                                     : 0;
-    if (step && g_view.filter_row == 0)
-        g_view.draft_media = (g_view.draft_media + step + 3) % 3;
-    if (step && g_view.filter_row == 1)
-    {
-        const int count = g_view.mode == 0 ? 4 : 6;
-        g_view.draft_status = (g_view.draft_status + step + count) % count;
-    }
-    if (confirm && g_view.filter_row == 2)
-        g_view.draft_media = g_view.draft_status = 0;
-    if ((confirm && g_view.filter_row == 3) || pad::pressed(pad::Button::r3))
-    {
-        g_view.media_filter = g_view.draft_media;
-        if (g_view.mode == 0)
-            g_view.availability_filter = g_view.draft_status;
-        else
-            g_view.filter = g_view.draft_status;
-        g_view.grid_index = g_view.grid_scroll = g_view.request_index = g_view.request_scroll = 0;
-        g_view.filters_open = false;
-    }
-    return true;
+    g_view.grid_index = g_view.grid_scroll = 0;
+    start_search(g_view.query);
 }
 
 bool search_input() noexcept
@@ -1559,19 +1754,26 @@ bool search_input() noexcept
     }
     if (g_view.field_focused)
     {
-        if (pad::pressed(pad::Button::cross))
+        if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::r3))
         {
-            if (g_view.filter_focused)
-                open_filters();
-            else
+            if (g_view.toolbar == 0)
                 open_keyboard(Field::query);
+            else
+            {
+                if (g_view.toolbar == 1)
+                    g_view.media_filter = (g_view.media_filter + 1) % 3;
+                else
+                    g_view.sort = (g_view.sort + 1) % 5;
+                g_view.query.clear();
+                reload_catalog();
+            }
         }
         else if (pad::pressed(pad::Button::right))
-            g_view.filter_focused = true;
+            g_view.toolbar = std::min(2, g_view.toolbar + 1);
         else if (pad::pressed(pad::Button::left))
         {
-            if (g_view.filter_focused)
-                g_view.filter_focused = false;
+            if (g_view.toolbar > 0)
+                --g_view.toolbar;
             else
                 return false;
         }
@@ -1598,7 +1800,7 @@ bool search_input() noexcept
         if (g_view.grid_index < columns)
         {
             g_view.field_focused = true;
-            g_view.filter_focused = false;
+            g_view.toolbar = 0;
         }
         else
             g_view.grid_index -= columns;
@@ -1621,25 +1823,11 @@ bool requests_input() noexcept
     if (g_view.field_focused)
     {
         if (pad::pressed(pad::Button::cross))
-        {
-            if (g_view.filter_focused)
-                open_filters();
-            else
-                refresh_requests();
-        }
-        else if (pad::pressed(pad::Button::right))
-            g_view.filter_focused = true;
-        else if (pad::pressed(pad::Button::left))
-        {
-            if (g_view.filter_focused)
-                g_view.filter_focused = false;
-            else
-                return false;
-        }
+            refresh_requests();
+        else if (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::circle))
+            return false;
         else if (pad::pressed(pad::Button::down) && count)
             g_view.field_focused = false;
-        else if (pad::pressed(pad::Button::circle))
-            return false;
         return true;
     }
     g_view.request_index = std::clamp(g_view.request_index, 0, std::max(0, count - 1));
@@ -1650,7 +1838,7 @@ bool requests_input() noexcept
         else
         {
             g_view.field_focused = true;
-            g_view.filter_focused = false;
+            g_view.toolbar = 0;
         }
     }
     else if (pad::pressed(pad::Button::down) && g_view.request_index + 1 < count)
@@ -1689,6 +1877,26 @@ std::string sheet_action() noexcept
 }
 bool sheet_input() noexcept
 {
+    if (g_view.episodes_open)
+    {
+        if (pad::pressed(pad::Button::circle))
+            g_view.episodes_open = false;
+        if (pad::pressed(pad::Button::up))
+            g_view.episode_index = std::max(0, g_view.episode_index - 1);
+        if (pad::pressed(pad::Button::down))
+            g_view.episode_index =
+                std::min(std::max(0, static_cast<int>(g_view.episodes.items.size()) - 1),
+                         g_view.episode_index + 1);
+        return true;
+    }
+    if (g_view.cancel_confirm)
+    {
+        if (pad::pressed(pad::Button::circle))
+            g_view.cancel_confirm = false;
+        else if (pad::pressed(pad::Button::cross))
+            cancel_request();
+        return true;
+    }
     if (pad::pressed(pad::Button::circle))
     {
         g_view.sheet_open = false;
@@ -1701,6 +1909,14 @@ bool sheet_input() noexcept
         g_view.sheet_row = std::max(0, g_view.sheet_row - 1);
     if (pad::pressed(pad::Button::down))
         g_view.sheet_row = std::min(action, g_view.sheet_row + 1);
+    if ((pad::pressed(pad::Button::triangle) || pad::pressed(pad::Button::right)) &&
+        g_view.sheet_row < action &&
+        rows[static_cast<std::size_t>(g_view.sheet_row)].kind == SheetKind::season)
+    {
+        const auto index = rows[static_cast<std::size_t>(g_view.sheet_row)].season;
+        open_episodes(g_view.options.seasons[static_cast<std::size_t>(index)].number);
+        return true;
+    }
     if (pad::pressed(pad::Button::options))
         g_view.sheet_row = action;
     if (pad::pressed(pad::Button::square) && g_view.sheet.media_type == "tv" &&
@@ -1745,14 +1961,21 @@ bool sheet_input() noexcept
 
 /* ----------------------------------------------------------------- drawing */
 
-std::string poster_url_for(const std::string &path, int height) noexcept
+const std::string &poster_url_for(const std::string &path, int height) noexcept
 {
-    const char *size = height <= 100   ? "w92"
-                       : height <= 200 ? "w154"
-                       : height <= 400 ? "w342"
-                       : height <= 600 ? "w500"
-                                       : "w780";
-    return std::string{"https://image.tmdb.org/t/p/"} + size + path;
+    constexpr const char *sizes[] = {"w92", "w154", "w342", "w500", "w780"};
+    const int bucket = height <= 100   ? 0
+                       : height <= 200 ? 1
+                       : height <= 400 ? 2
+                       : height <= 600 ? 3
+                                       : 4;
+    static std::unordered_map<std::string, std::array<std::string, 5>> cache;
+    if (cache.size() >= 512 && cache.find(path) == cache.end())
+        cache.clear();
+    auto &url = cache[path][static_cast<std::size_t>(bucket)];
+    if (url.empty())
+        url = std::string("https://image.tmdb.org/t/p/") + sizes[bucket] + path;
+    return url;
 }
 
 void draw_poster(const std::string &path, int x, int y, int w, int h, int radius,
@@ -1794,129 +2017,72 @@ void draw_status_pill(int x, int y, Availability value, const std::string &overr
 }
 
 constexpr const char *kMediaFilters[] = {"Movies & series", "Movies", "Series"};
-constexpr const char *kAvailabilityFilters[] = {"Any availability", "Not requested", "Requested",
-                                                "Available"};
-constexpr const char *kRequestFilters[] = {"All requests",      "Downloading", "Available",
-                                           "Awaiting approval", "Processing",  "Declined"};
+constexpr const char *kSorts[] = {"Trending", "Popular", "Top rated", "Newest", "Upcoming"};
 
 void draw_header() noexcept
 {
     text::draw(ui::kContentX, kHeaderY, "Discover", 40, Weight::bold, gfx::palette::text);
-    const std::string subtitle =
-        g_view.server_title.empty()
-            ? "Browse titles. Make requests. Follow downloads."
-            : g_view.server_title + (config::current().seerr_user.empty()
-                                         ? ""
-                                         : "  ·  " + config::current().seerr_user);
-    text::draw_ellipsized(ui::kContentX, kHeaderY + 54, 800, subtitle, 20, Weight::regular,
-                          gfx::palette::text_dim);
-    constexpr int width = 528, height = 66;
-    const int x = ui::kContentRight - width;
-    const int y = kHeaderY - 6;
-    gfx::rounded_rect(x, y, width, height, 18, gfx::palette::control);
-    gfx::stroke_rounded_rect(x, y, width, height, 18, 1, gfx::palette::control_border);
-    g_view.tab_position.aim(static_cast<float>(g_view.mode));
-    g_view.tab_position.step(motion::kControlFocus, 1.0f / 60.0f);
-    gfx::rounded_rect(x + 6 + static_cast<int>(g_view.tab_position.value() * 258), y + 6, 258, 54,
-                      13, gfx::palette::focus_surface);
-    gfx::fill_rect(x + 46 + static_cast<int>(g_view.tab_position.value() * 258), y + height - 5,
-                   178, 2, gfx::palette::focus_border);
+    text::draw_ellipsized(ui::kContentX, kHeaderY + 54, 800,
+                          g_view.server_title.empty() ? "Movies, series and your requests"
+                                                      : g_view.server_title,
+                          20, Weight::regular, gfx::palette::text_dim);
     const char *names[] = {"Browse", "My requests"};
+    constexpr int w = 250, h = 60;
+    const int x = ui::kContentRight - 520, y = kHeaderY - 4;
     for (int i = 0; i < 2; ++i)
     {
-        const int bx = x + i * 258;
-        const bool active = i == g_view.mode;
-        if (!active)
-            icons::draw(icons::Icon::ps_square, bx + 28, y + 21, 24, icons::button::square);
-        const int label_width = text::measure(names[i], 24, Weight::medium);
-        const int tx = active ? bx + (264 - label_width) / 2 : bx + 68;
-        text::draw(tx, text::centered_y(y, height, names[i], 24, Weight::medium), names[i], 24,
-                   Weight::medium, active ? gfx::palette::text : gfx::palette::text_dim);
+        const int bx = x + i * 270;
+        if (g_view.mode == i)
+            ui::focus_pill(bx, y, w, h, ui::FocusGroup::discover_tabs);
+        else
+            gfx::rounded_rect(bx, y, w, h, 14, gfx::palette::control);
+        if (g_view.mode != i)
+            icons::draw(icons::Icon::ps_square, bx + 16, y + 18, 24, icons::button::square);
+        const int inset = g_view.mode == i ? 16 : 50;
+        ui::control_label(bx + inset, y, w - inset - 12, h, names[i], 24, Weight::medium,
+                          g_view.mode == i ? gfx::palette::text : gfx::palette::text_dim);
     }
 }
 void draw_field() noexcept
 {
-    constexpr int width = 1048, height = 66;
-    const bool focused = g_view.field_focused && !g_view.filter_focused && !g_view.sheet_open &&
-                         !g_view.filters_open;
-    gfx::rounded_rect(ui::kContentX, kFieldY, width, height, 15, gfx::palette::control);
-    if (focused)
-        ui::focus_pill(ui::kContentX, kFieldY, width, height, ui::FocusGroup::discover_toolbar);
-    else
-        gfx::stroke_rounded_rect(ui::kContentX, kFieldY, width, height, 15, 1,
-                                 gfx::palette::control_border);
-    icons::draw(icons::Icon::ps_triangle, ui::kContentX + 24, kFieldY + 21, 26,
-                icons::button::triangle);
-    const auto label = g_view.mode == 1       ? std::string("Refresh requests")
-                       : g_view.query.empty() ? std::string("Search movies and series")
-                                              : g_view.query;
-    text::draw_ellipsized(ui::kContentX + 72,
-                          text::centered_y(kFieldY, height, label, 26, Weight::medium), width - 100,
-                          label, 26, Weight::medium, gfx::palette::text);
-    constexpr int fx = ui::kContentX + width + 24;
-    constexpr int fw = ui::kContentRight - fx;
-    gfx::rounded_rect(fx, kFieldY, fw, height, 15, gfx::palette::control);
-    if (g_view.field_focused && g_view.filter_focused && !g_view.filters_open && !g_view.sheet_open)
-        ui::focus_pill(fx, kFieldY, fw, height, ui::FocusGroup::discover_toolbar);
-    else
-        gfx::stroke_rounded_rect(fx, kFieldY, fw, height, 15, 1, gfx::palette::control_border);
-    gfx::rounded_rect(fx + 22, kFieldY + 18, 42, 30, 8, gfx::palette::surface_high);
-    ui::control_label(fx + 22, kFieldY + 18, 42, 30, "R3", 18, Weight::bold, gfx::palette::text);
-    const int active = (g_view.media_filter != 0) +
-                       ((g_view.mode == 0 ? g_view.availability_filter : g_view.filter) != 0);
-    const std::string filters = "Filters" + (active ? "  ·  " + std::to_string(active) : "");
-    text::draw(fx + 82, text::centered_y(kFieldY, height, filters, 25, Weight::medium), filters, 25,
-               Weight::medium, gfx::palette::text);
-    icons::draw(icons::Icon::chevron_down, fx + fw - 42, kFieldY + 23, 20, gfx::palette::text_dim);
-    const int count =
-        g_view.mode == 0 ? results_size() : static_cast<int>(visible_requests().size());
-    const bool loading = g_view.mode == 0 ? g_view.search_loading : g_view.requests_loading;
-    const std::string summary =
-        (g_view.mode == 0 ? (g_view.query.empty() ? "Trending" : "Search results")
-                          : "Latest requests") +
-        std::string("  /  ") + kMediaFilters[g_view.media_filter] + "  /  " +
-        (g_view.mode == 0 ? kAvailabilityFilters[g_view.availability_filter]
-                          : kRequestFilters[g_view.filter]);
-    text::draw_ellipsized(ui::kContentX, kFieldY + 88, 1120, summary, 20, Weight::regular,
-                          gfx::palette::text_dim);
-    const std::string total =
-        loading ? "Refreshing…"
-                : std::to_string(count) + (g_view.mode == 0 ? " titles" : " requests");
-    text::draw(ui::kContentRight - text::measure(total, 20, Weight::medium), kFieldY + 88, total,
-               20, Weight::medium, gfx::palette::text_dim);
-}
-void draw_filters() noexcept
-{
-    gfx::fill_rect(0, 0, gfx::kWidth, gfx::kHeight, gfx::rgba(0, 0, 0, 0xc8));
-    constexpr int x = 620, y = 240, width = 1040;
-    ui::panel(x, y, width, 600);
-    text::draw(x + 40, y + 34, "Filter " + std::string(g_view.mode == 0 ? "titles" : "my requests"),
-               36, Weight::bold, gfx::palette::text);
-    text::draw(x + 40, y + 92, "Choose with Left / Right. Apply when ready.", 22, Weight::regular,
-               gfx::palette::text_dim);
-    const char *labels[] = {"Media", "Status", "Reset filters", "Apply filters"};
-    for (int i = 0; i < 4; ++i)
+    const int widths[] = {688, 312, 392};
+    int x = ui::kContentX;
+    for (int i = 0; i < (g_view.mode == 1 ? 1 : 3); ++i)
     {
-        const int ry = y + 156 + i * 86;
-        if (g_view.filter_row == i)
-            ui::focus_pill(x + 24, ry, width - 48, 68, ui::FocusGroup::discover_filters,
-                           g_view.mode);
-        text::draw(x + 48, text::centered_y(ry, 68, labels[i], 25, Weight::medium), labels[i], 25,
-                   Weight::medium, gfx::palette::text);
-        if (i < 2)
-        {
-            const char *value = i == 0             ? kMediaFilters[g_view.draft_media]
-                                : g_view.mode == 0 ? kAvailabilityFilters[g_view.draft_status]
-                                                   : kRequestFilters[g_view.draft_status];
-            text::draw_ellipsized(x + 420, text::centered_y(ry, 68, value, 24, Weight::regular),
-                                  500, value, 24, Weight::regular, gfx::palette::text_dim);
-            icons::draw(icons::Icon::chevron_left, x + 374, ry + 24, 20, gfx::palette::text_dim);
-            icons::draw(icons::Icon::chevron_right, x + width - 68, ry + 24, 20,
+        const int w = g_view.mode == 1 ? 360 : widths[i];
+        const bool focused = g_view.field_focused && g_view.toolbar == i && !g_view.sheet_open;
+        gfx::rounded_rect(x, kFieldY, w, 60, 14, gfx::palette::control);
+        if (focused)
+            ui::focus_pill(x, kFieldY, w, 60, ui::FocusGroup::discover_toolbar);
+        const std::string label = g_view.mode == 1       ? "Refresh requests"
+                                  : i == 1               ? kMediaFilters[g_view.media_filter]
+                                  : i == 2               ? kSorts[g_view.sort]
+                                  : g_view.query.empty() ? "Search movies and series"
+                                                         : g_view.query;
+        if (i == 0)
+            icons::draw(icons::Icon::ps_triangle, x + 18, kFieldY + 18, 24,
+                        icons::button::triangle);
+        text::draw_ellipsized(
+            x + (i == 0 ? 58 : 20), text::centered_y(kFieldY, 60, label, 24, Weight::medium),
+            w - (i == 0 ? 76 : 62), label, 24, Weight::medium, gfx::palette::text);
+        if (i != 0)
+            icons::draw(icons::Icon::chevron_right, x + w - 32, kFieldY + 21, 18,
                         gfx::palette::text_dim);
-        }
+        x += w + 24;
     }
-    ui::draw_button_hints(x + 48, y + 538,
-                          {{icons::Icon::ps_cross, "Choose"}, {icons::Icon::ps_circle, "Cancel"}});
+    const std::string summary =
+        g_view.mode == 1 ? std::to_string(g_view.requests.size()) + " requests"
+                         : (g_view.query.empty() ? kSorts[g_view.sort] : "Search results") +
+                               std::string("  ·  ") + std::to_string(results_size()) + " titles";
+    text::draw(ui::kContentX, kFieldY + 86, summary, 20, Weight::regular, gfx::palette::text_dim);
+    if (g_view.mode == 0)
+    {
+        const std::string page = "L1   Page " + std::to_string(g_view.page) + " / " +
+                                 std::to_string(g_view.pages) + "   R1";
+        text::draw(ui::kContentRight - text::measure(page, 20, Weight::medium), kFieldY + 86,
+                   g_view.search_loading ? "Loading…" : page, 20, Weight::medium,
+                   gfx::palette::text_dim);
+    }
 }
 
 void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
@@ -1925,12 +2091,15 @@ void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
     if (focused)
         gfx::stroke_rounded_rect(x - 4, y - 4, kCardW + 8, kCardH + 8, 14, 3,
                                  gfx::palette::focus_border);
-    if (title.availability != Availability::unknown)
+    const bool fourk_only = title.availability == Availability::unknown;
+    const auto availability = fourk_only ? title.availability4k : title.availability;
+    if (availability != Availability::unknown)
     {
-        const std::string label = availability_label(title.availability);
+        const std::string label =
+            (fourk_only ? std::string("4K · ") : std::string{}) + availability_label(availability);
         const int pill_w = text::measure(label, 17, Weight::medium) + 22;
         gfx::rounded_rect(x + 10, y + 10, pill_w, 30, 15,
-                          gfx::with_alpha(availability_colour(title.availability), 0xd8));
+                          gfx::with_alpha(availability_colour(availability), 0xd8));
         text::draw(x + 21, text::centered_y(y + 10, 30, label, 17, Weight::medium), label, 17,
                    Weight::medium, gfx::rgb(0x10, 0x10, 0x12));
     }
@@ -1980,9 +2149,9 @@ void draw_results() noexcept
     const int count = static_cast<int>(visible.size());
     if (count == 0)
     {
-        const std::string message =
-            g_view.query.empty() ? "No titles match these filters. Try another filter or search."
-                                 : "Nothing matched \"" + g_view.query + "\".";
+        const std::string message = g_view.query.empty()
+                                        ? "No titles on this page. Try another category or search."
+                                        : "Nothing matched \"" + g_view.query + "\".";
         text::draw(ui::kContentX, kGridY + 20, message, 26, Weight::regular,
                    gfx::palette::text_dim);
         return;
@@ -2144,6 +2313,33 @@ void draw_requests() noexcept
         draw_request_row(request, kListY + (i - first) * kRowH,
                          i == g_view.request_index && !g_view.field_focused);
     }
+    for (int i = first; i < std::min(count, first + visible_rows + 1); ++i)
+    {
+        const auto &item =
+            g_view.requests[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])];
+        if (!item.poster_path.empty())
+            images::prefetch(poster_url_for(item.poster_path, 112), {}, images::Kind::remote, 232);
+        if (item.name.empty() && item.tmdb_id > 0)
+        {
+            const auto connection = connection_snapshot();
+            bool queued = false;
+            {
+                std::lock_guard<std::mutex> guard(g_mutex);
+                const auto key = key_for(item.media_type, item.tmdb_id);
+                if (g_model.detail_pending.size() < 5 &&
+                    detail_ready(key, std::chrono::steady_clock::now()))
+                    queued = g_model.detail_pending.insert(key_for(item.media_type, item.tmdb_id))
+                                 .second;
+            }
+            if (queued &&
+                !background::run([connection, type = item.media_type, id = item.tmdb_id]
+                                 { job_detail(connection, type, id); }, background::Lane::requests))
+            {
+                std::lock_guard<std::mutex> guard(g_mutex);
+                g_model.detail_pending.erase(key_for(item.media_type, item.tmdb_id));
+            }
+        }
+    }
     gfx::pop_clip();
 }
 
@@ -2219,6 +2415,10 @@ void draw_sheet() noexcept
         bool enabled = true;
         switch (row.kind)
         {
+        case SheetKind::cancel:
+            label = "Cancel request";
+            value = "Review removal";
+            break;
         case SheetKind::format:
             label = "Format";
             value = g_view.is4k ? "4K" : "Standard";
@@ -2256,6 +2456,9 @@ void draw_sheet() noexcept
                                              : gfx::palette::control_border);
             if (selected_season(season.number))
                 icons::draw(icons::Icon::check, tx + 10, ry + 18, 18, gfx::palette::accent_alt);
+            if (focused)
+                icons::draw(icons::Icon::ps_triangle, tx + tw - 30, ry + 16, 22,
+                            icons::button::triangle);
             break;
         }
         }
@@ -2291,7 +2494,7 @@ void draw_sheet() noexcept
         : !g_view.options.advanced              ? "Your account uses the server's quality profile."
         : !g_view.options.profile_error.empty() ? g_view.options.profile_error
         : title.media_type == "tv"
-            ? "Cross selects a season. Square selects missing seasons or clears your selection."
+            ? "Cross selects seasons. Triangle opens episodes. Square selects missing seasons."
             : "Left / Right changes the quality profile before requesting.";
     text::draw_wrapped(tx, y + 690, tw, 2, 27, note, 20, Weight::regular,
                        !g_view.sheet_error.empty() || !g_view.options.error.empty()
@@ -2306,6 +2509,59 @@ void draw_sheet() noexcept
     text::draw_ellipsized(tx + 58, text::centered_y(by, bh, action, 26, Weight::bold), tw - 74,
                           action, 26, Weight::bold, gfx::palette::text);
     ui::draw_button_hints(tx, y + 854, {{icons::Icon::ps_circle, "Close"}});
+}
+
+void draw_episode_panel() noexcept
+{
+    gfx::fill_rect(0, 0, gfx::kWidth, gfx::kHeight, gfx::rgba(0, 0, 0, 0xe0));
+    constexpr int x = ui::kContentX - 20, y = 92, w = ui::kContentWidth + 20;
+    ui::panel(x, y, w, 896);
+    const std::string season =
+        g_view.episode_season == 0 ? "Specials" : "Season " + std::to_string(g_view.episode_season);
+    text::draw_ellipsized(x + 40, y + 32, w - 80, g_view.sheet.name + "  ·  " + season, 34,
+                          Weight::bold, gfx::palette::text);
+    text::draw(x + 40, y + 90, "Episode guide · Requests are made by season", 21, Weight::regular,
+               gfx::palette::text_dim);
+    if (g_view.episodes.loading || !g_view.episodes.error.empty() || g_view.episodes.items.empty())
+        text::draw_wrapped(x + 40, y + 170, w - 80, 3, 30,
+                           g_view.episodes.loading          ? "Loading episodes…"
+                           : !g_view.episodes.error.empty() ? g_view.episodes.error
+                                                            : "No episodes announced yet.",
+                           24, Weight::regular, gfx::palette::text_dim);
+    const int start = g_view.episode_index / 4 * 4;
+    for (int i = start; i < std::min(start + 4, static_cast<int>(g_view.episodes.items.size()));
+         ++i)
+    {
+        const auto &item = g_view.episodes.items[static_cast<std::size_t>(i)];
+        const int ey = y + 150 + (i - start) * 162;
+        if (i == g_view.episode_index)
+            ui::focus_pill(x + 24, ey, w - 48, 148, ui::FocusGroup::discover_episodes,
+                           g_view.sheet.tmdb_id);
+        const std::string label = std::to_string(item.number) + "   " + item.name;
+        text::draw_ellipsized(x + 44, ey + 14, w - 290, label, 26, Weight::medium,
+                              gfx::palette::text);
+        text::draw(x + w - 210, ey + 20, item.date, 20, Weight::regular, gfx::palette::text_dim);
+        text::draw_wrapped(x + 44, ey + 60, w - 88, 2, 28,
+                           item.overview.empty() ? "No description available." : item.overview, 21,
+                           Weight::regular, gfx::palette::text_dim);
+    }
+    ui::draw_button_hints(x + 40, y + 842, {{icons::Icon::ps_circle, "Back to seasons"}});
+}
+void draw_cancel_confirmation() noexcept
+{
+    gfx::fill_rect(0, 0, gfx::kWidth, gfx::kHeight, gfx::rgba(0, 0, 0, 0xdf));
+    constexpr int x = 670, y = 340, w = 1000;
+    ui::panel(x, y, w, 370);
+    text::draw(x + 36, y + 30, "Cancel this request?", 34, Weight::bold, gfx::palette::text);
+    text::draw_ellipsized(x + 36, y + 90, w - 72, g_view.sheet.name, 26, Weight::medium,
+                          gfx::palette::text);
+    text::draw_wrapped(x + 36, y + 146, w - 72, 3, 30,
+                       "Removes the request from Seerr. Files already in your library stay. A "
+                       "download already sent to Sonarr or Radarr may continue.",
+                       23, Weight::regular, gfx::palette::text_dim);
+    ui::draw_button_hints(
+        x + 36, y + 302,
+        {{icons::Icon::ps_cross, "Cancel request"}, {icons::Icon::ps_circle, "Keep request"}});
 }
 
 void draw_toast() noexcept
@@ -2334,7 +2590,6 @@ void open() noexcept
     g_view.grid_scroll = 0;
     g_view.request_index = 0;
     g_view.request_scroll = 0;
-    g_view.filter = 0;
     g_view.refresh_at = std::chrono::steady_clock::now();
     refresh_server();
     refresh_requests();
@@ -2354,8 +2609,7 @@ void preview_search(const std::string &query) noexcept
 
 bool modal_open() noexcept
 {
-    return g_view.sheet_open || g_view.filters_open || g_field != Field::none ||
-           g_view.ime_guard > 0;
+    return g_view.sheet_open || g_field != Field::none || g_view.ime_guard > 0;
 }
 
 std::string take_open_item() noexcept
@@ -2388,24 +2642,27 @@ bool handle_input() noexcept
     }
     if (g_view.ime_guard > 0)
         return true;
-    if (g_view.filters_open)
-        return filters_input();
     if (g_view.sheet_open)
         return sheet_input();
-    if (pad::pressed(pad::Button::r3))
+    if (pad::pressed(pad::Button::square))
     {
-        open_filters();
-        return true;
-    }
-    if (pad::pressed(pad::Button::square) || pad::pressed(pad::Button::l1) ||
-        pad::pressed(pad::Button::r1))
-    {
-        g_view.mode = g_view.mode == 0 ? 1 : 0;
-        g_view.sheet_open = false;
+        g_view.mode = 1 - g_view.mode;
         g_view.field_focused = true;
-        g_view.filter_focused = false;
+        g_view.toolbar = 0;
         if (g_view.mode == 1)
             refresh_requests();
+        return true;
+    }
+    if (g_view.mode == 0 && !g_view.search_loading &&
+        (pad::pressed(pad::Button::l1) || pad::pressed(pad::Button::r1)))
+    {
+        const int page =
+            std::clamp(g_view.page + (pad::pressed(pad::Button::l1) ? -1 : 1), 1, g_view.pages);
+        if (page != g_view.page)
+        {
+            g_view.grid_index = g_view.grid_scroll = 0;
+            start_search(g_view.query, page);
+        }
         return true;
     }
     if (g_view.mode == 0)
@@ -2421,6 +2678,17 @@ void draw() noexcept
         refresh_requests();
     }
 
+    if (g_view.sheet_open)
+    {
+        if (g_view.episodes_open)
+            draw_episode_panel();
+        else if (g_view.cancel_confirm)
+            draw_cancel_confirmation();
+        else
+            draw_sheet();
+        draw_toast();
+        return;
+    }
     draw_header();
     draw_field();
     if (g_view.mode == 0)
@@ -2430,10 +2698,6 @@ void draw() noexcept
     }
     else
         draw_requests();
-    if (g_view.sheet_open)
-        draw_sheet();
-    if (g_view.filters_open)
-        draw_filters();
     draw_toast();
 }
 

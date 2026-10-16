@@ -1,9 +1,5 @@
 # Updating SlopFin
 
-**Status:** preview 01.000.003 includes the updater. The upcoming revision adds
-download retries and clearer failures; its final console install/restart check
-is pending. Use manual folder installation if the updater fails.
-
 Folder builds have **Settings → Updates**. Check for a release, choose
 **Download update**, then **Install and restart** after verification finishes.
 The app closes before installation and opens again afterwards. Keep the console
@@ -44,7 +40,7 @@ metadata until last. An installation error restores files already replaced.
 Sign-in, preferences, subtitle offsets and per-series autoplay settings live
 outside the application folder and are not replaced.
 
-## Recovery and native packages
+## Recovery
 
 The previous files are kept at `/data/slopfin/update/backup`. If SlopFin cannot
 open after an interrupted installation, close it and reinstall the complete

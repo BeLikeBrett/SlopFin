@@ -340,5 +340,7 @@ test-services:
 	@build/tests/background_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_download.cpp -o build/tests/update_download_tests
 	@build/tests/update_download_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_update_state.cpp $(HOST_TEST_LDFLAGS) -o build/tests/update_state_tests
+	@build/tests/update_state_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_seerr.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/seerr_tests
 	@build/tests/seerr_tests

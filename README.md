@@ -26,11 +26,12 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 - **Per-series autoplay:** each show can override the global setting. Cross
   starts the offered next episode; Circle dismisses it while controls are hidden.
 - **Discover and requests:** connect Seerr or Jellyseerr to find titles, request
-  movies or missing TV seasons, and follow download progress. Available titles
-  open in Jellyfin when the request server supplies their library ID.
+  movies or missing TV seasons, browse episode guides and follow download
+  progress. Available titles open in Jellyfin when the request server supplies
+  their library ID.
   [Connect your request server](docs/DISCOVER.md).
 - **Category shortcuts:** hold L2/R2 and press Up/Down to move between libraries.
-  An animated trigger hint shows the shortcut and the selected category.
+  A compact hint at the bottom of the sidebar keeps the shortcut visible.
 - **Profile and server dashboard:** crop avatars with D-pad and trigger zoom.
   Administrators can manage sessions, libraries and tasks from the controller.
   [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
@@ -70,9 +71,7 @@ decode path; SlopFin does **not** output native Dolby Vision.
    Connect or your username and password. `media.example.com` uses HTTPS;
    an explicit URL with a port or base path works too.
 
-You need a jailbroken PS5 and your own Jellyfin server. The folder build is
-recommended. **Native FPKG is experimental and currently fails to launch on
-the test console during package mounting.**
+You need a jailbroken PS5 and your own Jellyfin server. Use the folder download.
 [Setup details](docs/GETTING_STARTED.md) · [Help](docs/TROUBLESHOOTING.md)
 
 Music, audiobooks, books/comics, photo libraries and live TV are not implemented. IPv6 and
@@ -81,14 +80,17 @@ devices need independent testing.
 
 ## Updates
 
-The next preview, **01.000.005**, adds Discover with media/status filters, individual
-season requests and quality-profile selection, plus request tracking, category
-shortcut feedback and download retries with clearer update errors. **01.000.003** introduced
-playback settings, one-button intro skipping, circular avatar cropping and
-**Settings → Updates**. Earlier public 01.000.000 installs need
-one complete folder upgrade to obtain the updater. Later folder updates can be
-checked and installed in the app with elfldr running. Console installation/restart
-verification is still pending for this build; host archive and rollback tests pass.
+Open **Settings → Updates** to check GitHub for a newer release, download it
+and install after verification. **ELF Loader (`elfldr`, port 9021)** must be
+running for installation. Your Jellyfin login and preferences are preserved.
+
+Discover supports Trending, Popular, Top rated, Newest and Upcoming catalogs,
+Movies/Series selection, page navigation, season requests and server-provided
+quality profiles. My requests shows your requests without filters, with episode
+guides and permission-aware cancellation. Updates and request browsing are preview
+features; report failures with your app version and server version.
+
+Earlier **01.000.000** installs need one complete folder upgrade to obtain the updater.
 [Update instructions and recovery](docs/UPDATES.md).
 
 ## Contribute

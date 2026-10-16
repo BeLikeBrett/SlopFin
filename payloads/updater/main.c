@@ -41,7 +41,12 @@ int main(void)
     snprintf(lock, sizeof(lock), "%s/install.lock", base);
     int lockfd = open(lock, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (lockfd < 0)
+    {
+        result(errno == EEXIST ? "An update is already running or was interrupted. Restart the PS5 "
+                                 "before recovering an interrupted update."
+                               : "Could not create the installer lock. Your app was not changed.");
         return 1;
+    }
     close(lockfd);
     if (become_shellcore() < 0)
     {

@@ -106,6 +106,7 @@ struct Entry
     slopfin::gfx::Bitmap bitmap;
     std::uint64_t last_used = 0;
     bool pending = false;
+    bool prefetched = false;
     bool failed = false;
     unsigned failures = 0;
     std::chrono::steady_clock::time_point retry_after{};
@@ -119,6 +120,7 @@ struct Job
     const char *kind = "Primary";
     int height = 0;
     bool warming = false;
+    bool speculative = false;
 };
 
 std::mutex g_mutex;
@@ -133,10 +135,12 @@ std::condition_variable g_wake;
 std::unordered_map<std::string, Entry> g_entries;
 /* What is on screen or about to be: served newest first. */
 std::deque<Job> g_queue;
+std::deque<Job> g_prefetch_queue;
 /* What nobody has asked for yet: served in order, only when the above is empty. */
 std::deque<Job> g_warm_queue;
 std::unordered_set<std::string> g_warm_queued;
 int g_warm_busy = 0;
+int g_prefetch_busy = 0;
 bool g_playing = false;
 std::uint64_t g_clock = 0;
 /* g_clock when trim last ran: anything touched since is on screen. */
@@ -269,7 +273,8 @@ unsigned char *fetch_remote(const std::string &url, std::size_t &size) noexcept
     if (!request.open(url, "GET", {}, {}, {}) || request.status() != 200)
         return nullptr;
     constexpr std::size_t limit = 4u * 1024u * 1024u;
-    auto *bytes = static_cast<unsigned char *>(slopfin::bigalloc::allocate(limit));
+    std::size_t capacity = 256u * 1024u;
+    auto *bytes = static_cast<unsigned char *>(slopfin::bigalloc::allocate(capacity));
     if (bytes == nullptr)
         return nullptr;
     char chunk[16384];
@@ -280,6 +285,18 @@ unsigned char *fetch_remote(const std::string &url, std::size_t &size) noexcept
         {
             count = -1;
             break;
+        }
+        if (size + static_cast<std::size_t>(count) > capacity)
+        {
+            capacity = std::min(limit, capacity * 2);
+            auto *grown =
+                static_cast<unsigned char *>(slopfin::bigalloc::reallocate(bytes, capacity));
+            if (!grown)
+            {
+                count = -1;
+                break;
+            }
+            bytes = grown;
         }
         std::memcpy(bytes + size, chunk, static_cast<std::size_t>(count));
         size += static_cast<std::size_t>(count);
@@ -336,7 +353,7 @@ unsigned char *shrink(unsigned char *pixels, int &width, int &height, int target
 /* Whether a worker may pick up warming now. Called with g_mutex held. */
 bool warm_ready_locked() noexcept
 {
-    if (g_playing || g_warm_queue.empty() || g_warm_busy >= kWarmWorkers)
+    if (g_playing || g_warm_queue.empty() || g_warm_busy + g_prefetch_busy >= kWarmWorkers)
         return false;
     const long free_mib = g_free_mib.load();
     return free_mib < 0 || free_mib > floor_mib() + kWarmMarginMiB;
@@ -408,6 +425,12 @@ std::string complete_job(const Job &job, const slopfin::gfx::Bitmap &bitmap, int
     std::lock_guard<std::mutex> guard(g_mutex);
     Entry &entry = g_entries[job.key];
     entry.pending = false;
+    entry.prefetched = false;
+    if (job.speculative)
+    {
+        --g_prefetch_busy;
+        g_wake.notify_one();
+    }
     entry.failed = !bitmap.valid();
     if (bitmap.valid())
     {
@@ -484,6 +507,16 @@ void *worker(void *) noexcept
                      * scrolling. */
                     job = std::move(g_queue.back());
                     g_queue.pop_back();
+                    break;
+                }
+                if (!g_prefetch_queue.empty() && !g_playing && g_prefetch_busy == 0 &&
+                    g_warm_busy < kWarmWorkers)
+                {
+                    job = std::move(g_prefetch_queue.front());
+                    g_prefetch_queue.pop_front();
+                    g_entries.at(job.key).prefetched = false;
+                    job.speculative = true;
+                    ++g_prefetch_busy;
                     break;
                 }
                 if (warm_ready_locked())
@@ -683,6 +716,18 @@ const gfx::Bitmap *acquire(const std::string &item_id, const std::string &tag, K
     if (found != g_entries.end())
     {
         found->second.last_used = g_clock;
+        if (found->second.prefetched)
+        {
+            found->second.prefetched = false;
+            const auto queued = std::find_if(g_prefetch_queue.begin(), g_prefetch_queue.end(),
+                                             [&key](const Job &job) { return job.key == key; });
+            if (queued != g_prefetch_queue.end())
+            {
+                g_queue.push_back(std::move(*queued));
+                g_prefetch_queue.erase(queued);
+                g_wake.notify_one();
+            }
+        }
         if (found->second.bitmap.valid())
             return &found->second.bitmap;
         if (found->second.pending || !found->second.failed ||
@@ -732,7 +777,28 @@ bool failed(const std::string &item_id, const std::string &tag, Kind kind) noexc
 void prefetch(const std::string &item_id, const std::string &tag, Kind kind,
               int target_height) noexcept
 {
-    (void)acquire(item_id, tag, kind, target_height);
+    if (item_id.empty())
+        return;
+    const auto key = make_key(item_id, kind, tag);
+    std::lock_guard<std::mutex> guard(g_mutex);
+    if (g_entries.find(key) != g_entries.end())
+        return;
+    while (g_prefetch_queue.size() >= kMaxQueued)
+    {
+        g_entries.erase(g_prefetch_queue.front().key);
+        g_prefetch_queue.pop_front();
+    }
+    Entry &entry = g_entries[key];
+    entry.pending = true;
+    entry.prefetched = true;
+    Job job;
+    job.key = key;
+    job.item_id = item_id;
+    job.tag = tag;
+    job.kind = kind_name(kind);
+    job.height = gfx::to_physical_size(target_height);
+    g_prefetch_queue.push_back(std::move(job));
+    g_wake.notify_one();
 }
 
 void warm(const std::string &item_id, const std::string &tag, int target_height, bool soon) noexcept

@@ -15,10 +15,6 @@ tested environment.
 For an upgrade, close SlopFin before replacing files. Keep
 `/data/slopfin/config.json`; it contains your sign-in and settings.
 
-Use the folder build for normal use. Native FPKG is experimental and currently
-stalls before app startup on the test console.
-[Native package details](development/NATIVE_FPKG.md).
-
 ## Enter your server
 
 First launch shows a **Server address** field and **Continue**. Select the field

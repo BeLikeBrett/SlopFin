@@ -1429,39 +1429,14 @@ void draw_wordmark(int x, int y) noexcept
 
 void draw_category_shortcut() noexcept
 {
-    constexpr int x = kSafeX - 8;
-    constexpr int y = 140;
-    const auto cap = [&](int cx, const char *label, float glow)
-    {
-        gfx::rounded_horizontal_gradient(
-            cx, y, 52, 38, 11,
-            gfx::rgba(0x00, 0xa4, 0xdc, static_cast<std::uint8_t>(20 + glow * 65)),
-            gfx::rgba(0x40, 0xd0, 0xef, static_cast<std::uint8_t>(10 + glow * 34)));
-        gfx::stroke_rounded_rect(cx, y, 52, 38, 11, 1,
-                                 gfx::with_alpha(gfx::palette::focus_border,
-                                                 static_cast<std::uint8_t>(60 + glow * 160)));
-        text::draw(
-            cx + (52 - text::measure(label, 19, Weight::bold)) / 2,
-            text::centered_y(y, 38, label, 19, Weight::bold) + static_cast<int>(glow * 2), label,
-            19, Weight::bold,
-            gfx::with_alpha(gfx::palette::text, static_cast<std::uint8_t>(150 + glow * 105)));
-    };
-    cap(x, "L2", g_view.shortcut_left.value());
-    text::draw(x + 58, text::centered_y(y, 38, "/", 18, Weight::regular), "/", 18, Weight::regular,
-               gfx::palette::text_faint);
-    cap(x + 74, "R2", g_view.shortcut_right.value());
-    text::draw(x + 136, text::centered_y(y, 38, "+", 20, Weight::regular), "+", 20, Weight::regular,
-               gfx::palette::text_dim);
-    icons::draw(icons::Icon::chevron_up, x + 170, y + 1, 20,
-                pad::held(pad::Button::up) ? gfx::palette::focus_border : gfx::palette::text_dim);
-    icons::draw(icons::Icon::chevron_down, x + 170, y + 17, 20,
-                pad::held(pad::Button::down) ? gfx::palette::focus_border : gfx::palette::text_dim);
-    const float feedback = g_view.shortcut_feedback.value();
-    const bool switching = feedback > 0.05f && !g_view.shortcut_name.empty();
-    const std::string label = switching ? g_view.shortcut_name : "Switch categories";
-    text::draw_ellipsized(x + static_cast<int>(feedback * 4), y + 46, kSidebarWidth - x - 20, label,
-                          18, switching ? Weight::medium : Weight::regular,
-                          switching ? gfx::palette::accent_alt : gfx::palette::text_faint);
+    constexpr int x = kSafeX;
+    constexpr int y = gfx::kHeight - 152;
+    const bool held = g_view.shortcut_left.value() > 0.1f || g_view.shortcut_right.value() > 0.1f;
+    const auto colour = held ? gfx::palette::focus_border : gfx::palette::text_faint;
+    text::draw(x, y, "L2 / R2 +", 18, Weight::medium, colour);
+    icons::draw(icons::Icon::chevron_up, x + 99, y - 1, 17, colour);
+    icons::draw(icons::Icon::chevron_down, x + 115, y - 1, 17, colour);
+    text::draw(x + 143, y, "Categories", 18, Weight::regular, colour);
 }
 
 void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,

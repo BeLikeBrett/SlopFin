@@ -75,8 +75,9 @@ enum class FocusGroup
     dashboard_rows,
     dashboard_actions,
     discover_toolbar,
-    discover_filters,
+    discover_tabs,
     discover_sheet,
+    discover_episodes,
     count
 };
 /* Call once per rendered frame. A new screen snaps into place; navigation glides. */

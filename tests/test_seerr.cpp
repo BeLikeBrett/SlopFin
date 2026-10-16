@@ -86,6 +86,14 @@ Response post(std::string_view host, int, std::string_view path,
     last_post = body;
     return handler("POST", path, headers, body);
 }
+Response send(std::string_view method, std::string_view host, int, std::string_view path,
+              const std::vector<std::string> &headers, std::string_view body,
+              std::string_view) noexcept
+{
+    assert(host == settings.seerr_host);
+    ++calls;
+    return handler(method, path, headers, body);
+}
 std::string url_encode(std::string_view s) noexcept
 {
     return std::string(s);
@@ -228,7 +236,7 @@ int main()
     assert(request::can_request(524288, false, false) == false);
     assert(request::can_request(524288, true, false) && !request::can_request(524288, true, true));
     assert(request::can_request(4096, true, true) && !request::can_request(4096, false, true));
-    // Browse and request filters operate on the displayed media, without mixing types.
+    // Media selection applies to catalog results; requests remain unfiltered.
     Title movie, series;
     movie.media_type = "movie";
     movie.name = "Movie";
@@ -238,13 +246,10 @@ int main()
     series.requested = true;
     g_view.results = {movie, series};
     g_view.media_filter = 2;
-    g_view.availability_filter = 3;
     assert(visible_results() == std::vector<int>{1});
-    g_view.availability_filter = 1;
-    assert(visible_results().empty());
     g_view.media_filter = 0;
-    assert(visible_results() == std::vector<int>{0});
-    g_view.media_filter = g_view.availability_filter = 0;
+    assert(visible_results() == (std::vector<int>{0, 1}));
+    g_view.media_filter = 0;
     settings.seerr_auth = 2;
     settings.seerr_api_key = "test-key";
     sync_connection();
@@ -304,17 +309,82 @@ int main()
     const auto epoch = g_model.options_epoch;
     job_options(connection_snapshot(), g_view.sheet, g_model.options_wanted - 1, 2, true);
     assert(g_model.options_epoch == epoch);
-    open_filters();
-    g_view.draft_media = 2;
-    pressed_button = pad::Button::circle;
-    filters_input();
-    assert(g_view.media_filter == 0 && !g_view.filters_open);
-    open_filters();
-    g_view.draft_media = 2;
-    g_view.draft_status = 3;
-    g_view.filter_row = 3;
-    pressed_button = pad::Button::cross;
-    filters_input();
-    assert(g_view.media_filter == 2 && g_view.availability_filter == 3 && !g_view.filters_open);
-    pressed_button = pad::Button::count;
+    assert(catalog_path("", 1, 2, 3).find("sortBy=vote_average.desc&voteCountGte=200") !=
+           std::string::npos);
+    assert(catalog_path("", 2, 3, 1).find("firstAirDateLte=") != std::string::npos);
+    assert(catalog_path("", 2, 4, 1) == "/api/v1/discover/tv/upcoming?page=1");
+    assert(catalog_path("term", 0, 0, 4) == "/api/v1/search?query=term&page=4");
+    Request own;
+    own.id = 10;
+    own.requested_by_id = 7;
+    own.approval = 1;
+    g_view.requests = {own};
+    g_view.sheet_from_requests = true;
+    g_view.sheet_request_id = 10;
+    g_view.permissions = 32;
+    g_view.user_id = 7;
+    assert(can_cancel());
+    g_view.requests[0].approval = 2;
+    assert(!can_cancel());
+    g_view.permissions = 16;
+    assert(can_cancel());
+    g_view.media_filter = 2;
+    assert(visible_requests() == std::vector<int>{0});
+    bool deleted = false;
+    handler = [&](std::string_view method, std::string_view path, const auto &,
+                  std::string_view) -> http::Response
+    {
+        if (method == "DELETE")
+        {
+            assert(path == "/api/v1/request/10");
+            deleted = true;
+            return {204, {}, {}};
+        }
+        if (path == "/api/v1/tv/123/season/2")
+            return {
+                200,
+                R"({"episodes":[{"episodeNumber":1,"name":"Pilot","overview":"Description","airDate":"2026-01-01"}]})",
+                {}};
+        if (path.starts_with("/api/v1/request?"))
+            return {200, R"({"results":[]})", {}};
+        return {404, {}, {}};
+    };
+    cancel_request();
+    drain();
+    snapshot();
+    assert(deleted && !g_view.submitting && g_view.requests.empty());
+    open_episodes(2);
+    drain();
+    snapshot();
+    assert(!g_view.episodes.loading && g_view.episodes.items.size() == 1);
+    assert(g_view.episodes.items[0].name == "Pilot");
+    // Switching seasons before a queued result arrives keeps only the latest response.
+    open_episodes(1);
+    open_episodes(2);
+    drain();
+    snapshot();
+    assert(g_view.episodes.error.empty() && g_view.episodes.items[0].number == 1);
+    handler = [](std::string_view, std::string_view path, const auto &,
+                 std::string_view) -> http::Response
+    {
+        if (path == "/api/v1/request")
+            return {201, R"({"status":1})", {}};
+        return {200, R"({"results":[]})", {}};
+    };
+    const auto fourk_only = json::parse(
+        R"({"id":88,"mediaType":"movie","title":"4K title","mediaInfo":{"status":1,"status4k":5}})");
+    const auto fourk_title = read_title(*fourk_only);
+    assert(fourk_title.availability == Availability::unknown &&
+           fourk_title.availability4k == Availability::available && fourk_title.requested);
+    g_view.results = {fourk_title};
+    g_view.media_filter = 0;
+    assert(visible_results() == std::vector<int>{0});
+    Title requested4k;
+    requested4k.tmdb_id = 123;
+    requested4k.media_type = "tv";
+    g_model.results = {requested4k};
+    job_request(connection_snapshot(), requested4k,
+                R"({"mediaType":"tv","mediaId":123,"is4k":true,"seasons":[2]})", true);
+    assert(g_model.results[0].availability == Availability::unknown);
+    assert(g_model.results[0].availability4k == Availability::pending);
 }
