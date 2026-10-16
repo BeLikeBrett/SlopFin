@@ -195,6 +195,7 @@ void check() noexcept
             std::lock_guard<std::mutex> lock(mutex);
             release = found;
             state.version = found.version;
+            state.notes = found.notes;
             state.total = found.size;
             state.preview = found.preview;
             state.phase = found.version.empty() ? Phase::current : Phase::available;

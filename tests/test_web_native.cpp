@@ -8,7 +8,11 @@
 namespace
 {
 int created = 0, deleted = 0, closed = 0, aborted = 0, pools = 0, response_code = 200;
-bool fail_send = false;
+bool fail_send = false, fail_limit = false;
+std::size_t header_limit = 0;
+const std::string response_headers =
+    "HTTP/1.1 302 Found\r\nContent-Security-Policy: " + std::string(6000, 'x') +
+    "\r\nLocation: https://release-assets.githubusercontent.com/file\r\n";
 std::string method, uploaded, address;
 } // namespace
 namespace slopfin::trace
@@ -61,6 +65,11 @@ extern "C"
         assert(enabled == 0);
         return 0;
     }
+    int sceHttpSetResponseHeaderMaxSize(int, std::size_t size)
+    {
+        header_limit = size;
+        return fail_limit ? -1 : 0;
+    }
     int sceHttpSetResolveTimeOut(int, std::uint32_t)
     {
         return 0;
@@ -80,14 +89,12 @@ extern "C"
     int sceHttpSendRequest(int, const void *body, std::size_t size)
     {
         uploaded.assign(size ? static_cast<const char *>(body) : "", size);
-        return fail_send ? -1 : 0;
+        return fail_send ? -1 : header_limit < response_headers.size() ? -2143088525 : 0;
     }
     int sceHttpGetAllResponseHeaders(int, char **headers, std::size_t *size)
     {
-        static char text[] =
-            "HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com/file\r\n";
-        *headers = text;
-        *size = sizeof(text) - 1;
+        *headers = const_cast<char *>(response_headers.data());
+        *size = response_headers.size();
         return 0;
     }
     int sceHttpGetStatusCode(int, int *status)
@@ -144,11 +151,17 @@ int main()
         assert(request.status() == 302);
         assert(request.location() == "https://release-assets.githubusercontent.com/file");
     }
+    fail_limit = true;
+    {
+        WebRequest request;
+        assert(!request.open("https://example.test/", "GET", {}, {}, {}));
+    }
+    fail_limit = false;
     fail_send = true;
     {
         WebRequest request;
         assert(!request.open("https://example.test/", "GET", {}, {}, {}));
     }
-    assert(pools == 1 && created == 4 && deleted == 4 && closed == 4);
+    assert(pools == 1 && created == 5 && deleted == 5 && closed == 5);
     std::puts("Native HTTPS request, upload, cancellation and cleanup tests passed");
 }

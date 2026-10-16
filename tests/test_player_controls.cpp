@@ -49,7 +49,16 @@ int main()
         assert(host::write_png("build/tests/audio-settings-" + std::to_string(row) + ".png"));
     }
     g_view.settings_page = 0;
-    g_view.settings_index = 7;
+    assert(std::string(kSettingsMenu[kSettingsMenuCount - 1].name) == "Updates");
+    g_view.settings_index = kSettingsMenuCount - 1;
+    press(pad::Button::cross, handle_settings_input);
+    assert(g_view.settings_page == 7);
+    press(pad::Button::circle, handle_settings_input);
+    g_view.settings_index = 2;
+    press(pad::Button::cross, handle_settings_input);
+    assert(g_view.settings_page == 8);
+    press(pad::Button::circle, handle_settings_input);
+    g_view.settings_index = 8;
     gfx::clear(gfx::palette::background);
     draw_settings("Fixture");
     gfx::present();

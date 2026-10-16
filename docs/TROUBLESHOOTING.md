@@ -6,8 +6,7 @@ Install the complete folder download, including `sce_module`, `sce_sys` and
 `assets`; copying only `eboot.bin` is insufficient. Check your loader supports
 app folders and registered PPSA99001. Close any old instance before upgrading.
 
-Native FPKG launch is currently blocked during package mounting on the test
-console. Use the folder build. [Installation](GETTING_STARTED.md).
+[Folder installation instructions](GETTING_STARTED.md).
 
 ## My server will not connect
 

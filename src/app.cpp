@@ -316,8 +316,6 @@ struct View
     bool server_draft_initialized = false;
     int setup_index = 0; /* server_setup and sign_in menus */
     int settings_index = 0;
-    /* Settings is a menu of screens: 0 the menu, then Subtitles, Controller,
-       Server and Account in menu order. */
     int settings_page = 0;
     int account_row = 0; /* the row focused on the Account screen */
     /* Where Circle goes from the Profile and Dashboard screens. */
@@ -5159,9 +5157,14 @@ int idle_index(int minutes) noexcept
     return 3; /* whatever was stored, ninety is the one it means */
 }
 
-constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback",      "Controller",
-                                         "Server",    "Account",       "Diagnostics",
-                                         "Updates",   "Audio & video", "Requests"};
+struct SettingsCategory
+{
+    const char *name;
+    int page;
+};
+constexpr SettingsCategory kSettingsMenu[] = {
+    {"Subtitles", 1}, {"Playback", 2}, {"Audio & video", 8}, {"Controller", 3}, {"Server", 4},
+    {"Account", 5},   {"Requests", 9}, {"Diagnostics", 6},   {"Updates", 7}};
 constexpr int kSettingsMenuCount = 9;
 
 /* A screen's single action row, focused, with the menu's look. */
@@ -5360,23 +5363,33 @@ void draw_settings(const std::string &server_name) noexcept
             text::draw(kContentX, kGridTop + 108,
                        "Available  " + info.version + (info.preview ? "   Preview" : ""), 26,
                        Weight::medium, gfx::palette::text);
+        const bool has_notes = !info.notes.empty();
         const bool busy = info.phase == update::Phase::checking ||
                           info.phase == update::Phase::downloading ||
                           info.phase == update::Phase::installing;
         text::draw_wrapped(
-            kContentX, kGridTop + 166, 1040, 3, 34,
+            kContentX, kGridTop + 166, 1040, 2, 34,
             info.message.empty() ? "Check for a new release, then download and install it here."
                                  : info.message,
             24, Weight::regular,
             info.phase == update::Phase::error ? gfx::palette::danger : gfx::palette::text_dim);
+        if (has_notes)
+        {
+            text::draw(kContentX, kGridTop + 252, "What's new", 23, Weight::bold,
+                       gfx::palette::text);
+            text::draw_wrapped(kContentX, kGridTop + 292, 1110, 5, 28, info.notes, 21,
+                               Weight::regular, gfx::palette::text_dim);
+        }
+        const int action_y = kGridTop + (has_notes ? 466 : 350);
         if (info.phase == update::Phase::downloading && info.total > 0)
         {
-            gfx::rounded_rect(kContentX, kGridTop + 296, 780, 8, 4, gfx::palette::surface_high);
+            gfx::rounded_rect(kContentX, (has_notes ? action_y : kGridTop + 296), 780, 8, 4,
+                              gfx::palette::surface_high);
             const int filled = static_cast<int>(780 * info.received / info.total);
             if (filled > 0)
-                gfx::rounded_rect(kContentX, kGridTop + 296, filled, 8, 4,
+                gfx::rounded_rect(kContentX, (has_notes ? action_y : kGridTop + 296), filled, 8, 4,
                                   gfx::palette::accent_alt);
-            text::draw(kContentX + 804, kGridTop + 284,
+            text::draw(kContentX + 804, (has_notes ? action_y - 12 : kGridTop + 284),
                        std::to_string(100 * info.received / info.total) + "%", 22, Weight::medium,
                        gfx::palette::text);
         }
@@ -5385,15 +5398,15 @@ void draw_settings(const std::string &server_name) noexcept
             const char *action = info.phase == update::Phase::ready       ? "Install and restart"
                                  : info.phase == update::Phase::available ? "Download update"
                                                                           : "Check for updates";
-            draw_settings_action(kGridTop + 350, action, "");
+            draw_settings_action(action_y, action, "");
             ui::draw_button_hints(
-                kContentX, kGridTop + 444,
+                kContentX, kGridTop + (has_notes ? 560 : 444),
                 {{icons::Icon::ps_cross, action}, {icons::Icon::ps_triangle, "Check again"}});
         }
         text::draw_wrapped(
-            kContentX, kGridTop + 518, 1040, 3, 30,
-            "Folder builds update here using the console's payload loader. SlopFin closes during "
-            "installation and opens again when finished. Keep the console on.",
+            kContentX, kGridTop + (has_notes ? 624 : 518), 1110, 2, 28,
+            "Installation needs ELF Loader (elfldr, port 9021). SlopFin closes and reopens during "
+            "installation. Keep the console on.",
             21, Weight::regular, gfx::palette::text_faint);
         break;
     }
@@ -5482,8 +5495,27 @@ void draw_settings(const std::string &server_name) noexcept
         {
             const bool focused = i == g_view.settings_index && !g_view.sidebar_focused;
             const int y = kGridTop + (i - first) * 84;
-            ui::control_label(kContentX, y - 6, 560, 68, kSettingsMenu[i], 34, Weight::medium,
+            ui::control_label(kContentX, y - 6, 560, 68, kSettingsMenu[i].name, 34, Weight::medium,
                               focused ? gfx::palette::text : gfx::palette::text_dim);
+        }
+        constexpr int track_x = kContentX + 650, track_y = kGridTop - 6;
+        constexpr int track_height = 7 * 84 - 16,
+                      thumb_height = track_height * 7 / kSettingsMenuCount;
+        gfx::rounded_rect(track_x, track_y, 5, track_height, 2, gfx::palette::control_border);
+        gfx::rounded_rect(
+            track_x, track_y + (track_height - thumb_height) * first / (kSettingsMenuCount - 7), 5,
+            thumb_height, 2, gfx::palette::accent_alt);
+        const std::string range = std::to_string(first + 1) + "–" +
+                                  std::to_string(std::min(first + 7, kSettingsMenuCount)) + " of " +
+                                  std::to_string(kSettingsMenuCount);
+        text::draw(kContentX + 690, kGridTop + 8, range, 20, Weight::regular,
+                   gfx::palette::text_dim);
+        if (first + 7 < kSettingsMenuCount)
+        {
+            icons::draw(icons::Icon::chevron_down, kContentX + 690, kGridTop + 7 * 84 - 48, 20,
+                        gfx::palette::accent_alt);
+            text::draw(kContentX + 722, kGridTop + 7 * 84 - 48, "More below", 20, Weight::medium,
+                       gfx::palette::text_dim);
         }
         text::draw(kContentX, kGridTop + 7 * 84 + 40,
                    "SlopFin " + update::status().current + "   unofficial Jellyfin client", 20,
@@ -7642,7 +7674,7 @@ void handle_settings_input() noexcept
         g_view.sidebar_focused = true;
     else if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::right))
     {
-        g_view.settings_page = g_view.settings_index + 1;
+        g_view.settings_page = kSettingsMenu[g_view.settings_index].page;
         g_view.subtitle_row = 1;
     }
 }
