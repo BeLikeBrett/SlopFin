@@ -172,6 +172,7 @@ struct View
 
     bool sheet_open = false;
     bool sheet_from_requests = false;
+    bool sheet_original_is4k = false;
     Title sheet;
     int sheet_approval = 0;
     int sheet_request_id = 0;
@@ -1592,7 +1593,9 @@ Title effective_title() noexcept
     {
         title.availability =
             availability_of(g_view.is4k ? g_view.options.status4k : g_view.options.status);
-        title.jellyfin_id = g_view.is4k ? g_view.options.jellyfin_id4k : g_view.options.jellyfin_id;
+        const auto &id = g_view.is4k ? g_view.options.jellyfin_id4k : g_view.options.jellyfin_id;
+        if (!id.empty() || g_view.is4k != g_view.sheet_original_is4k)
+            title.jellyfin_id = id;
     }
     return title;
 }
@@ -1708,6 +1711,7 @@ void open_sheet_for_result(int index) noexcept
         g_view
             .results[static_cast<std::size_t>(visible_results()[static_cast<std::size_t>(index)])];
     g_view.sheet_from_requests = false;
+    g_view.sheet_original_is4k = false;
     g_view.sheet_request_id = 0;
     g_view.sheet_approval = 0;
     g_view.sheet_open = true;
@@ -1738,6 +1742,7 @@ void open_sheet_for_request(const Request &request) noexcept
     }
     g_view.sheet = title;
     g_view.sheet_from_requests = true;
+    g_view.sheet_original_is4k = request.is4k;
     g_view.sheet_approval = request.approval;
     g_view.sheet_request_id = request.id;
     g_view.sheet_open = true;
@@ -2380,6 +2385,10 @@ std::string profile_label() noexcept
 {
     if (sheet_locked())
     {
+        if (g_view.sheet_from_requests)
+            for (const auto &item : g_view.requests)
+                if (item.id == g_view.sheet_request_id && !item.profile_name.empty())
+                    return item.profile_name;
         if (const auto *item = sheet_request(); item && !item->profile_name.empty())
             return item->profile_name;
         return "Quality set by request server";

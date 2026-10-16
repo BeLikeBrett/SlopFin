@@ -77,13 +77,8 @@ jobs:
           make sdk-archives
           PS5_CLANG=clang-18 bash tools/build-software-audio.sh
 
-      - name: Prepare package toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal
-
-      - name: Build and verify native package
-        env:
-          RUSTUP_TOOLCHAIN: 1.99.0
-        run: make fpkg SOFTWARE_AUDIO=1
+      - name: Build and verify folder app
+        run: make PS5_CLANG=clang-18 SOFTWARE_AUDIO=1
 
       - name: Prepare public downloads
         run: |
