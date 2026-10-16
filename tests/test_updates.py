@@ -103,6 +103,16 @@ class Updates(unittest.TestCase):
     def install(self, target, fail_after=-1):
         return subprocess.run([TRANSACTION, self.root / "staged", target, self.root / "backup", str(fail_after)], capture_output=True)
 
+    def test_staging_is_readable_by_installer(self):
+        self.assertEqual(self.stage(self.archive()).returncode, 0)
+        stage = self.root / "staged"
+        for path in stage.rglob("*"):
+            if path.is_file():
+                self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        (stage / "manifest").chmod(0o600)
+        self.assertEqual(self.stage(self.archive()).returncode, 0)
+        self.assertEqual((stage / "manifest").stat().st_mode & 0o777, 0o644)
+
     def test_install_and_keep_settings(self):
         target, old, config = self.prepare_install()
         self.assertEqual(self.install(target).returncode, 0)

@@ -79,6 +79,9 @@ int main(int argc, char **argv)
     char output[65];
     sf_sha_hex(&split, output);
     assert(hash(input) == output);
+    assert(display_version("01.000.006") == "1.06");
+    assert(display_version("01.000.010") == "1.10");
+    assert(display_version("Unknown") == "Unknown");
     assert(version_number("01.000.000") == 1000000);
     assert(version_number("02.100.001") > version_number("01.999.999"));
     for (auto bad : {"1.0.0", "01.000.0000", "01.00a.001", "../01.000.001", "00.000.000"})
@@ -97,6 +100,16 @@ int main(int argc, char **argv)
                 asset + "]}]";
     assert(select_release(feed, "01.000.000").version == "01.000.001");
     assert(select_release(feed, "01.000.001").version.empty());
+    auto short_feed = feed;
+    for (auto at = short_feed.find("01.000.001"); at != std::string::npos;
+         at = short_feed.find("01.000.001"))
+        short_feed.replace(at, 10, "1.01");
+    const auto short_release = select_release(short_feed, "01.000.000");
+    assert(short_release.version == "01.000.001");
+    assert(short_release.url.ends_with("/1.01/SlopFin-1.01-folder.zip"));
+    assert(select_release(short_feed, "01.000.001").version.empty());
+    assert(version_number("1.08") == version_number("01.000.008"));
+    assert(version_number("1.10") > version_number("1.09"));
     assert(select_release(feed, "Unknown").version.empty());
     auto with_notes = feed;
     with_notes.insert(

@@ -15,6 +15,7 @@ struct Release
     std::string notes;
 };
 std::uint64_t version_number(std::string_view text) noexcept;
+std::string display_version(std::string_view text) noexcept;
 bool trusted_download(std::string_view url) noexcept;
 std::string release_notes(std::string_view markdown) noexcept;
 Release select_release(std::string_view feed, std::string_view current) noexcept;

@@ -109,7 +109,8 @@ namespace
 {
 struct FocusState
 {
-    motion::Spring x, y, w, h;
+    std::array<float, 4> from{}, current{}, target{};
+    float elapsed = 0.14f;
     unsigned long seen = 0;
     int context = -1;
     bool ready = false;
@@ -131,28 +132,31 @@ void focus_pill(int x, int y, int w, int h, FocusGroup group, int context) noexc
     if (group != FocusGroup::none)
     {
         auto &state = focus_states[static_cast<std::size_t>(group)];
+        const std::array<float, 4> target{static_cast<float>(x), static_cast<float>(y),
+                                          static_cast<float>(w), static_cast<float>(h)};
         if (!state.ready || state.context != context || state.seen + 1 < focus_frame)
         {
-            state.x.jump(x);
-            state.y.jump(y);
-            state.w.jump(w);
-            state.h.jump(h);
+            state.from = state.current = state.target = target;
+            state.elapsed = 0.14f;
             state.ready = true;
         }
+        if (state.target != target)
+        {
+            state.from = state.current;
+            state.target = target;
+            state.elapsed = 0;
+        }
         state.context = context;
-        state.x.aim(x);
-        state.y.aim(y);
-        state.w.aim(w);
-        state.h.aim(h);
-        state.x.step(motion::kControlFocus, focus_dt);
-        state.y.step(motion::kControlFocus, focus_dt);
-        state.w.step(motion::kControlFocus, focus_dt);
-        state.h.step(motion::kControlFocus, focus_dt);
+        // A fixed duration keeps long moves from trailing behind the selected control.
+        state.elapsed = std::min(0.14f, state.elapsed + std::max(0.0f, focus_dt));
+        const float amount = motion::ease_out_cubic(state.elapsed / 0.14f);
+        for (std::size_t i = 0; i < target.size(); ++i)
+            state.current[i] = state.from[i] + (state.target[i] - state.from[i]) * amount;
         state.seen = focus_frame;
-        x = static_cast<int>(std::lround(state.x.value()));
-        y = static_cast<int>(std::lround(state.y.value()));
-        w = static_cast<int>(std::lround(state.w.value()));
-        h = static_cast<int>(std::lround(state.h.value()));
+        x = static_cast<int>(std::lround(state.current[0]));
+        y = static_cast<int>(std::lround(state.current[1]));
+        w = static_cast<int>(std::lround(state.current[2]));
+        h = static_cast<int>(std::lround(state.current[3]));
     }
     gfx::rounded_rect(x, y, w, h, 12, gfx::palette::focus_surface);
     gfx::stroke_rounded_rect(x, y, w, h, 12, 2, gfx::palette::focus_border);
