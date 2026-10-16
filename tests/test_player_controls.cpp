@@ -89,6 +89,36 @@ int main()
     gfx::present();
     assert(host::write_png("build/tests/settings-menu.png"));
 
+    // Returning to a library keeps its cards and viewport without another request.
+    g_shared.screen = Screen::detail;
+    g_shared.grid_library_id = "fixture-library";
+    jellyfin::Item card;
+    card.id = "fixture-card";
+    g_shared.grid_items = {card};
+    g_shared.grid_total = 120;
+    g_back = {Back{}};
+    g_back.back().screen = Screen::grid;
+    g_back.back().id = "fixture-library";
+    g_back.back().title = "Fixture";
+    g_back.back().index = 12;
+    g_back.back().scroll = 200.0f;
+    assert(go_back());
+    assert(g_shared.screen == Screen::grid && !g_shared.grid_loading);
+    assert(g_shared.grid_items.size() == 1 && g_shared.grid_items[0].id == "fixture-card");
+    assert(g_shared.grid_total == 120 && g_view.grid_index == 12);
+    assert(g_view.grid_scroll.value() == 200.0f && g_view.restoring_page);
+    g_view.restoring_page = false;
+    g_detail_cache.clear();
+    g_detail_cache_order.clear();
+    for (int i = 0; i < 50; ++i)
+    {
+        card.id = "fixture-" + std::to_string(i);
+        remember_detail(card);
+    }
+    assert(g_detail_cache.size() == 48);
+    assert(!cached_detail("fixture-0") && cached_detail("fixture-49"));
+    assert(cached_detail("fixture-30"));
+
     // Square has one consistent role during intros, with and without the timeline.
     for (bool controls : {false, true})
     {

@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -153,6 +154,8 @@ struct View
     int toolbar = 0;
     int sort = 0;
     bool cancel_confirm = false;
+    bool clear_confirm = false;
+    bool clear_focused = false;
     bool episodes_open = false;
     int episode_season = 0;
     int episode_index = 0;
@@ -663,68 +666,118 @@ std::string catalog_path(const std::string &term, int media, int sort, int page)
     }
     return "/api/v1/discover/" + type + "?" + paging + "&sortBy=" + order + extra;
 }
-void job_search(Connection connection, std::string term, long generation, int media = 0,
-                int sort = 0, int page = 1) noexcept
+constexpr int kCatalogBatch = 5;
+struct CatalogPage
 {
+    std::vector<Title> results;
+    std::unordered_set<std::string> seen;
+    std::array<int, 2> feed_pages{500, 500};
+    int pages = 1;
+};
+void job_search(Connection connection, std::string term, long generation, int media = 0,
+                int sort = 0, int page = 1, int batch = 0,
+                std::shared_ptr<CatalogPage> catalog = {}) noexcept
+{
+    const auto wanted = [&]
     {
         std::lock_guard<std::mutex> guard(g_mutex);
-        if (!current(connection) || generation != g_model.search_wanted)
-            return;
-    }
-    std::vector<Title> results;
-    std::string error;
-    int pages = 1;
-    const int feeds = term.empty() && media == 0 && sort != 0 ? 2 : 1;
-    for (int feed = 0; feed < feeds; ++feed)
-    {
-        const int type = feeds == 2 ? feed + 1 : media;
-        const auto response = connection.host.empty()
-                                  ? http::Response{}
-                                  : api_get(connection, catalog_path(term, type, sort, page));
-        if (connection.host.empty())
-            error = "Set up your request server in Settings > Requests.";
-        else if (!response.ok())
-            error = response_error(response, "Catalog could not be loaded");
-        else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
-        {
-            pages = std::max(pages, static_cast<int>(doc->num("totalPages", 1)));
-            const auto *list = doc->find("results");
-            for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 100); ++i)
-                if (const auto *node = list->at(i))
-                {
-                    auto title = read_title(*node);
-                    if (node->str("mediaType").empty())
-                        title.media_type = type == 2 ? "tv" : "movie";
-                    if (title.media_type == "movie" || title.media_type == "tv")
-                        results.push_back(std::move(title));
-                }
-        }
-        else
-            error = "The request server returned an invalid catalog.";
-    }
-    if (feeds == 2)
-        std::stable_sort(results.begin(), results.end(),
-                         [sort](const Title &a, const Title &b)
-                         {
-                             if (sort == 2)
-                                 return a.rating > b.rating;
-                             if (sort == 3)
-                                 return a.release_date > b.release_date;
-                             if (sort == 4)
-                                 return a.release_date < b.release_date;
-                             return a.popularity > b.popularity;
-                         });
-    std::lock_guard<std::mutex> guard(g_mutex);
-    if (!current(connection) || generation != g_model.search_wanted)
+        return current(connection) && generation == g_model.search_wanted;
+    };
+    if (!wanted())
         return;
-    for (const auto &title : results)
-        remember(title);
-    g_model.results = std::move(results);
-    g_model.page = page;
-    g_model.pages = std::clamp(pages, 1, 500);
-    g_model.search_loading = false;
-    g_model.search_error = error;
-    ++g_model.search_epoch;
+    if (!catalog)
+        catalog = std::make_shared<CatalogPage>();
+    auto &results = catalog->results;
+    auto &seen = catalog->seen;
+    auto &feed_pages = catalog->feed_pages;
+    int &pages = catalog->pages;
+    std::string error;
+    const int feeds = term.empty() && media == 0 && sort != 0 ? 2 : 1;
+    {
+        const int server_page = (page - 1) * kCatalogBatch + batch + 1;
+        bool fetched = false;
+        for (int feed = 0; feed < feeds; ++feed)
+        {
+            if (!wanted())
+                return;
+            if (server_page > feed_pages[feed])
+                continue;
+            fetched = true;
+            const int type = feeds == 2 ? feed + 1 : media;
+            const auto response =
+                connection.host.empty()
+                    ? http::Response{}
+                    : api_get(connection, catalog_path(term, type, sort, server_page));
+            if (connection.host.empty())
+                error = "Set up your request server in Settings > Requests.";
+            else if (!response.ok())
+                error = response_error(response, "Catalog could not be loaded");
+            else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
+            {
+                feed_pages[feed] = std::clamp(static_cast<int>(doc->num("totalPages", 1)), 1, 500);
+                pages = std::max(pages, (feed_pages[feed] + kCatalogBatch - 1) / kCatalogBatch);
+                const auto *list = doc->find("results");
+                for (std::size_t i = 0; i < std::min<std::size_t>(list->size(), 20); ++i)
+                    if (const auto *node = list->at(i))
+                    {
+                        auto title = read_title(*node);
+                        if (node->str("mediaType").empty())
+                            title.media_type = type == 2 ? "tv" : "movie";
+                        if (title.tmdb_id > 0 &&
+                            (title.media_type == "movie" || title.media_type == "tv") &&
+                            seen.insert(key_for(title.media_type, title.tmdb_id)).second)
+                            results.push_back(std::move(title));
+                    }
+            }
+            else
+                error = "The request server returned an invalid catalog.";
+            if (!error.empty())
+                break;
+        }
+        if (feeds == 2)
+            std::stable_sort(results.begin(), results.end(),
+                             [sort](const Title &a, const Title &b)
+                             {
+                                 if (sort == 2)
+                                     return a.rating > b.rating;
+                                 if (sort == 3)
+                                     return a.release_date > b.release_date;
+                                 if (sort == 4)
+                                     return a.release_date < b.release_date;
+                                 return a.popularity > b.popularity;
+                             });
+        const bool more =
+            error.empty() && batch + 1 < kCatalogBatch &&
+            (server_page < feed_pages[0] || (feeds == 2 && server_page < feed_pages[1]));
+        {
+            std::lock_guard<std::mutex> guard(g_mutex);
+            if (!current(connection) || generation != g_model.search_wanted)
+                return;
+            for (const auto &title : results)
+                remember(title);
+            g_model.results = results;
+            g_model.page = page;
+            g_model.pages = pages;
+            g_model.search_loading = more;
+            g_model.search_error = error;
+            ++g_model.search_epoch;
+        }
+        if (fetched && more &&
+            !background::run(
+                [connection, term = std::move(term), generation, media, sort, page, batch,
+                 catalog = std::move(catalog)] {
+                    job_search(connection, term, generation, media, sort, page, batch + 1, catalog);
+                },
+                background::Lane::requests))
+        {
+            std::lock_guard<std::mutex> guard(g_mutex);
+            if (current(connection) && generation == g_model.search_wanted)
+            {
+                g_model.search_loading = false;
+                g_model.search_error = "Some results could not load. Refresh to try again.";
+            }
+        }
+    }
 }
 
 void job_detail(Connection connection, const std::string &type, int id) noexcept
@@ -787,6 +840,7 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
         options.seasons = request::read_seasons(*doc);
         if (const auto *info = doc->find("mediaInfo"))
         {
+            options.media_id = static_cast<int>(info->num("id"));
             options.status = static_cast<int>(info->num("status", 1));
             options.status4k = static_cast<int>(info->num("status4k", 1));
             options.jellyfin_id = jellyfin_id(*info);
@@ -1124,6 +1178,7 @@ void start_search(const std::string &term, int page = 1) noexcept
     }
 }
 
+std::vector<int> visible_results() noexcept;
 std::vector<int> visible_requests() noexcept;
 
 const Request *sheet_request() noexcept;
@@ -1138,8 +1193,25 @@ void snapshot() noexcept
         std::lock_guard<std::mutex> guard(g_mutex);
         if (g_model.search_epoch != g_view.seen_search_epoch)
         {
+            std::string selected;
+            if (!g_view.field_focused)
+            {
+                const auto visible = visible_results();
+                if (g_view.grid_index >= 0 && g_view.grid_index < static_cast<int>(visible.size()))
+                {
+                    const auto &item = g_view.results[visible[g_view.grid_index]];
+                    selected = key_for(item.media_type, item.tmdb_id);
+                }
+            }
             g_view.seen_search_epoch = g_model.search_epoch;
             g_view.results = g_model.results;
+            const auto visible = visible_results();
+            for (std::size_t i = 0; i < visible.size(); ++i)
+            {
+                const auto &item = g_view.results[visible[i]];
+                if (key_for(item.media_type, item.tmdb_id) == selected)
+                    g_view.grid_index = static_cast<int>(i);
+            }
             g_view.page = g_model.page;
             g_view.pages = g_model.pages;
         }
@@ -1404,15 +1476,30 @@ void submit(const Title &title) noexcept
     }
 }
 
+const Request *recorded_request() noexcept
+{
+    const Request *found = nullptr;
+    for (const auto &item : g_view.requests)
+    {
+        if (g_view.sheet_from_requests && item.id == g_view.sheet_request_id)
+            return &item;
+        if (!g_view.sheet_from_requests && item.tmdb_id == g_view.sheet.tmdb_id &&
+            item.media_type == g_view.sheet.media_type && item.is4k == g_view.is4k &&
+            (!found || item.id > found->id))
+            found = &item;
+    }
+    return found;
+}
 const Request *sheet_request() noexcept
 {
-    for (const auto &item : g_view.requests)
-        if ((item.approval == 1 || item.approval == 2) &&
-            ((g_view.sheet_from_requests && item.id == g_view.sheet_request_id) ||
-             (!g_view.sheet_from_requests && item.tmdb_id == g_view.sheet.tmdb_id &&
-              item.media_type == g_view.sheet.media_type && item.is4k == g_view.is4k)))
-            return &item;
-    return nullptr;
+    const auto *item = recorded_request();
+    return item && (item->approval == 1 || item->approval == 2) ? item : nullptr;
+}
+bool can_clear_data() noexcept
+{
+    return g_view.authenticated && !g_view.submitting && !g_view.options_loading &&
+           g_view.options.loaded && g_view.options.error.empty() && g_view.options.media_id > 0 &&
+           (g_view.permissions & (2u | 16u)) != 0;
 }
 bool can_cancel() noexcept
 {
@@ -1460,6 +1547,72 @@ void cancel_request() noexcept
                                          ? "Request removed"
                                          : response_error(response, "Could not cancel request");
                     ++g_model.notice_epoch;
+                }
+                if (response.ok())
+                {
+                    job_requests(connection);
+                    job_search(connection, query, catalog_epoch, media, sort, page);
+                }
+            },
+            background::Lane::requests))
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_model.submitting = false;
+        g_model.notice = "The request worker could not start. Try again.";
+        ++g_model.notice_epoch;
+    }
+}
+void clear_data() noexcept
+{
+    if (!can_clear_data())
+        return;
+    const auto connection = connection_snapshot();
+    const int media_id = g_view.options.media_id;
+    const auto title = g_view.sheet;
+    long catalog_epoch;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (g_model.submitting)
+            return;
+        g_model.submitting = true;
+        catalog_epoch = ++g_model.search_wanted;
+    }
+    g_view.clear_confirm = false;
+    g_view.sheet_open = false;
+    if (!background::run(
+            [connection, media_id, title, catalog_epoch, query = g_view.query,
+             media = g_view.media_filter, sort = g_view.sort, page = g_view.page]
+            {
+                {
+                    std::lock_guard<std::mutex> guard(g_mutex);
+                    if (!current(connection))
+                        return;
+                }
+                const auto response = http::send("DELETE", connection.host, connection.port,
+                                                 "/api/v1/media/" + std::to_string(media_id),
+                                                 auth_headers(connection), {}, "application/json");
+                {
+                    std::lock_guard<std::mutex> guard(g_mutex);
+                    if (!current(connection))
+                        return;
+                    g_model.submitting = false;
+                    g_model.notice = response.ok()
+                                         ? "Request data cleared"
+                                         : response_error(response, "Could not clear request data");
+                    ++g_model.notice_epoch;
+                    if (response.ok())
+                    {
+                        g_model.known_titles.erase(key_for(title.media_type, title.tmdb_id));
+                        for (auto &entry : g_model.results)
+                            if (entry.tmdb_id == title.tmdb_id &&
+                                entry.media_type == title.media_type)
+                            {
+                                entry.availability = entry.availability4k = Availability::unknown;
+                                entry.requested = false;
+                                entry.jellyfin_id.clear();
+                            }
+                        ++g_model.search_epoch;
+                    }
                 }
                 if (response.ok())
                 {
@@ -1561,7 +1714,8 @@ void choose_default_server() noexcept
 void load_options(bool is4k = false) noexcept
 {
     const auto connection = connection_snapshot();
-    g_view.episodes_open = g_view.cancel_confirm = false;
+    g_view.episodes_open = g_view.cancel_confirm = g_view.clear_confirm = false;
+    g_view.clear_focused = false;
     g_view.options = {};
     g_view.options_loading = true;
     g_view.is4k = is4k;
@@ -1765,7 +1919,7 @@ bool search_input() noexcept
     }
     if (g_view.field_focused)
     {
-        if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::r3))
+        if (pad::pressed(pad::Button::cross))
         {
             if (g_view.toolbar == 0)
                 open_keyboard(Field::query);
@@ -1920,12 +2074,17 @@ bool sheet_input() noexcept
                          g_view.episode_index + 1);
         return true;
     }
-    if (g_view.cancel_confirm)
+    if (g_view.cancel_confirm || g_view.clear_confirm)
     {
         if (pad::pressed(pad::Button::circle))
-            g_view.cancel_confirm = false;
+            g_view.cancel_confirm = g_view.clear_confirm = false;
         else if (pad::pressed(pad::Button::cross))
-            cancel_request();
+        {
+            if (g_view.clear_confirm)
+                clear_data();
+            else
+                cancel_request();
+        }
         return true;
     }
     if (pad::pressed(pad::Button::circle))
@@ -1936,6 +2095,20 @@ bool sheet_input() noexcept
     const auto rows = sheet_rows();
     const int action = static_cast<int>(rows.size());
     g_view.sheet_row = std::clamp(g_view.sheet_row, 0, action);
+    if (!can_clear_data())
+        g_view.clear_focused = false;
+    if (g_view.sheet_row == action && can_clear_data())
+    {
+        if (pad::pressed(pad::Button::left))
+            g_view.clear_focused = false;
+        if (pad::pressed(pad::Button::right))
+            g_view.clear_focused = true;
+        if (pad::pressed(pad::Button::cross) && g_view.clear_focused)
+        {
+            g_view.clear_confirm = true;
+            return true;
+        }
+    }
     if (pad::pressed(pad::Button::up))
         g_view.sheet_row = std::max(0, g_view.sheet_row - 1);
     if (pad::pressed(pad::Button::down))
@@ -1951,7 +2124,7 @@ bool sheet_input() noexcept
     if (pad::pressed(pad::Button::options))
         g_view.sheet_row = action;
     if (pad::pressed(pad::Button::square) && g_view.sheet.media_type == "tv" &&
-        g_view.options.loaded)
+        g_view.options.loaded && !sheet_locked())
     {
         change_sheet_row({SheetKind::all_seasons}, 1);
         return true;
@@ -2090,12 +2263,17 @@ void draw_field() noexcept
         if (i == 0)
             icons::draw(icons::Icon::ps_triangle, x + 18, kFieldY + 18, 24,
                         icons::button::triangle);
-        text::draw_ellipsized(
-            x + (i == 0 ? 58 : 20), text::centered_y(kFieldY, 60, label, 24, Weight::medium),
-            w - (i == 0 ? 76 : 62), label, 24, Weight::medium, gfx::palette::text);
         if (i != 0)
-            icons::draw(icons::Icon::chevron_right, x + w - 32, kFieldY + 21, 18,
-                        gfx::palette::text_dim);
+        {
+            gfx::stroke_rounded_rect(x + 16, kFieldY + 14, 32, 32, 16, 1, gfx::palette::text_dim);
+            const std::string stick = i == 1 ? "L3" : "R3";
+            text::draw(x + 32 - text::measure(stick, 14, Weight::bold) / 2,
+                       text::centered_y(kFieldY + 14, 32, stick, 14, Weight::bold), stick, 14,
+                       Weight::bold, gfx::palette::text_dim);
+        }
+        text::draw_ellipsized(
+            x + (i == 0 ? 58 : 62), text::centered_y(kFieldY, 60, label, 24, Weight::medium),
+            w - (i == 0 ? 76 : 78), label, 24, Weight::medium, gfx::palette::text);
         x += w + 24;
     }
     const std::string summary =
@@ -2107,17 +2285,23 @@ void draw_field() noexcept
     text::draw(ui::kContentX, kFieldY + 86, summary, 20, Weight::regular, gfx::palette::text_dim);
     if (g_view.mode == 0)
     {
-        const std::string page = std::to_string(g_view.page) + " / " + std::to_string(g_view.pages);
-        const int y = gfx::kHeight - 36, right = ui::kContentRight;
+        constexpr int width = 188, height = 36;
+        const int x = ui::kContentRight - width, y = gfx::kHeight - height - 14;
+        gfx::rounded_rect(x, y, width, height, 12, gfx::palette::control);
+        gfx::stroke_rounded_rect(x, y, width, height, 12, 1,
+                                 g_view.search_loading ? gfx::palette::focus_border
+                                                       : gfx::palette::control_border);
+        const auto previous = g_view.page > 1 ? gfx::palette::text_dim : gfx::palette::text_faint;
         const auto next =
             g_view.page < g_view.pages ? gfx::palette::text_dim : gfx::palette::text_faint;
-        const auto previous = g_view.page > 1 ? gfx::palette::text_dim : gfx::palette::text_faint;
-        text::draw(right - 232, y, "L1", 18, Weight::medium, previous);
-        icons::draw(icons::Icon::chevron_left, right - 198, y, 20, previous);
-        text::draw(right - 116 - text::measure(page, 18, Weight::medium) / 2, y, page, 18,
-                   Weight::medium, gfx::palette::text_faint);
-        icons::draw(icons::Icon::chevron_right, right - 54, y, 20, next);
-        text::draw(right - 26, y, "R1", 18, Weight::medium, next);
+        const std::string page = std::to_string(g_view.page) + " / " + std::to_string(g_view.pages);
+        text::draw(x + 12, text::centered_y(y, height, "L1", 16, Weight::medium), "L1", 16,
+                   Weight::medium, previous);
+        text::draw(x + (width - text::measure(page, 18, Weight::medium)) / 2,
+                   text::centered_y(y, height, page, 18, Weight::medium), page, 18, Weight::medium,
+                   gfx::palette::text);
+        text::draw(x + width - 32, text::centered_y(y, height, "R1", 16, Weight::medium), "R1", 16,
+                   Weight::medium, next);
     }
 }
 
@@ -2237,6 +2421,15 @@ void draw_results() noexcept
                                  kCardH + 120);
         }
     gfx::pop_clip();
+    if (rows > visible_rows)
+    {
+        const int x = ui::kContentRight + 12, y = kGridY;
+        const int height = gfx::kHeight - kGridY - 70;
+        const int thumb = std::max(30, height * visible_rows / rows);
+        gfx::rounded_rect(x, y, 3, height, 1, gfx::palette::control_border);
+        gfx::rounded_rect(x - 1, y + (height - thumb) * first / (rows - visible_rows), 5, thumb, 2,
+                          gfx::palette::focus_border);
+    }
 }
 
 void draw_progress(const Request &request, int x, int y, int width) noexcept
@@ -2385,11 +2578,7 @@ std::string profile_label() noexcept
 {
     if (sheet_locked())
     {
-        if (g_view.sheet_from_requests)
-            for (const auto &item : g_view.requests)
-                if (item.id == g_view.sheet_request_id && !item.profile_name.empty())
-                    return item.profile_name;
-        if (const auto *item = sheet_request(); item && !item->profile_name.empty())
+        if (const auto *item = recorded_request(); item && !item->profile_name.empty())
             return item->profile_name;
         return "Quality set by request server";
     }
@@ -2428,16 +2617,6 @@ void draw_sheet() noexcept
                        Weight::regular, gfx::palette::text_dim);
     draw_status_pill(x + 40, y + 472, title.availability,
                      title.availability == Availability::processing ? "Requested" : "");
-    text::draw(x + 40, y + 540, g_view.is4k ? "4K request" : "Standard request", 24, Weight::medium,
-               gfx::palette::text);
-    text::draw_wrapped(x + 40, y + 584, 264, 3, 30, profile_label(), 22, Weight::regular,
-                       gfx::palette::text_dim);
-    if (!config::current().seerr_user.empty())
-    {
-        text::draw(x + 40, y + 720, "Requesting as", 19, Weight::regular, gfx::palette::text_faint);
-        text::draw_ellipsized(x + 40, y + 752, 264, config::current().seerr_user, 24,
-                              Weight::medium, gfx::palette::text);
-    }
     const auto rows = sheet_rows();
     const int count = static_cast<int>(rows.size());
     g_view.sheet_row = std::clamp(g_view.sheet_row, 0, count);
@@ -2494,18 +2673,21 @@ void draw_sheet() noexcept
                     : !season.selectable(g_view.is4k)
                         ? "Already requested"
                         : std::to_string(season.episodes) + " episodes";
-            gfx::stroke_rounded_rect(tx + 8, ry + 16, 22, 22, 5, 1,
-                                     enabled ? gfx::palette::text_dim
-                                             : gfx::palette::control_border);
-            if (selected_season(season.number))
-                icons::draw(icons::Icon::check, tx + 10, ry + 18, 18, gfx::palette::accent_alt);
+            if (!sheet_locked())
+            {
+                gfx::stroke_rounded_rect(tx + 8, ry + 16, 22, 22, 5, 1,
+                                         enabled ? gfx::palette::text_dim
+                                                 : gfx::palette::control_border);
+                if (selected_season(season.number))
+                    icons::draw(icons::Icon::check, tx + 10, ry + 18, 18, gfx::palette::accent_alt);
+            }
             if (focused)
                 icons::draw(icons::Icon::ps_triangle, tx + tw - 30, ry + 16, 22,
                             icons::button::triangle);
             break;
         }
         }
-        const int inset = row.kind == SheetKind::season ? 48 : 8;
+        const int inset = row.kind == SheetKind::season && !sheet_locked() ? 48 : 8;
         text::draw_ellipsized(tx + inset, text::centered_y(ry, 54, label, 23, Weight::medium),
                               320 - inset, label, 23, Weight::medium,
                               enabled || focused ? gfx::palette::text : gfx::palette::text_dim);
@@ -2540,15 +2722,40 @@ void draw_sheet() noexcept
     const int by = y + std::clamp(308 + std::min(count, 6) * 60 + 92, 420, 768);
     constexpr int bh = 66;
     const bool actionable = sheet_action_enabled();
-    gfx::rounded_rect(tx - 14, by, tw + 28, bh, 14, gfx::palette::control);
-    if (g_view.sheet_row == count && actionable)
-        ui::focus_pill(tx - 14, by, tw + 28, bh, ui::FocusGroup::discover_sheet, title.tmdb_id);
+    const bool clear = can_clear_data();
+    const int clear_width = clear ? 236 : 0;
+    const int action_width = tw + 28 - (clear ? clear_width + 20 : 0);
+    gfx::rounded_rect(tx - 14, by, action_width, bh, 14, gfx::palette::control);
+    if (g_view.sheet_row == count && actionable && !g_view.clear_focused)
+        ui::focus_pill(tx - 14, by, action_width, bh, ui::FocusGroup::discover_sheet,
+                       title.tmdb_id);
     if (actionable)
         icons::draw(icons::Icon::ps_cross, tx + 12, by + 20, 26, icons::button::cross);
-    text::draw_ellipsized(tx + 58, text::centered_y(by, bh, action, 26, Weight::bold), tw - 74,
-                          action, 26, Weight::bold,
+    text::draw_ellipsized(tx + 58, text::centered_y(by, bh, action, 26, Weight::bold),
+                          action_width - 90, action, 26, Weight::bold,
                           actionable ? gfx::palette::text : gfx::palette::text_faint);
-    ui::draw_button_hints(tx, y + 854, {{icons::Icon::ps_circle, "Close"}});
+    if (clear)
+    {
+        const int cx = tx + tw + 14 - clear_width;
+        gfx::rounded_rect(cx, by, clear_width, bh, 14, gfx::palette::control);
+        if (g_view.sheet_row == count && g_view.clear_focused)
+            ui::focus_pill(cx, by, clear_width, bh, ui::FocusGroup::discover_sheet, title.tmdb_id);
+        text::draw(cx + (clear_width - text::measure("Clear Data", 24, Weight::medium)) / 2,
+                   text::centered_y(by, bh, "Clear Data", 24, Weight::medium), "Clear Data", 24,
+                   Weight::medium, gfx::palette::text_dim);
+    }
+    const auto *record = recorded_request();
+    std::string owner = record ? record->requested_by : "";
+    if (owner.empty() && !sheet_locked())
+        owner = config::current().seerr_user;
+    const std::string attribution =
+        owner.empty() ? "" : std::string(record ? "Requested by " : "Requesting as ") + owner;
+    text::draw_ellipsized(x + 40, y + 832, width - 260, attribution, 20, Weight::medium,
+                          gfx::palette::text_dim);
+    text::draw_ellipsized(x + 40, y + 862, width - 260,
+                          std::string(g_view.is4k ? "4K · " : "") + profile_label(), 19,
+                          Weight::regular, gfx::palette::text_faint);
+    ui::draw_button_hints(x + width - 156, y + 854, {{icons::Icon::ps_circle, "Close"}});
 }
 
 void draw_episode_panel() noexcept
@@ -2592,16 +2799,21 @@ void draw_cancel_confirmation() noexcept
     gfx::clear(gfx::rgb(0x08, 0x09, 0x0d));
     constexpr int x = 670, y = 340, w = 1000;
     gfx::rounded_rect(x, y, w, 370, 20, gfx::rgb(0x12, 0x15, 0x1d));
-    text::draw(x + 36, y + 30, "Cancel this request?", 34, Weight::bold, gfx::palette::text);
+    const bool clear = g_view.clear_confirm;
+    text::draw(x + 36, y + 30, clear ? "Clear request data?" : "Cancel this request?", 34,
+               Weight::bold, gfx::palette::text);
     text::draw_ellipsized(x + 36, y + 90, w - 72, g_view.sheet.name, 26, Weight::medium,
                           gfx::palette::text);
-    text::draw_wrapped(x + 36, y + 146, w - 72, 3, 30,
-                       "Removes the request from Seerr. Files already in your library stay. A "
-                       "download already sent to Sonarr or Radarr may continue.",
-                       23, Weight::regular, gfx::palette::text_dim);
-    ui::draw_button_hints(
-        x + 36, y + 302,
-        {{icons::Icon::ps_cross, "Cancel request"}, {icons::Icon::ps_circle, "Keep request"}});
+    text::draw_wrapped(
+        x + 36, y + 146, w - 72, 3, 30,
+        clear ? "Clears Seerr tracking for this title, including all seasons and both "
+                "formats. Library files stay. Downloads already queued may continue."
+              : "Removes the request from Seerr. Files already in your library stay. A "
+                "download already sent to Sonarr or Radarr may continue.",
+        23, Weight::regular, gfx::palette::text_dim);
+    ui::draw_button_hints(x + 36, y + 302,
+                          {{icons::Icon::ps_cross, clear ? "Clear Data" : "Cancel request"},
+                           {icons::Icon::ps_circle, clear ? "Keep data" : "Keep request"}});
 }
 
 void draw_toast() noexcept
@@ -2698,6 +2910,21 @@ bool handle_input() noexcept
             refresh_requests();
         return true;
     }
+    if (g_view.mode == 0 && (pad::pressed(pad::Button::l3) || pad::pressed(pad::Button::r3)))
+    {
+        const bool media = pad::pressed(pad::Button::l3);
+        if (media)
+            g_view.media_filter = (g_view.media_filter + 1) % 3;
+        else
+        {
+            g_view.sort = (g_view.sort + 1) % 5;
+            g_view.query.clear();
+        }
+        g_view.toolbar = media ? 1 : 2;
+        g_view.field_focused = true;
+        reload_catalog();
+        return true;
+    }
     if (g_view.mode == 0 && !g_view.search_loading &&
         (pad::pressed(pad::Button::l1) || pad::pressed(pad::Button::r1)))
     {
@@ -2727,7 +2954,7 @@ void draw() noexcept
     {
         if (g_view.episodes_open)
             draw_episode_panel();
-        else if (g_view.cancel_confirm)
+        else if (g_view.cancel_confirm || g_view.clear_confirm)
             draw_cancel_confirmation();
         else
             draw_sheet();

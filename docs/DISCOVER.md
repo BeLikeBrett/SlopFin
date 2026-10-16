@@ -30,6 +30,8 @@ Jellyfin sign-in.
 | Cross | Open a title, then choose its action |
 | Square | Switch Browse / My requests; fixed hint beside the tabs |
 | L1 / R1 | Previous / next catalog page |
+| L3 | Cycle Movies & series / Movies / Series |
+| R3 | Cycle Trending / Popular / Top rated / Newest / Upcoming |
 | Circle | Close the title or return to the sidebar |
 
 Availability badges come from the request server. Approved or queued titles
@@ -41,7 +43,9 @@ apply immediately. These catalogs use the server's discovery endpoints and
 support page navigation with L1/R1; search uses the server's relevance order.
 Choosing a catalog control clears the search. Top rated requires at least 200
 votes; Newest excludes future dates and requires 10 votes to reduce empty entries.
-When browsing both types, SlopFin combines the same page of each catalog.
+Each page combines up to five upstream pages and fills progressively. Movies or
+series have up to 100 titles; combined catalogs can have up to 200. A scrollbar
+shows your position. The selected title stays focused as more results arrive.
 My requests has no filters.
 
 ## Seasons and quality
@@ -93,6 +97,12 @@ ordinary users to remove their own pending requests; administrators and request
 managers can remove other request states. The confirmation explains that library
 files stay and downloads already sent to Sonarr/Radarr may continue. The server
 makes the final permission decision.
+
+Administrators and request managers can also choose **Clear Data** beside the
+main action. After confirmation, it clears Seerr’s tracking for the whole title,
+including seasons and standard/4K requests. It does not delete library files or
+cancel downloads already queued. Use it to reset stuck tracking; an available
+title can reappear after the server scans the library.
 
 The address, API key or session is saved in the console's protected
 `/data/slopfin/config.json`. Passwords are used only for sign-in and are not

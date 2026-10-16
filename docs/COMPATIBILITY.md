@@ -58,8 +58,8 @@ a real TrueHD/Atmos movie sample. They did not establish working TrueHD passthro
 | Subtitles | Text styling/timing; server burn-in for picture subtitles | Burning subtitles can force server video transcoding. |
 | Skip Intro | Jellyfin Intro segments or validated named chapters; **Square** skips | Needs timestamps on the server. Open track/quality panels hide the button. |
 | Avatar editor | Circular crop, movement, zoom and JPEG export | USB/console gallery needs the sandbox helper and elfldr. New-editor upload was not exercised against the production server. |
-| Discover / requests | Seerr/Jellyseerr search, requests and download tracking; shared UI and live API checked on Linux | Requires a separate request server. Final native integration check pending. [Setup](DISCOVER.md). |
-| Folder updates | GitHub download, digest/ZIP checks, backup/rollback and restart helper | Requires elfldr and a matching folder install. Final console download/install test pending for this build. |
+| Discover / requests | Seerr/Jellyseerr search, requests and download tracking; shared UI and live API checked on Linux | Native catalog, own-request list, saved profiles and context-aware actions checked on firmware 8.20. Request creation/removal uses fixture tests; production request records were preserved. Requires a separate request server. [Setup](DISCOVER.md). |
+| Folder updates | GitHub download, digest/ZIP checks, backup/rollback and restart helper | Native GitHub download, verification, fresh backup, installation and automatic restart passed with 1.08 on firmware 8.20. Requires elfldr and a matching folder install. |
 
 Text coverage is chiefly Latin, Greek and Cyrillic. Other firmware, unusual metadata,
 large libraries and display/receiver combinations need independent testing.

@@ -62,6 +62,7 @@ struct Options
     bool partial = true;
     int status = 1;
     int status4k = 1;
+    int media_id = 0;
     std::string jellyfin_id;
     std::string jellyfin_id4k;
     std::vector<Season> seasons;

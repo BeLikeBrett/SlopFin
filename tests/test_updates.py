@@ -113,6 +113,24 @@ class Updates(unittest.TestCase):
         self.assertEqual(self.stage(self.archive()).returncode, 0)
         self.assertEqual((stage / "manifest").stat().st_mode & 0o777, 0o644)
 
+    def test_replace_stale_readonly_staging_without_modifying_linked_files(self):
+        self.assertEqual(self.stage(self.archive()).returncode, 0)
+        stage = self.root / "staged"
+        old = self.root / "old-executable"
+        old.hardlink_to(stage / "eboot.bin")
+        old.chmod(0o444)
+        outside = self.root / "outside-part"
+        outside.write_bytes(b"keep this file")
+        (stage / "eboot.bin.part").symlink_to(outside)
+        updated = b"n" * 2048
+        self.assertEqual(self.stage(self.archive({"eboot.bin": updated})).returncode, 0)
+        self.assertEqual((stage / "eboot.bin").read_bytes(), updated)
+        self.assertEqual((stage / "eboot.bin").stat().st_mode & 0o777, 0o644)
+        self.assertEqual(old.read_bytes(), self.files["eboot.bin"])
+        self.assertEqual(old.stat().st_mode & 0o777, 0o444)
+        self.assertEqual(outside.read_bytes(), b"keep this file")
+        self.assertFalse((stage / "eboot.bin.part").exists())
+
     def test_install_and_keep_settings(self):
         target, old, config = self.prepare_install()
         self.assertEqual(self.install(target).returncode, 0)
