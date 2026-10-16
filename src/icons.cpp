@@ -248,7 +248,20 @@ const unsigned char *mask(Icon icon, int size) noexcept
         {
             const Vec p{(static_cast<float>(x) + 0.5f) / scale,
                         (static_cast<float>(y) + 0.5f) / scale};
-            const float coverage = std::clamp(0.5f - field(icon, p) * scale, 0.0f, 1.0f);
+            const float distance = field(icon, p) * scale;
+            float coverage = distance <= -0.75f ? 1.0f : 0.0f;
+            if (distance > -0.75f && distance < 0.75f)
+            {
+                for (int sy = 0; sy < 4; ++sy)
+                    for (int sx = 0; sx < 4; ++sx)
+                    {
+                        const Vec sample{(x + (sx + 0.5f) * 0.25f) / scale,
+                                         (y + (sy + 0.5f) * 0.25f) / scale};
+                        coverage +=
+                            std::clamp(0.5f - field(icon, sample) * scale * 4.0f, 0.0f, 1.0f) /
+                            16.0f;
+                    }
+            }
             entry.coverage[static_cast<std::size_t>(y) * size + x] =
                 static_cast<unsigned char>(coverage * 255.0f + 0.5f);
         }

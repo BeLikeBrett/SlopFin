@@ -1,13 +1,13 @@
 # Developer guide
 
-Start with [Contributing](../../CONTRIBUTING.md), then choose the part you need.
+Start with [Contributing](../../.github/CONTRIBUTING.md), then choose the part you need.
 All commands run from the repository root.
 
 | Task | Guide |
 | --- | --- |
 | Build for PS5 | [Build setup](BUILD.md) |
 | Preview the interface on Linux | [Host build](HOST_BUILD.md) |
-| Understand the app | [Architecture](ARCHITECTURE.md) and [platform constraints](../../CLAUDE.md) |
+| Understand the app | [Architecture](ARCHITECTURE.md) and [platform constraints](CONSTRAINTS.md) |
 | Validate a change | [Testing](TESTING.md) |
 | Work on hardware video | [Video decode](VIDEO_DECODE.md) and [HDR](HDR.md) |
 | Work on audio | [Audio paths](AUDIO.md) and [software decoder](SOFTWARE_AUDIO.md) |

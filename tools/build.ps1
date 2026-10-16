@@ -38,7 +38,7 @@ if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
     Fail "WSL was not found. Install WSL and a Linux distribution first."
 }
 
-$build = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "tools/build.sh"
+$build = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "build.sh"
 $arguments = @("--exec", "env")
 foreach ($name in @(
         "APP_DEFINITIONS",

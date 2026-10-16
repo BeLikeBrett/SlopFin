@@ -102,7 +102,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Publish preview downloads
+    name: Publish downloads
     if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
@@ -135,7 +135,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" release/* \
-              --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
-              --title "SlopFin $release_version — preview" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "SlopFin $release_version" \
               --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
           fi

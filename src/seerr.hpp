@@ -71,6 +71,7 @@ void open() noexcept;
 /* False when the viewer leaves; the caller returns to the sidebar. */
 bool handle_input() noexcept;
 bool modal_open() noexcept;
+bool covers_background() noexcept;
 bool take_settings_request() noexcept;
 std::string take_open_item() noexcept;
 void close_settings() noexcept;

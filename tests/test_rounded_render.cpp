@@ -4,6 +4,8 @@
 #include "../host/host_platform.hpp"
 #include <cassert>
 #include <string_view>
+#include <vector>
+#include <algorithm>
 namespace slopfin::trace
 {
 void mark(std::string_view) noexcept
@@ -42,6 +44,16 @@ int main()
             partial |= c != outside && c != pixel(300, 160);
         }
     assert(partial);
+    const std::vector<std::uint32_t> reference(p, p + gfx::surface_words());
+    gfx::clear(background);
+    gfx::rounded_rect(100, 100, 400, 120, 24, gfx::rgba(0, 164, 220, 180));
+    assert(std::equal(reference.begin(), reference.end(), gfx::back_buffer()));
+    gfx::clear(background);
+    gfx::push_clip(150, 110, 200, 80);
+    gfx::rounded_rect(100, 100, 400, 120, 24, gfx::rgba(0, 164, 220, 180));
+    gfx::pop_clip();
+    assert(pixel(149, 120) == outside && pixel(200, 109) == outside);
+    assert(pixel(200, 120) != outside && pixel(350, 120) == outside);
     gfx::rounded_horizontal_gradient(10, 10, -1, 0, 24, background, background);
     gfx::present();
     assert(host::write_png("/tmp/slopfin-rounded-render-test.png"));

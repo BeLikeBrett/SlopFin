@@ -27,7 +27,7 @@ def console_host(env_file=None, environ=None):
                     value = value.split("#", 1)[0].strip()
                 if value:
                     return value
-    raise ValueError("Set PS5_HOST in the environment or the project's .env file (see .env.example)")
+    raise ValueError("Set PS5_HOST in the environment or the project's .env file (see tools/env.example)")
 
 
 if __name__ == "__main__":

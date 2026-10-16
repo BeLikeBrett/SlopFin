@@ -317,7 +317,7 @@ help:
 	  'Build variables:     APP_DEFINITIONS, APP_INCLUDE_PATHS, APP_STATIC_ARCHIVES, APP_RUNTIME_MODULES' \
 	  'PacBrew variables:   PACBREW_PACKAGES, PACBREW_INCLUDE_PATHS, PACBREW_STATIC_ARCHIVES' \
 	  'Deploy variables:    FTP_PORT=2121, DEPLOY_FORMAT=folder|ffpfsc|ffpkg, DEPLOY_DRY_RUN=0|1' \
-	  'Local defaults:      Copy .env.example to the ignored .env file' \
+	  'Local defaults:      Copy tools/env.example to the ignored .env file' \
 	  'make host            Build the Linux preview into build/host/slopfin' \
 	  'make host-run        Build and run it (HOST_ARGS=... to pass flags)' \
 	  'make clean           Remove build/, dist/, and generated libc.prx' \

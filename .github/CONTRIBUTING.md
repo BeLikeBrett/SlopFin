@@ -1,8 +1,8 @@
 # Contributing
 
 Keep changes reproducible and playback claims tied to evidence. Read the
-[build guide](docs/development/BUILD.md), [architecture](docs/development/ARCHITECTURE.md), [project constraints](CLAUDE.md) and
-[compatibility guide](docs/COMPATIBILITY.md) before changing platform code.
+[build guide](../docs/development/BUILD.md), [architecture](../docs/development/ARCHITECTURE.md), [project constraints](../docs/development/CONSTRAINTS.md) and
+[compatibility guide](../docs/COMPATIBILITY.md) before changing platform code.
 
 Before opening a pull request:
 
@@ -24,8 +24,8 @@ JSON and binary assets are covered by `LICENSE` and `NOTICE.md`.
 
 Changes to `tooling/native/` need a deterministic host check and a focused
 format regression. Loader changes need hardware validation before release.
-Release tags must exactly match `sce_sys/param.json`'s `contentVersion`
-(`NN.NNN.NNN`, without a `v` prefix). Coordinate deployments when sharing a console.
+Release tags use the display version, for example `1.08` for the PS5
+`contentVersion` `01.000.008` (without a `v` prefix). Coordinate deployments when sharing a console.
 
 For bug reports, include the build, firmware/loader, Jellyfin version, relevant
 codec/container/subtitle details and whether the server copied or transcoded

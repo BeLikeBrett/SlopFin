@@ -19,7 +19,7 @@ for file in "${repository_files[@]}"; do
     [[ -f $file ]] || continue
     case "$file" in
         vendor/*) continue ;;
-        *.c|*.cc|*.cpp|*.h|*.hpp|*.ld|*.py|*.ps1|*.sh|*.rs|*.yml|*.yaml|Makefile|.clang-format|.clang-tidy|.env.example)
+        *.c|*.cc|*.cpp|*.h|*.hpp|*.ld|*.py|*.ps1|*.sh|*.rs|*.yml|*.yaml|Makefile|.clang-format|.clang-tidy|*/env.example)
             header=$(head -n 20 "$file")
             grep -Eq 'Copyright \(C\) [0-9]{4} .+' <<<"$header"
             grep -Fq 'SPDX-License-Identifier: GPL-3.0-or-later' <<<"$header"

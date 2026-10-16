@@ -19,7 +19,7 @@ $files += @(
     ".clang-tidy",
     ".gitattributes",
     ".gitignore",
-    ".env.example",
+    "tools/env.example",
     "Makefile",
     "tooling/prospero-clang18",
     "tooling/native/runtime/api-surface.txt",

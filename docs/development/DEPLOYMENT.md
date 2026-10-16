@@ -71,7 +71,7 @@ Supported variables are:
 | `PS5_FTP_PASSWORD` | `codex` | FTP password |
 | `DEPLOY_DRY_RUN` | `0` | Use `1` to build and print the target without networking |
 
-For repeated local work, copy `.env.example` to the ignored `.env` file and
+For repeated local work, copy `tools/env.example` to the ignored `.env` file and
 set `PS5_HOST`, `FTP_PORT`, and `DEPLOY_FORMAT` there. Command-line Make values
 still override file defaults.
 
