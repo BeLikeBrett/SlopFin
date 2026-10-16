@@ -8,10 +8,11 @@ on until it returns.
 The console must be jailbroken with its payload loader **elfldr on port 9021**
 running. SlopFin sends its bundled installer helper to the local console; it
 does not require a development computer. If the helper cannot start, the app
-stays open and reports the problem.
+stays open and reports the problem. Localhost-only loaders work; port 9021
+does not need to be accessible from another device.
 
-Build **01.000.003** introduced the updater. Earlier releases need a one-time
-manual folder upgrade. Extract the complete folder download, close SlopFin,
+Build **01.000.007** fixes GitHub downloads. Versions **01.000.006 and earlier**
+need a one-time manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.
 Future published folder releases can be installed from inside the app.
@@ -50,10 +51,8 @@ file only after SlopFin is closed and the console has been restarted.
 Do not copy files over a running app. A power interruption during installation
 can require this manual recovery; the helper cannot run while the console is off.
 
-Native FPKG installations require their package installer. The folder updater
-refuses to replace a folder that does not match the running app. Native package
-mounting remains experimental on the test console; see
-[native package status](development/NATIVE_FPKG.md).
+The updater verifies that the installed folder matches the running app before
+replacing files. Install the complete folder release if this check fails.
 
 ## Download errors
 

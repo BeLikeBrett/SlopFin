@@ -78,20 +78,13 @@ Music, audiobooks, books/comics, photo libraries and live TV are not implemented
 self-signed HTTPS certificates are unsupported. Other firmware and output
 devices need independent testing.
 
-## Updates
+## Releases
 
-Open **Settings → Updates** to check GitHub for a newer release, download it
-and install after verification. **ELF Loader (`elfldr`, port 9021)** must be
-running for installation. Your Jellyfin login and preferences are preserved.
+[Browse all releases](https://github.com/BeLikeBrett/SlopFin/releases) for downloads
+and version-specific patch notes.
 
-Discover supports Trending, Popular, Top rated, Newest and Upcoming catalogs,
-Movies/Series selection, page navigation, season requests and server-provided
-quality profiles. My requests shows your requests without filters, with episode
-guides and permission-aware cancellation. Updates and request browsing are preview
-features; report failures with your app version and server version.
-
-Earlier **01.000.000** installs need one complete folder upgrade to obtain the updater.
-[Update instructions and recovery](docs/UPDATES.md).
+Open **Settings → Updates** to check for updates in the app. Installation needs
+**ELF Loader (`elfldr`, port 9021)**. [Update guide](docs/UPDATES.md).
 
 ## Contribute
 

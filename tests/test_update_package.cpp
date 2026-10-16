@@ -98,6 +98,14 @@ int main(int argc, char **argv)
     assert(select_release(feed, "01.000.000").version == "01.000.001");
     assert(select_release(feed, "01.000.001").version.empty());
     assert(select_release(feed, "Unknown").version.empty());
+    auto with_notes = feed;
+    with_notes.insert(
+        with_notes.find("\"assets\""),
+        R"notes("body":"## Changes\n- **Faster** browsing\n- [Details](https://example.com)",)notes");
+    assert(select_release(with_notes, "01.000.000").notes == "• Faster browsing\n• Details");
+    assert(release_notes(std::string(5000, 'x')).size() <= 1024);
+    const auto long_line = "- " + std::string(300, 'x') + "\n";
+    assert(release_notes(long_line + long_line + long_line + long_line + long_line).size() <= 1024);
     feed.replace(feed.find("\"draft\":false"), 13, "\"draft\":true");
     assert(select_release(feed, "01.000.000").version.empty());
 }

@@ -12,9 +12,11 @@ struct Release
     std::string version, url, digest;
     std::size_t size = 0;
     bool preview = false;
+    std::string notes;
 };
 std::uint64_t version_number(std::string_view text) noexcept;
 bool trusted_download(std::string_view url) noexcept;
+std::string release_notes(std::string_view markdown) noexcept;
 Release select_release(std::string_view feed, std::string_view current) noexcept;
 bool stage_archive(const std::string &archive, const std::string &stage, const Release &release,
                    std::string &error) noexcept;

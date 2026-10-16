@@ -170,6 +170,7 @@ extern "C"
     int sceHttpCreateRequestWithURL2(int, const char *, const char *, std::uint64_t);
     int sceHttpAddRequestHeader(int, const char *, const char *, std::uint32_t);
     int sceHttpSetAutoRedirect(int, int);
+    int sceHttpSetResponseHeaderMaxSize(int, std::size_t);
     int sceHttpSetResolveTimeOut(int, std::uint32_t);
     int sceHttpSetConnectTimeOut(int, std::uint32_t);
     int sceHttpSetRecvTimeOut(int, std::uint32_t);
@@ -239,7 +240,9 @@ bool WebRequest::open(const std::string &url, const std::string &method,
         trace::mark("https: request failed " + std::to_string(request));
         return false;
     }
-    if (sceHttpSetAutoRedirect(request, 0) < 0 || sceHttpSetResolveTimeOut(request, 10000000) < 0 ||
+    // GitHub release redirects exceed the platform's default response-header limit.
+    if (sceHttpSetResponseHeaderMaxSize(request, 65536) < 0 ||
+        sceHttpSetAutoRedirect(request, 0) < 0 || sceHttpSetResolveTimeOut(request, 10000000) < 0 ||
         sceHttpSetConnectTimeOut(request, 10000000) < 0 ||
         sceHttpSetSendTimeOut(request, 10000000) < 0 ||
         sceHttpSetRecvTimeOut(request, media ? 30000000 : 10000000) < 0)

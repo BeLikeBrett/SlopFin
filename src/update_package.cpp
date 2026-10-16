@@ -39,6 +39,47 @@ bool trusted_download(std::string_view url) noexcept
     return host == "github.com" || host == "release-assets.githubusercontent.com" ||
            host == "objects.githubusercontent.com";
 }
+std::string release_notes(std::string_view markdown) noexcept
+{
+    markdown = markdown.substr(0, 4096);
+    std::string result;
+    int lines = 0;
+    while (!markdown.empty() && lines < 6 && result.size() < 1024)
+    {
+        const auto end = markdown.find('\n');
+        std::string line(markdown.substr(0, end));
+        markdown = end == std::string_view::npos ? std::string_view{} : markdown.substr(end + 1);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (line.empty() || line.starts_with('#') || line.starts_with("!["))
+            continue;
+        const bool bullet = line.starts_with("- ") || line.starts_with("* ");
+        if (bullet)
+            line.erase(0, 2);
+        line.erase(std::remove_if(line.begin(), line.end(),
+                                  [](char c) {
+                                      return c == '*' || c == '`' ||
+                                             (static_cast<unsigned char>(c) < 32 && c != '\t');
+                                  }),
+                   line.end());
+        for (std::size_t at = 0; (at = line.find('[', at)) != std::string::npos;)
+        {
+            const auto label = line.find("](", at);
+            const auto close = label == std::string::npos ? label : line.find(')', label + 2);
+            if (close == std::string::npos)
+                break;
+            line.replace(at, close - at + 1, line.substr(at + 1, label - at - 1));
+        }
+        const std::string prefix = (result.empty() ? std::string{} : "\n") + (bullet ? "• " : "");
+        if (result.size() + prefix.size() >= 1024)
+            break;
+        result += prefix;
+        result += line.substr(0, std::min<std::size_t>(300, 1024 - result.size()));
+        ++lines;
+    }
+    return result;
+}
+
 Release select_release(std::string_view feed, std::string_view current) noexcept
 {
     Release best;
@@ -71,8 +112,12 @@ Release select_release(std::string_view feed, std::string_view current) noexcept
             if (!std::all_of(digest.begin() + 7, digest.end(), [](char c)
                              { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
                 continue;
-            best = {std::string(tag), expected, std::string(digest.substr(7)),
-                    static_cast<std::size_t>(size), r->flag("prerelease")};
+            best = {std::string(tag),
+                    expected,
+                    std::string(digest.substr(7)),
+                    static_cast<std::size_t>(size),
+                    r->flag("prerelease"),
+                    release_notes(r->str("body"))};
             number = candidate;
         }
     }

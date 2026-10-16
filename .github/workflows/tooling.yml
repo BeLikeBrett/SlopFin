@@ -108,6 +108,10 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Check out release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+
       - name: Download checked artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -130,5 +134,5 @@ jobs:
             gh release create "$GITHUB_REF_NAME" release/* \
               --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
               --title "SlopFin $GITHUB_REF_NAME — preview" \
-              --notes "Download the folder ZIP and place PPSA99001 in /data/homebrew/. Existing users can check Settings → Updates with ELF Loader running. See README.md for features and docs/GETTING_STARTED.md for setup. FFmpeg source is included; SlopFin source is available with this tag."
+              --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
           fi

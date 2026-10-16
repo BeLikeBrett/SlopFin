@@ -60,7 +60,6 @@ a real TrueHD/Atmos movie sample. They did not establish working TrueHD passthro
 | Avatar editor | Circular crop, movement, zoom and JPEG export | USB/console gallery needs the sandbox helper and elfldr. New-editor upload was not exercised against the production server. |
 | Discover / requests | Seerr/Jellyseerr search, requests and download tracking; shared UI and live API checked on Linux | Requires a separate request server. Final native integration check pending. [Setup](DISCOVER.md). |
 | Folder updates | GitHub download, digest/ZIP checks, backup/rollback and restart helper | Requires elfldr and a matching folder install. Final console download/install test pending for this build. |
-| Native package | Build and payload checks | Mounting stalls before launch on the tested console; use the folder ZIP. |
 
 Text coverage is chiefly Latin, Greek and Cyrillic. Other firmware, unusual metadata,
 large libraries and display/receiver combinations need independent testing.

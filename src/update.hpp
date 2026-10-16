@@ -19,7 +19,7 @@ enum class Phase
 struct Status
 {
     Phase phase = Phase::idle;
-    std::string current, version, message;
+    std::string current, version, message, notes;
     std::size_t received = 0, total = 0;
     bool preview = false;
 };
