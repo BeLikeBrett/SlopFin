@@ -50,6 +50,9 @@ struct Request
     std::string poster_path;
     std::string requested_by;
     Availability availability = Availability::unknown;
+    bool is4k = false;
+    std::string profile_name;
+    std::vector<int> seasons;
     int approval = 0; /* 1 pending approval, 2 approved, 3 declined, 0 unknown */
     bool downloading = false;
     double progress = -1.0; /* 0..1 while downloading, -1 when not */

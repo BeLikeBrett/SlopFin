@@ -1,6 +1,6 @@
 # Updating SlopFin
 
-**Status:** preview 01.000.003 includes the updater. The 01.000.004 revision adds
+**Status:** preview 01.000.003 includes the updater. The upcoming revision adds
 download retries and clearer failures; its final console install/restart check
 is pending. Use manual folder installation if the updater fails.
 
