@@ -27,14 +27,22 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   starts the offered next episode; Circle dismisses it while controls are hidden.
 - **Discover and requests:** connect Seerr or Jellyseerr to find titles, request
   movies or missing TV seasons, browse episode guides and follow download
-  progress. Available titles open in Jellyfin when the request server supplies
+  progress. Requests made here refresh Home when Seerr reports new media available.
+  Available titles open in Jellyfin when the request server supplies
   their library ID.
   [Connect your request server](docs/DISCOVER.md).
-- **Category shortcuts:** hold L2/R2 and press Up/Down to move between libraries.
+- **Your navigation:** reorder or hide Home, Discover and libraries in Settings.
+  Hold L2/R2 and press Up/Down to move between libraries.
   A compact hint at the bottom of the sidebar keeps the shortcut visible.
 - **Profile and server dashboard:** crop avatars with D-pad and trigger zoom.
   Administrators can manage sessions, libraries and tasks from the controller.
   [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
+
+| Discover | Seasons and saved quality |
+| --- | --- |
+| ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
+
+Linux previews of the shared interface with sample requests.
 
 ## What plays, and where it is decoded
 
@@ -51,7 +59,7 @@ CPU or GPU. SlopFin does not transcode video or audio into another streaming cod
 | AC-3, E-AC-3, DTS core with HDMI passthrough | **TV / AV receiver** | Compressed audio over HDMI | Native passthrough heard on the test TV (2026-09-15); packing matches FFmpeg. Other equipment/lip sync need checks. No TrueHD / DTS-HD / DTS:X passthrough. |
 | Unsupported codec, rate, layout or selected quality | **Jellyfin server converts first**, then PS5 decodes the compatible result | Compatible stream; video can stay unchanged when only audio needs conversion | Negotiated before playback. A decoder failure during playback may require changing settings and retrying. |
 
-Use **Settings → Audio & video** to toggle HDMI passthrough, PS5 software audio
+Use **Settings → Audio/Video** to toggle HDMI passthrough, PS5 software audio
 decoding and Dolby Vision's HDR10-compatible fallback. No marker files or config
 editing needed. TrueHD uses the CPU decoder when enabled and compatible;
 passthrough takes priority for compatible DTS/E-AC-3. Changes apply on the next playback.

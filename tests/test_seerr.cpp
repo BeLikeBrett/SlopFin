@@ -11,6 +11,8 @@ slopfin::config::Settings settings;
 std::deque<std::function<void()>> jobs;
 int saved = 0, calls = 0;
 bool cancelled = false;
+float scroll_axis_value = 0.0f;
+int image_scale = 1;
 slopfin::pad::Button pressed_button = slopfin::pad::Button::count;
 std::string last_post;
 std::function<slopfin::http::Response(std::string_view, std::string_view,
@@ -71,11 +73,22 @@ bool take_cancelled() noexcept
 } // namespace slopfin::ime
 namespace slopfin::pad
 {
+float scroll_axis() noexcept
+{
+    return scroll_axis_value;
+}
 bool pressed(Button button) noexcept
 {
     return button == pressed_button;
 }
 } // namespace slopfin::pad
+namespace slopfin::gfx
+{
+int to_physical_size(int size) noexcept
+{
+    return size * image_scale;
+}
+} // namespace slopfin::gfx
 namespace slopfin::http
 {
 Response get(std::string_view host, int, std::string_view path,
@@ -312,6 +325,37 @@ int main()
     assert(submitted->find("seasons")->size() == 1 &&
            submitted->find("seasons")->at(0)->number == 2);
     assert(!g_model.submitting);
+    // Completed requests retain their actual profile even when server defaults change.
+    const auto old_handler = handler;
+    handler = [&](std::string_view method, std::string_view path, const auto &headers,
+                  std::string_view body) -> http::Response
+    {
+        if (path == "/api/v1/tv/123")
+            return {
+                200,
+                R"({"mediaInfo":{"status":5,"requests":[{"id":101,"status":5,"serverId":0,"profileId":8,"requestedBy":{"username":"Viewer"}},{"id":102,"is4k":true,"status":5,"serverId":0,"profileId":4}]}})",
+                {}};
+        return old_handler(method, path, headers, body);
+    };
+    g_view.sheet_from_requests = false;
+    g_view.is4k = false;
+    g_model.permissions = 32;
+    load_options();
+    drain();
+    snapshot();
+    assert(g_view.options.saved_profiles.size() == 2 && profile_label() == "HEVC");
+    assert(saved_profile()->requested_by == "Viewer");
+    g_view.is4k = true;
+    g_view.options.status4k = 5;
+    assert(profile_label() == "1080p");
+    g_view.sheet_from_requests = true;
+    g_view.sheet_request_id = 999;
+    assert(saved_profile() == nullptr && profile_label() == "Quality not recorded");
+    g_view.is4k = false;
+    g_view.sheet_from_requests = false;
+    handler = old_handler;
+    g_model.permissions = 2;
+
     // A late options response must not replace a newer title's selection.
     const auto epoch = g_model.options_epoch;
     job_options(connection_snapshot(), g_view.sheet, g_model.options_wanted - 1, 2, true);
@@ -321,6 +365,7 @@ int main()
     assert(catalog_path("", 2, 3, 1).find("firstAirDateLte=") != std::string::npos);
     assert(catalog_path("", 2, 4, 1) == "/api/v1/discover/tv/upcoming?page=1");
     assert(catalog_path("term", 0, 0, 4) == "/api/v1/search?query=term&page=4");
+    g_view.options = {};
     Request own;
     own.id = 10;
     own.requested_by_id = 7;
@@ -443,6 +488,58 @@ int main()
     g_view.is4k = true;
     assert(effective_title().jellyfin_id.empty());
     pressed_button = pad::Button::count;
+    // Requests created here persist across launch; only availability triggers Home refresh.
+    settings.seerr_watched_requests.clear();
+    g_model.watch_changes.clear();
+    handler = [](std::string_view method, std::string_view path, const auto &,
+                 std::string_view) -> http::Response
+    {
+        if (method == "POST")
+            return {201, R"({"id":501,"status":2})", {}};
+        if (path == "/api/v1/request/501")
+            return {200, R"({"status":2,"media":{"status":3}})", {}};
+        return {200, R"({"results":[]})", {}};
+    };
+    job_request(connection_snapshot(), g_view.sheet, "{}", false);
+    snapshot();
+    assert(settings.seerr_watched_requests == std::vector<std::string>{"501"});
+    job_watch_requests(connection_snapshot(), {"501"});
+    assert(!take_library_changed());
+    int watch_stage = 0;
+    handler = [&](std::string_view, std::string_view path, const auto &,
+                  std::string_view) -> http::Response
+    {
+        assert(path == "/api/v1/request/501");
+        if (watch_stage == 0)
+            return {200,
+                    R"({"status":2,"seasons":[{"status":5},{"status":2}],"media":{"status":4}})",
+                    {}};
+        if (watch_stage == 1)
+            return {503, {}, {}};
+        if (watch_stage == 2)
+            return {200, R"({"status":5,"media":{"status":4}})", {}};
+        return {404, {}, {}};
+    };
+    job_watch_requests(connection_snapshot(), {"501"});
+    assert(take_library_changed() && !take_library_changed());
+    job_watch_requests(connection_snapshot(), {"501"});
+    assert(!take_library_changed());
+    watch_stage = 1;
+    job_watch_requests(connection_snapshot(), {"501"});
+    snapshot();
+    assert(!take_library_changed() && settings.seerr_watched_requests.size() == 1);
+    watch_stage = 2;
+    job_watch_requests(connection_snapshot(), {"501"});
+    assert(take_library_changed());
+    snapshot();
+    assert(settings.seerr_watched_requests.empty());
+    settings.seerr_watched_requests = {"501"};
+    watch_stage = 3;
+    job_watch_requests(connection_snapshot(), {"501"});
+    snapshot();
+    assert(settings.seerr_watched_requests.empty() && !take_library_changed());
+    assert(!valid_request_id("../1") && !valid_request_id("0") && valid_request_id("501"));
+
     // Clear Data uses Seerr's internal media ID and never its file-deletion route.
     g_view = {};
     g_view.authenticated = true;
@@ -525,12 +622,21 @@ int main()
     g_view.ime_guard = 0;
     g_view.mode = 0;
     g_view.media_filter = g_view.sort = 0;
-    pressed_button = pad::Button::l3;
-    handle_input();
-    assert(g_view.media_filter == 1 && g_view.toolbar == 1);
-    pressed_button = pad::Button::r3;
-    handle_input();
-    assert(g_view.sort == 1 && g_view.toolbar == 2);
+    for (bool toolbar_focus : {false, true})
+        for (auto button : {pad::Button::l3, pad::Button::r3})
+        {
+            g_view.media_filter = g_view.sort = 0;
+            g_view.field_focused = toolbar_focus;
+            g_view.toolbar = button == pad::Button::l3 ? 2 : 0;
+            const int toolbar_before = g_view.toolbar;
+            pressed_button = button;
+            handle_input();
+            assert(g_view.media_filter == (button == pad::Button::l3 ? 1 : 0));
+            assert(g_view.sort == (button == pad::Button::r3 ? 1 : 0));
+            drain();
+            snapshot();
+            assert(g_view.field_focused == toolbar_focus && g_view.toolbar == toolbar_before);
+        }
     drain();
     pressed_button = pad::Button::count;
     g_view.mode = 1;
@@ -553,4 +659,38 @@ int main()
     ++g_model.search_epoch;
     snapshot();
     assert(g_view.grid_index == 1);
+    // Analogue scroll is pixel-based, rate-independent, bounded and keeps focus on screen.
+    g_view.results.assign(100, focus);
+    g_view.field_focused = false;
+    g_view.grid_index = 0;
+    g_view.grid_scroll.jump(0.0f);
+    scroll_axis_value = 1.0f;
+    for (int i = 0; i < 60; ++i)
+        search_input(1.0f / 60.0f);
+    const float full_second = g_view.grid_scroll.value();
+    assert(full_second > 900 && full_second < 920 && g_view.grid_index >= 12);
+    g_view.grid_scroll.jump(0.0f);
+    g_view.grid_index = 0;
+    for (int i = 0; i < 30; ++i)
+        search_input(1.0f / 30.0f);
+    assert(std::abs(g_view.grid_scroll.value() - full_second) < 0.1f);
+    for (int i = 0; i < 1000; ++i)
+        search_input(1.0f / 60.0f);
+    assert(g_view.grid_scroll.value() ==
+           scroll_limit(100, grid_columns(), kCardStepY, kCatalogViewport));
+    scroll_axis_value = -1.0f;
+    for (int i = 0; i < 1000; ++i)
+        search_input(1.0f / 60.0f);
+    assert(g_view.grid_scroll.value() == 0 && !g_view.field_focused);
+    g_view.requests.assign(30, active);
+    g_view.request_index = 0;
+    scroll_axis_value = 1.0f;
+    for (int i = 0; i < 60; ++i)
+        requests_input(1.0f / 60.0f);
+    assert(g_view.request_scroll.value() > 390 && g_view.request_index > 0);
+    scroll_axis_value = 0.0f;
+    assert(poster_url_for("/fixture.jpg", 278).find("/w185/") != std::string::npos);
+    assert(poster_url_for("/fixture.jpg", 396).find("/w342/") != std::string::npos);
+    image_scale = 2;
+    assert(poster_url_for("/fixture.jpg", 278).find("/w500/") != std::string::npos);
 }
