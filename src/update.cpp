@@ -94,22 +94,7 @@ void run_update(std::function<void()> job) noexcept
 }
 [[maybe_unused]] bool save(const std::string &path, std::string_view text)
 {
-    if (sf_update_dirs(path.c_str()) < 0)
-        return false;
-    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0)
-        return false;
-    std::size_t have = 0;
-    while (have < text.size())
-    {
-        auto n = write(fd, text.data() + have, text.size() - have);
-        if (n <= 0)
-            break;
-        have += static_cast<std::size_t>(n);
-    }
-    const bool ok = have == text.size() && fchmod(fd, 0644) == 0 && fsync(fd) == 0;
-    const int closed = close(fd);
-    return ok && closed == 0;
+    return sf_update_write(path.c_str(), text.data(), text.size()) == 0;
 }
 std::unique_ptr<http::WebRequest> open_download(std::string url)
 {

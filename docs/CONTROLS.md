@@ -17,7 +17,8 @@ Left/Right browses within a row. A search inside a library keeps that scope.
 A compact L2/R2 hint at the bottom of the sidebar lights while a trigger is held.
 
 **Discover**, the request server, sits at the top of the sidebar. Triangle
-searches it, Cross opens a title, Square swaps Browse / My requests, and L1/R1
+searches it, Cross opens a title, Square swaps Browse / My requests, L3 changes
+media type, R3 changes the catalog sort, and L1/R1
 changes catalog pages. Media and sorting choices sit beside search. In a title,
 choose seasons and quality with the D-pad; Triangle opens a season’s episode guide.
 Options focuses the primary action. Existing requests show Cancel when permitted;

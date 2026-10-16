@@ -194,24 +194,7 @@ std::uint32_t crc(const unsigned char *p, std::size_t n)
 }
 bool write_file(const std::string &path, const void *data, std::size_t size)
 {
-    if (sf_update_dirs(path.c_str()) < 0)
-        return false;
-    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0)
-        return false;
-    const auto *bytes = static_cast<const unsigned char *>(data);
-    std::size_t have = 0;
-    while (have < size)
-    {
-        auto n = write(fd, bytes + have, size - have);
-        if (n <= 0)
-            break;
-        have += static_cast<std::size_t>(n);
-    }
-    // The installer runs under a different UID; staged assets contain no account data.
-    const bool ok = have == size && fchmod(fd, 0644) == 0 && fsync(fd) == 0;
-    const int closed = close(fd);
-    return ok && closed == 0;
+    return sf_update_write(path.c_str(), data, size) == 0;
 }
 struct Entry
 {
@@ -223,7 +206,7 @@ struct Entry
 bool stage_archive(const std::string &archive, const std::string &stage, const Release &release,
                    std::string &error) noexcept
 {
-    auto fail = [&](const char *message)
+    auto fail = [&](std::string_view message)
     {
         error = message;
         return false;
@@ -379,7 +362,9 @@ bool stage_archive(const std::string &archive, const std::string &stage, const R
         if (e.path == "sce_module/libc.prx")
             runtime = e.size > 1024;
         if (!write_file(stage + "/" + e.path, file.data, e.size))
-            return fail("Could not save the update. Check free space.");
+            return fail(errno == ENOSPC ? "Not enough free space to unpack the update."
+                                        : "Could not write update file " + e.path + " (error " +
+                                              std::to_string(errno) + "). Download again.");
         sf_sha256 s;
         sf_sha_init(&s);
         sf_sha_add(&s, file.data, e.size);

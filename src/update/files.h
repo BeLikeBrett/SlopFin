@@ -51,6 +51,46 @@ static inline int sf_update_dirs(const char *path)
         }
     return 0;
 }
+/* Replace stale files owned by another installer UID without changing that file. */
+static inline int sf_update_write(const char *path, const void *data, size_t size)
+{
+    char part[512];
+    if (snprintf(part, sizeof(part), "%s.part", path) >= (int)sizeof(part))
+    {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (sf_update_dirs(path) < 0 || (unlink(part) < 0 && errno != ENOENT))
+        return -1;
+    const int fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (fd < 0)
+        return -1;
+    size_t have = 0;
+    const unsigned char *bytes = (const unsigned char *)data;
+    while (have < size)
+    {
+        const ssize_t count = write(fd, bytes + have, size - have);
+        if (count < 0 && errno == EINTR)
+            continue;
+        if (count <= 0)
+            break;
+        have += (size_t)count;
+    }
+    int ok = have == size && fchmod(fd, 0644) == 0 && fsync(fd) == 0;
+    int error = errno;
+    if (close(fd) < 0)
+    {
+        ok = 0;
+        error = errno;
+    }
+    if (ok && rename(part, path) == 0)
+        return 0;
+    if (ok)
+        error = errno;
+    unlink(part);
+    errno = error;
+    return -1;
+}
 static inline int sf_update_hash_file(const char *path, char hex[65])
 {
     int fd = open(path, O_RDONLY | O_NOFOLLOW);

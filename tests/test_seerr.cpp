@@ -50,6 +50,14 @@ bool run(std::function<void()> job, Lane lane) noexcept
 } // namespace slopfin::background
 namespace slopfin::ime
 {
+bool busy() noexcept
+{
+    return false;
+}
+void request(const std::string &, const std::string &, const std::string &, Mode, int) noexcept
+{
+    assert(false && "Unexpected keyboard request");
+}
 bool take_result(std::string &) noexcept
 {
     return false;
@@ -435,4 +443,114 @@ int main()
     g_view.is4k = true;
     assert(effective_title().jellyfin_id.empty());
     pressed_button = pad::Button::count;
+    // Clear Data uses Seerr's internal media ID and never its file-deletion route.
+    g_view = {};
+    g_view.authenticated = true;
+    g_view.options.loaded = true;
+    g_view.options.media_id = 901;
+    g_view.options.status = 3;
+    g_view.sheet.tmdb_id = 44;
+    g_view.sheet.media_type = "movie";
+    g_view.sheet_open = true;
+    g_view.permissions = 32;
+    assert(!can_clear_data());
+    g_view.permissions = 8192;
+    assert(!can_clear_data());
+    g_view.permissions = 16;
+    assert(can_clear_data());
+    g_view.requests = {active};
+    g_view.requests[0].requested_by = "Fixture user";
+    g_view.requests[0].approval = 4;
+    assert(recorded_request()->requested_by == "Fixture user");
+    assert(profile_label() == "HD HEVC");
+    int clear_calls = 0;
+    handler = [&](std::string_view method, std::string_view path, const auto &,
+                  std::string_view) -> http::Response
+    {
+        assert(path.find("/file") == std::string_view::npos);
+        if (method == "DELETE")
+        {
+            assert(path == "/api/v1/media/901");
+            ++clear_calls;
+            return {204, {}, {}};
+        }
+        return {200, R"({"totalPages":1,"results":[]})", {}};
+    };
+    pressed_button = pad::Button::right;
+    sheet_input();
+    assert(g_view.clear_focused && clear_calls == 0);
+    pressed_button = pad::Button::cross;
+    sheet_input();
+    assert(g_view.clear_confirm && clear_calls == 0 && jobs.empty());
+    pressed_button = pad::Button::circle;
+    sheet_input();
+    assert(!g_view.clear_confirm && clear_calls == 0);
+    pressed_button = pad::Button::cross;
+    sheet_input();
+    assert(g_view.clear_confirm);
+    sheet_input();
+    assert(!g_view.sheet_open && clear_calls == 0 && !jobs.empty());
+    drain();
+    snapshot();
+    assert(clear_calls == 1 && !g_view.submitting && g_view.requests.empty());
+    g_view.options.media_id = 0;
+    assert(!can_clear_data());
+    pressed_button = pad::Button::count;
+    // Five upstream pages form a longer browsable page, without duplicate cards.
+    handler = [](std::string_view, std::string_view path, const auto &,
+                 std::string_view) -> http::Response
+    {
+        const auto at = path.find("page=");
+        const int page =
+            at == std::string_view::npos ? 1 : std::atoi(std::string(path.substr(at + 5)).c_str());
+        return {200,
+                "{\"totalPages\":12,\"results\":[{\"id\":" + std::to_string(page * 10) +
+                    ",\"mediaType\":\"movie\",\"title\":\"Title\"},{\"id\":7777,\"mediaType\":"
+                    "\"movie\",\"title\":\"Repeated\"}]}",
+                {}};
+    };
+    long generation = ++g_model.search_wanted;
+    int catalog_calls = calls;
+    job_search(connection_snapshot(), "", generation, 1, 1, 1);
+    assert(calls == catalog_calls + 1 && g_model.search_loading && !jobs.empty());
+    drain();
+    assert(calls == catalog_calls + 5 && g_model.results.size() == 6);
+    assert(g_model.page == 1 && g_model.pages == 3 && !g_model.search_loading);
+    catalog_calls = calls;
+    generation = ++g_model.search_wanted;
+    job_search(connection_snapshot(), "", generation, 1, 1, 3);
+    drain();
+    assert(calls == catalog_calls + 2 && g_model.results.size() == 3 && g_model.page == 3);
+    g_view.sheet_open = false;
+    g_view.ime_guard = 0;
+    g_view.mode = 0;
+    g_view.media_filter = g_view.sort = 0;
+    pressed_button = pad::Button::l3;
+    handle_input();
+    assert(g_view.media_filter == 1 && g_view.toolbar == 1);
+    pressed_button = pad::Button::r3;
+    handle_input();
+    assert(g_view.sort == 1 && g_view.toolbar == 2);
+    drain();
+    pressed_button = pad::Button::count;
+    g_view.mode = 1;
+    const int sort_before = g_view.sort;
+    pressed_button = pad::Button::r3;
+    handle_input();
+    assert(g_view.sort == sort_before && jobs.empty());
+    pressed_button = pad::Button::count;
+    g_view.mode = 0;
+    g_view.media_filter = 1;
+    g_view.field_focused = false;
+    Title focus;
+    focus.tmdb_id = 20;
+    focus.media_type = "movie";
+    g_view.results = {focus};
+    g_view.grid_index = 0;
+    Title inserted = focus;
+    inserted.tmdb_id = 10;
+    g_model.results = {inserted, focus};
+    ++g_model.search_epoch;
+    snapshot();
+    assert(g_view.grid_index == 1);
 }

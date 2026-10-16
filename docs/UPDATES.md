@@ -11,7 +11,8 @@ does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem. Localhost-only loaders work; port 9021
 does not need to be accessible from another device.
 
-Build **1.08** fixes GitHub downloads and installer file permissions. Versions **1.07 and earlier**
+Build **1.08** fixes GitHub downloads and installer file permissions. **1.09** also
+replaces stale staging and handoff files left by older installers or FTP tools. Versions **1.07 and earlier**
 need a one-time manual folder upgrade. Extract the complete folder download, close SlopFin,
 and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.

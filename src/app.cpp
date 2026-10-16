@@ -49,6 +49,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <optional>
 #include <algorithm>
 #include <cstdio>
@@ -345,6 +346,7 @@ struct View
     motion::Spring focus;
     /* Shared page-transition progress. */
     motion::Spring page_in{1.0f};
+    bool restoring_page = false;
     /*
      * The offer to send a crash report, shown once per session when the
      * console is holding one the server has not seen .
@@ -666,12 +668,14 @@ void advance_motion() noexcept
 
 std::mutex g_detail_cache_mutex;
 std::unordered_map<std::string, jellyfin::Item> g_detail_cache;
+std::deque<std::string> g_detail_cache_order;
 struct CachedDetailRows
 {
     std::vector<jellyfin::Item> entries;
     jellyfin::Item next_up;
 };
 std::unordered_map<std::string, CachedDetailRows> g_detail_rows_cache;
+std::deque<std::string> g_detail_rows_order;
 std::string g_prefetching;
 std::string g_prefetching_rows;
 
@@ -689,10 +693,15 @@ void remember_detail(const jellyfin::Item &item) noexcept
     if (item.id.empty())
         return;
     std::lock_guard<std::mutex> guard(g_detail_cache_mutex);
-    /* A few dozen titles is a couple of hundred kilobytes; a whole library
-       would not be. Oldest out first, roughly, by clearing when it fills. */
-    if (g_detail_cache.size() > 48)
-        g_detail_cache.clear();
+    if (!g_detail_cache.count(item.id))
+    {
+        if (g_detail_cache_order.size() >= 48)
+        {
+            g_detail_cache.erase(g_detail_cache_order.front());
+            g_detail_cache_order.pop_front();
+        }
+        g_detail_cache_order.push_back(item.id);
+    }
     g_detail_cache[item.id] = item;
 }
 
@@ -711,21 +720,31 @@ void remember_detail_rows(const std::string &id, const std::vector<jellyfin::Ite
     if (id.empty())
         return;
     std::lock_guard<std::mutex> guard(g_detail_cache_mutex);
-    if (g_detail_rows_cache.size() > 32)
-        g_detail_rows_cache.clear();
+    if (!g_detail_rows_cache.count(id))
+    {
+        if (g_detail_rows_order.size() >= 32)
+        {
+            g_detail_rows_cache.erase(g_detail_rows_order.front());
+            g_detail_rows_order.pop_front();
+        }
+        g_detail_rows_order.push_back(id);
+    }
     g_detail_rows_cache[id] = CachedDetailRows{entries, next_up};
 }
 
 void fetch_detail_rows(const jellyfin::Item &item, std::vector<jellyfin::Item> &entries,
-                       jellyfin::Item &next_up) noexcept
+                       jellyfin::Item &next_up,
+                       const std::function<void()> &rows_ready = {}) noexcept
 {
     if (item.type == "Series")
     {
-        if (std::vector<jellyfin::Item> next = jellyfin::next_up(1, item.id); !next.empty())
-            next_up = std::move(next.front());
         entries = jellyfin::seasons(item.id);
         if (entries.empty())
             entries = jellyfin::episodes(item.id, {});
+        if (rows_ready)
+            rows_ready();
+        if (std::vector<jellyfin::Item> next = jellyfin::next_up(1, item.id); !next.empty())
+            next_up = std::move(next.front());
     }
     else if (item.type == "Season" && !item.series_id.empty())
         entries = jellyfin::episodes(item.series_id, item.id);
@@ -734,16 +753,24 @@ void fetch_detail_rows(const jellyfin::Item &item, std::vector<jellyfin::Item> &
 }
 
 void warm_detail_rows(const jellyfin::Item &item, const std::vector<jellyfin::Item> &entries,
-                      const jellyfin::Item &next_up) noexcept
+                      const jellyfin::Item &next_up, bool visible = false) noexcept
 {
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        const auto &entry = entries[i];
+        const int height = entry.type == "Season" ? kSeasonCardHeight : kEpisodeStripHeight;
+        if (i < 6 && visible)
+            images::acquire(entry.id, entry.image_tag, images::Kind::primary, height);
+        else if (i < 6)
+            images::prefetch(entry.id, entry.image_tag, images::Kind::primary, height);
+        else
+            images::warm(entry.id, entry.image_tag, height);
+    }
     if (!next_up.id.empty())
-        images::warm(next_up.id, next_up.image_tag, kNextUpCardHeight, true);
+        images::prefetch(next_up.id, next_up.image_tag, images::Kind::primary, kNextUpCardHeight);
     for (std::size_t i = 0; i < item.people.size() && i < 10; ++i)
         if (!item.people[i].image_tag.empty())
-            images::warm(item.people[i].id, item.people[i].image_tag, kCastPhotoHeight, true);
-    for (const jellyfin::Item &entry : entries)
-        images::warm(entry.id, entry.image_tag,
-                     entry.type == "Season" ? kSeasonCardHeight : kEpisodeStripHeight, true);
+            images::warm(item.people[i].id, item.people[i].image_tag, kCastPhotoHeight);
 }
 
 /* Prefetch settled selections without blocking input. */
@@ -1253,10 +1280,22 @@ void *worker(void *) noexcept
                 }
                 else
                 {
-                    fetch_detail_rows(item, episodes, next_up);
+                    fetch_detail_rows(item, episodes, next_up,
+                                      [&]
+                                      {
+                                          std::lock_guard<std::mutex> guard(g_shared.mutex);
+                                          if (g_shared.screen != Screen::detail ||
+                                              g_shared.detail_target_id != text)
+                                              return;
+                                          warm_detail_rows(item, episodes, {}, true);
+                                          g_shared.detail_item = item;
+                                          g_shared.detail_episodes = episodes;
+                                          ++g_shared.detail_epoch;
+                                          g_shared.detail_loading = false;
+                                      });
                     remember_detail_rows(text, episodes, next_up);
                 }
-                warm_detail_rows(item, episodes, next_up);
+                warm_detail_rows(item, episodes, next_up, true);
             }
             std::lock_guard<std::mutex> guard(g_shared.mutex);
             if (g_shared.screen == Screen::detail && g_shared.detail_target_id == text)
@@ -5917,6 +5956,7 @@ void open_grid(const std::string &library_id, const std::string &title, bool rem
     if (restore_index >= 0)
         destination.index = restore_index;
 
+    bool cached = false;
     /* The sidebar stays pointed at whatever is on screen. */
     {
         std::lock_guard<std::mutex> guard(g_shared.mutex);
@@ -5929,13 +5969,18 @@ void open_grid(const std::string &library_id, const std::string &title, bool rem
             g_view.leaving_scroll = g_view.grid_scroll.value();
             g_view.leaving_frame = static_cast<long>(g_view.frames);
         }
+        cached =
+            !remember && g_shared.grid_library_id == library_id && !g_shared.grid_items.empty();
         g_shared.screen = Screen::grid;
-        g_shared.grid_items.clear();
+        if (!cached)
+        {
+            g_shared.grid_items.clear();
+            g_shared.grid_total = 0;
+        }
         ++g_shared.grid_epoch;
-        g_shared.grid_loading = true;
+        g_shared.grid_loading = !cached;
         g_shared.grid_title = title;
         g_shared.grid_library_id = library_id;
-        g_shared.grid_total = 0;
     }
     /* A library keeps its own viewport. Switching Movies -> Shows no longer
        destroys Movies' focus/scroll, and returning to either category begins
@@ -5951,7 +5996,8 @@ void open_grid(const std::string &library_id, const std::string &title, bool rem
            can never clamp a remembered index to zero. */
         g_shared.grid_restore = destination.index;
     }
-    submit(Request::open_library, library_id);
+    if (!cached)
+        submit(Request::open_library, library_id);
 }
 
 void open_grid(const std::string &library_id, const std::string &title) noexcept
@@ -6073,12 +6119,14 @@ bool go_back() noexcept
         case Screen::grid:
             if (entry.id.empty())
                 continue;
+            g_view.restoring_page = true;
             open_grid(entry.id, entry.title, false, entry.index);
             g_view.grid_scroll.jump(entry.scroll);
             return true;
         case Screen::detail:
             if (entry.id.empty())
                 continue;
+            g_view.restoring_page = true;
             open_detail(entry.id, false);
             /* Restore the viewport, not merely the item ID. This includes the
                vertical page position and the independent Cast/season strips,
@@ -6100,6 +6148,7 @@ bool go_back() noexcept
         {
             std::lock_guard<std::mutex> guard(g_shared.mutex);
             g_shared.screen = entry.screen;
+            g_view.restoring_page = true;
             return true;
         }
         default:
@@ -8255,13 +8304,14 @@ void frame() noexcept
                         g_progress_ready_frame = static_cast<long>(g_view.frames);
                 }
                 g_page_changed = true;
-                if (first || !ready || screen == Screen::playing)
+                if (first || !ready || screen == Screen::playing || g_view.restoring_page)
                     g_view.page_in.jump(1.0f);
                 else
                 {
                     g_view.page_in.jump(0.0f);
                     g_view.page_in.aim(1.0f);
                 }
+                g_view.restoring_page = false;
             }
         }
         /* Prefetch details after the cursor settles. */
