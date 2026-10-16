@@ -21,6 +21,20 @@ int main()
         handler();
         pad::poll();
     };
+    // A long focus move must reach its destination within 150 ms.
+    ui::begin_frame(1.0f / 60.0f);
+    ui::focus_pill(100, 100, 300, 60, ui::FocusGroup::settings, 777);
+    for (int frame = 0; frame < 9; ++frame)
+    {
+        gfx::clear(gfx::palette::background);
+        ui::begin_frame(1.0f / 60.0f);
+        ui::focus_pill(100, 700, 300, 60, ui::FocusGroup::settings, 777);
+    }
+    const auto *pixels = gfx::back_buffer();
+    const auto pixel = [&](int x, int y)
+    { return pixels[gfx::to_physical_y(y) * gfx::physical_width() + gfx::to_physical_x(x)]; };
+    assert(pixel(200, 750) != gfx::palette::background);
+    assert(pixel(200, 150) == gfx::palette::background);
     g_view.settings_page = 8;
     g_view.audio_row = 0;
     assert(config::current().audio_passthrough);

@@ -2130,7 +2130,9 @@ void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
     if (availability != Availability::unknown)
     {
         const std::string label =
-            (fourk_only ? std::string("4K · ") : std::string{}) + availability_label(availability);
+            (fourk_only ? std::string("4K · ") : std::string{}) +
+            (availability == Availability::processing ? "Requested"
+                                                      : availability_label(availability));
         const int pill_w = text::measure(label, 17, Weight::medium) + 22;
         gfx::rounded_rect(x + 10, y + 10, pill_w, 30, 15,
                           gfx::with_alpha(availability_colour(availability), 0xd8));
@@ -2412,7 +2414,8 @@ void draw_sheet() noexcept
     text::draw_wrapped(tx, y + 146, tw, 3, 32,
                        title.overview.empty() ? "No description available." : title.overview, 23,
                        Weight::regular, gfx::palette::text_dim);
-    draw_status_pill(x + 40, y + 472, title.availability, {});
+    draw_status_pill(x + 40, y + 472, title.availability,
+                     title.availability == Availability::processing ? "Requested" : "");
     text::draw(x + 40, y + 540, g_view.is4k ? "4K request" : "Standard request", 24, Weight::medium,
                gfx::palette::text);
     text::draw_wrapped(x + 40, y + 584, 264, 3, 30, profile_label(), 22, Weight::regular,
