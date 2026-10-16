@@ -69,7 +69,7 @@ struct Request
 /* Opens the screen from the sidebar; kicks a refresh if needed. */
 void open() noexcept;
 /* False when the viewer leaves; the caller returns to the sidebar. */
-bool handle_input() noexcept;
+bool handle_input(float elapsed = 1.0f / 60.0f) noexcept;
 bool modal_open() noexcept;
 bool covers_background() noexcept;
 bool take_settings_request() noexcept;
@@ -81,8 +81,10 @@ void preview_search(const std::string &query) noexcept;
 void draw() noexcept;
 /* Services a queued keyboard. Call once per frame from the render loop. */
 void poll() noexcept;
+bool take_library_changed() noexcept;
 
-/* Settings -> Requests: the server address, key, sign-in and status. */
+/* Settings -> Discover: the server address, key, sign-in and status. */
+void open_settings() noexcept;
 void draw_settings() noexcept;
 void handle_settings_input() noexcept;
 

@@ -11,9 +11,14 @@ as its source photo; the edit was cancelled without changing the profile.
 `skip-intro-control.png` is a full-resolution crop of the corrected rounded
 button. Both were captured on the PS5 on 2026-10-03.
 
-`home-preview.png` and `settings-preview.png` show the Linux renderer with a
-fictional account/library and original project-authored geometric artwork.
-That artwork is covered by the project license.
+`home-preview.png` shows the Linux renderer with a fictional account/library
+and original project-authored geometric artwork covered by the project license.
+
+`settings-preview.png`, `navigation-preview.png`, `discover-preview.png` and
+`request-preview.png` show the 1.10 Linux renderer on 2026-10-16. Connection and
+request data are fictional; Discover uses public TMDB catalog metadata and
+artwork displayed through the client. Media artwork belongs to its respective
+owners and is not bundled as app assets. No credentials are visible.
 
 The Linux preview does not play video or implement the PlayStation system
 keyboard. System keyboard overlays are also absent from SlopFin's own console

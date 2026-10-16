@@ -63,31 +63,81 @@ int main()
         assert(host::write_png("build/tests/audio-settings-" + std::to_string(row) + ".png"));
     }
     g_view.settings_page = 0;
-    assert(std::string(kSettingsMenu[kSettingsMenuCount - 1].name) == "Updates");
-    g_view.settings_index = kSettingsMenuCount - 1;
-    press(pad::Button::cross, handle_settings_input);
-    assert(g_view.settings_page == 7);
-    press(pad::Button::circle, handle_settings_input);
-    g_view.settings_index = 2;
-    press(pad::Button::cross, handle_settings_input);
-    assert(g_view.settings_page == 8);
-    press(pad::Button::circle, handle_settings_input);
+    const std::vector<std::pair<std::string, int>> expected_settings = {
+        {"Account", 5},     {"Subtitles", 1}, {"Playback", 2}, {"Audio/Video", 8},
+        {"Navigation", 10}, {"Discover", 9},  {"Updates", 7},  {"Diagnostics", 6}};
+    assert(kSettingsMenuCount == static_cast<int>(expected_settings.size()));
+    for (int i = 0; i < kSettingsMenuCount; ++i)
+    {
+        assert(kSettingsMenu[i].name == expected_settings[static_cast<std::size_t>(i)].first);
+        g_view.settings_index = i;
+        press(pad::Button::cross, handle_settings_input);
+        assert(g_view.settings_page == expected_settings[static_cast<std::size_t>(i)].second);
+        press(pad::Button::circle, handle_settings_input);
+    }
     g_view.settings_index = 0;
     for (int frame = 0; frame < 120; ++frame)
         scroll_settings_menu(1.0f, 1.0f / 60.0f);
-    assert(g_view.settings_index == 8);
+    assert(g_view.settings_index == kSettingsMenuCount - 1);
     scroll_settings_menu(0, 1.0f / 60.0f);
     scroll_settings_menu(-1, 1.0f / 60.0f);
-    assert(g_view.settings_index == 7);
+    assert(g_view.settings_index == kSettingsMenuCount - 2);
     for (int frame = 0; frame < 120; ++frame)
         scroll_settings_menu(-1.0f, 1.0f / 60.0f);
     assert(g_view.settings_index == 0);
     scroll_settings_menu(0, 1.0f / 60.0f);
-    g_view.settings_index = 8;
+    g_view.settings_index = kSettingsMenuCount - 1;
     gfx::clear(gfx::palette::background);
     draw_settings("Fixture");
     gfx::present();
     assert(host::write_png("build/tests/settings-menu.png"));
+
+    g_shared.libraries = {{"movies", "Movies", "movies"}, {"tv", "Shows", "tvshows"}};
+    auto entries = build_sidebar(g_shared.libraries);
+    assert(entries.size() == 5 && category_key(entries.front()) == "discover");
+    assert(category_key(entries.back()) == "settings");
+    g_view.settings_page = 10;
+    g_view.navigation_index = 0;
+    press(pad::Button::cross, handle_settings_input);
+    assert(g_view.settings_page == 3);
+    press(pad::Button::circle, handle_settings_input);
+    assert(g_view.settings_page == 10);
+    press(pad::Button::down, handle_settings_input);
+    press(pad::Button::r1, handle_settings_input);
+    assert(config::current().navigation_order.front() == "home" && g_view.navigation_index == 2);
+    press(pad::Button::cross, handle_settings_input);
+    entries = build_sidebar(g_shared.libraries);
+    assert(entries.size() == 4 && category_key(entries.front()) == "home");
+    config::load();
+    assert(category_hidden("discover"));
+    config::current().navigation_hidden = {"home", "discover", "library:movies", "library:tv",
+                                           "settings"};
+    entries = build_sidebar(g_shared.libraries);
+    assert(entries.size() == 1 && category_key(entries.front()) == "settings");
+    g_shared.libraries[0].name = "Renamed";
+    g_shared.libraries.push_back({"new", "New library", "movies"});
+    entries = build_sidebar(g_shared.libraries);
+    assert(entries.size() == 2 && category_key(entries.front()) == "library:new");
+    assert(navigation_entries().size() == 5);
+    press(pad::Button::square, handle_settings_input);
+    assert(config::current().navigation_hidden.empty() &&
+           config::current().navigation_order.empty());
+    config::load();
+    assert(config::current().navigation_hidden.empty() &&
+           config::current().navigation_order.empty());
+    for (const int index : {0, 1, 4})
+    {
+        g_view.navigation_index = index;
+        for (int frame = 0; frame < 90; ++frame)
+        {
+            gfx::clear(gfx::palette::background);
+            ui::begin_frame(1.0f / 60.0f);
+            draw_settings("Fixture");
+        }
+        gfx::present();
+        assert(host::write_png("build/tests/navigation-" + std::to_string(index) + ".png"));
+    }
+    g_view.settings_page = 0;
 
     // Returning to a library keeps its cards and viewport without another request.
     g_shared.screen = Screen::detail;

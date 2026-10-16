@@ -46,11 +46,18 @@ int main()
     settings.seerr_auth = 2;
     settings.autoplay_series_overrides["show"] = false;
     settings.subtitle_offsets["episode"] = 1.5;
+    settings.navigation_order = {"library:a", "home", "discover"};
+    settings.navigation_hidden = {"home", "discover"};
+    settings.seerr_watched_requests = {"123", "456"};
     slopfin::config::save();
     struct stat metadata = {};
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
     assert(!settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    assert(settings.navigation_order ==
+           (std::vector<std::string>{"library:a", "home", "discover"}));
+    assert(settings.navigation_hidden == (std::vector<std::string>{"home", "discover"}));
+    assert(settings.seerr_watched_requests == (std::vector<std::string>{"123", "456"}));
     assert(settings.seerr_host == "https://requests.example.com/base" &&
            settings.seerr_api_key == "request-key" && settings.seerr_auth == 2);
     slopfin::jellyfin::PlaybackRequest request;
@@ -84,6 +91,16 @@ int main()
     std::ifstream file(path);
     assert(std::string(std::istreambuf_iterator<char>(file), {}) == "{invalid");
     file.close();
+
+    {
+        std::ofstream file(path);
+        file
+            << R"({"deviceId":"fixture","navigationOrder":["home","home",1,null,"settings"],"navigationHidden":["settings","discover",false,"discover"]})";
+    }
+    slopfin::config::load();
+    assert(settings.navigation_order == std::vector<std::string>{"home"});
+    assert(settings.navigation_hidden == std::vector<std::string>{"discover"});
+    assert(settings.seerr_watched_requests.empty());
 
     // Older files do not require a report receiver or the newer preferences.
     {

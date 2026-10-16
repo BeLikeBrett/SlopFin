@@ -28,7 +28,7 @@ conversion is rendering work, not video transcoding.
 | AC-3, E-AC-3, DTS core with HDMI passthrough | TV / AV receiver | Compressed IEC 61937 bursts | AC-3 5.1, E-AC-3 7.1 and DTS 5.1 test tones heard on the test TV (2026-09-15); DTS badge confirmed. Packing matches FFmpeg. Other equipment/lip sync need checks. DTS carries only the core. |
 | Other audio, unsupported rates/layouts or an explicit compatible conversion choice | Jellyfin server converts; PS5 then decodes the result | Negotiated compatible audio | The server uses its own CPU or GPU configuration. SlopFin does not locally re-encode to another streaming codec. |
 
-**Settings → Audio & video** saves these choices:
+**Settings → Audio/Video** saves these choices:
 
 | Setting | On | Off / default |
 | --- | --- | --- |

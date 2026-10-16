@@ -54,6 +54,39 @@ struct Server
     std::string directory;
     std::vector<Profile> profiles;
 };
+struct SavedProfile
+{
+    int request_id = 0;
+    int server_id = -1;
+    int profile_id = 0;
+    bool is4k = false;
+    std::string name;
+    std::string requested_by;
+};
+inline std::vector<SavedProfile> read_saved_profiles(const json::Value &detail)
+{
+    std::vector<SavedProfile> out;
+    const auto *info = detail.find("mediaInfo");
+    const auto *requests = info ? info->find("requests") : nullptr;
+    for (std::size_t i = 0; requests && i < std::min<std::size_t>(requests->size(), 500); ++i)
+        if (const auto *r = requests->at(i))
+        {
+            SavedProfile saved;
+            saved.request_id = static_cast<int>(r->num("id"));
+            saved.server_id = static_cast<int>(r->num("serverId", -1));
+            saved.profile_id = static_cast<int>(r->num("profileId"));
+            saved.is4k = r->flag("is4k");
+            saved.name = std::string(r->str("profileName"));
+            if (const auto *by = r->find("requestedBy"))
+            {
+                saved.requested_by = std::string(by->str("displayName"));
+                if (saved.requested_by.empty())
+                    saved.requested_by = std::string(by->str("username"));
+            }
+            out.push_back(std::move(saved));
+        }
+    return out;
+}
 struct Options
 {
     bool loaded = false;
@@ -67,6 +100,7 @@ struct Options
     std::string jellyfin_id4k;
     std::vector<Season> seasons;
     std::vector<Server> servers;
+    std::vector<SavedProfile> saved_profiles;
     std::string error;
     std::string profile_error;
 };

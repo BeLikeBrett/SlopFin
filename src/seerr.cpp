@@ -104,6 +104,10 @@ struct Model
     bool submitting = false;
     bool signing_in = false;
     std::string connection_error;
+    bool watching = false;
+    bool library_changed = false;
+    std::vector<std::pair<std::string, bool>> watch_changes;
+    std::unordered_map<std::string, int> watched_seasons;
 
     /* A short message for the viewer: a toast on Discover, a notice here. */
     std::string notice;
@@ -147,9 +151,9 @@ struct View
     bool field_focused = true;
     std::string query;
     int grid_index = 0;
-    int grid_scroll = 0;
+    motion::Spring grid_scroll;
     int request_index = 0;
-    int request_scroll = 0;
+    motion::Spring request_scroll;
     int media_filter = 0;
     int toolbar = 0;
     int sort = 0;
@@ -362,6 +366,10 @@ void sync_connection() noexcept
     g_model.search_error.clear();
     g_model.requests_error.clear();
     g_model.connection_error.clear();
+    g_model.watching = false;
+    g_model.library_changed = false;
+    g_model.watch_changes.clear();
+    g_model.watched_seasons.clear();
 }
 
 Connection connection_snapshot() noexcept
@@ -395,7 +403,7 @@ http::Response api_post(const Connection &connection, const std::string &path,
 std::string response_error(const http::Response &response, const char *action) noexcept
 {
     if (response.status == 401)
-        return "Your request-server session has expired. Sign in again in Settings > Requests.";
+        return "Your request-server session has expired. Sign in again in Settings > Discover.";
     if (response.status == 0)
         return "The request server could not be reached. Check its address and connection.";
     if (const auto doc = json::parse(response.body))
@@ -593,7 +601,7 @@ void job_refresh_server(Connection connection) noexcept
     std::uint32_t permissions = 0;
     bool partial = true;
     if (connection.host.empty())
-        error = "Enter your request-server address in Settings > Requests.";
+        error = "Enter your request-server address in Settings > Discover.";
     else
     {
         const auto status = http::get(connection.host, connection.port, "/api/v1/status", {});
@@ -709,7 +717,7 @@ void job_search(Connection connection, std::string term, long generation, int me
                     ? http::Response{}
                     : api_get(connection, catalog_path(term, type, sort, server_page));
             if (connection.host.empty())
-                error = "Set up your request server in Settings > Requests.";
+                error = "Set up your request server in Settings > Discover.";
             else if (!response.ok())
                 error = response_error(response, "Catalog could not be loaded");
             else if (const auto doc = json::parse(response.body); doc && doc->find("results"))
@@ -838,6 +846,7 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
     else
     {
         options.seasons = request::read_seasons(*doc);
+        options.saved_profiles = request::read_saved_profiles(*doc);
         if (const auto *info = doc->find("mediaInfo"))
         {
             options.media_id = static_cast<int>(info->num("id"));
@@ -868,7 +877,11 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
                 server.is_default = entry->flag("isDefault");
                 server.default_profile = static_cast<int>(entry->num("activeProfileId"));
                 server.directory = std::string(entry->str("activeDirectory"));
-                if (options.advanced)
+                const bool saved_server =
+                    std::any_of(options.saved_profiles.begin(), options.saved_profiles.end(),
+                                [&](const auto &saved)
+                                { return saved.server_id == server.id && saved.name.empty(); });
+                if (options.advanced || saved_server)
                 {
                     const auto profiles =
                         api_get(connection, service + "/" + std::to_string(server.id));
@@ -886,6 +899,11 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
                         options.profile_error =
                             "Quality profiles are unavailable. The server default will be used.";
                 }
+                for (auto &saved : options.saved_profiles)
+                    if (saved.name.empty() && saved.server_id == server.id)
+                        for (const auto &profile : server.profiles)
+                            if (profile.id == saved.profile_id)
+                                saved.name = profile.name;
                 options.servers.push_back(std::move(server));
             }
         }
@@ -914,6 +932,11 @@ void job_options(Connection connection, Title title, unsigned long token, std::u
                 ++g_model.search_epoch;
             }
     }
+    for (auto &item : g_model.requests)
+        for (const auto &saved : options.saved_profiles)
+            if (item.id == saved.request_id && !saved.name.empty())
+                item.profile_name = saved.name;
+    ++g_model.requests_epoch;
     g_model.options = std::move(options);
     ++g_model.options_epoch;
 }
@@ -939,7 +962,7 @@ void job_requests(Connection connection) noexcept
     std::string error;
     int status = 0;
     if (user_id <= 0)
-        error = "Connect your account in Settings > Requests to see your requests.";
+        error = "Connect your account in Settings > Discover to see your requests.";
     for (int skip = 0; user_id > 0 && skip < 2000; skip += 100)
     {
         const auto response =
@@ -1061,6 +1084,10 @@ void job_request(Connection connection, Title title, std::string body, bool is4k
         if (!current(connection))
             return;
         g_model.submitting = false;
+        if (response.ok())
+            if (const auto doc = json::parse(response.body); doc && doc->num("id") > 0)
+                g_model.watch_changes.emplace_back(std::to_string(static_cast<int>(doc->num("id"))),
+                                                   true);
         if (response.ok() || response.status == 409)
         {
             for (auto &result : g_model.results)
@@ -1078,6 +1105,59 @@ void job_request(Connection connection, Title title, std::string body, bool is4k
     }
     if (response.ok())
         job_requests(connection);
+}
+
+bool valid_request_id(const std::string &id)
+{
+    return !id.empty() && id.size() <= 9 && id.front() != '0' &&
+           std::all_of(id.begin(), id.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
+}
+
+void job_watch_requests(Connection connection, std::vector<std::string> ids) noexcept
+{
+    for (const auto &id : ids)
+    {
+        if (!valid_request_id(id))
+            continue;
+        {
+            std::lock_guard<std::mutex> guard(g_mutex);
+            if (!current(connection))
+                return;
+        }
+        const auto response = api_get(connection, "/api/v1/request/" + id);
+        const auto doc = json::parse(response.body);
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (!current(connection))
+            return;
+        if (response.status == 404 || response.status == 410)
+        {
+            g_model.watch_changes.emplace_back(id, false);
+            g_model.watched_seasons.erase(id);
+        }
+        else if (response.ok() && doc)
+        {
+            const auto item = read_request(*doc);
+            const bool complete =
+                item.approval == 5 || item.availability == Availability::available;
+            int arrived = 0;
+            if (const auto *seasons = doc->find("seasons"))
+                for (std::size_t i = 0; i < std::min<std::size_t>(seasons->size(), 500); ++i)
+                    if (const auto *season = seasons->at(i); season && season->num("status") == 5)
+                        ++arrived;
+            int &previous = g_model.watched_seasons[id];
+            if (complete || arrived > previous)
+                g_model.library_changed = true;
+            previous = arrived;
+            if (complete || item.approval == 3)
+            {
+                g_model.watch_changes.emplace_back(id, false);
+                g_model.watched_seasons.erase(id);
+            }
+        }
+    }
+    std::lock_guard<std::mutex> guard(g_mutex);
+    if (current(connection))
+        g_model.watching = false;
 }
 
 void job_sign_in(Connection connection, bool jellyfin, std::string account,
@@ -1187,6 +1267,7 @@ void select_missing() noexcept;
 
 void snapshot() noexcept
 {
+    std::vector<std::pair<std::string, bool>> watch_changes;
     sync_connection();
     std::string cookie, user;
     {
@@ -1287,8 +1368,22 @@ void snapshot() noexcept
         g_view.submitting = g_model.submitting;
         g_view.signing_in = g_model.signing_in;
         g_view.connection_error = g_model.connection_error;
+        watch_changes.swap(g_model.watch_changes);
         cookie.swap(g_model.pending_cookie);
         user.swap(g_model.pending_user);
+    }
+    if (!watch_changes.empty())
+    {
+        auto &watched = config::current().seerr_watched_requests;
+        for (const auto &[id, added] : watch_changes)
+        {
+            std::erase(watched, id);
+            if (added && valid_request_id(id))
+                watched.push_back(id);
+        }
+        if (watched.size() > 64)
+            watched.erase(watched.begin(), watched.end() - 64);
+        config::save();
     }
     if (!cookie.empty())
     {
@@ -1347,7 +1442,7 @@ void open_keyboard(Field field) noexcept
         break;
     case Field::host:
         initial = config::current().seerr_host;
-        title = "Request server address";
+        title = "Seerr / Jellyseerr server URL";
         placeholder = "request.example.com";
         break;
     case Field::api_key:
@@ -1384,7 +1479,7 @@ void apply_keyboard(const std::string &entered) noexcept
             g_view.mode = 0;
             g_view.field_focused = false;
             g_view.grid_index = 0;
-            g_view.grid_scroll = 0;
+            g_view.grid_scroll.jump(0.0f);
             start_search(entered);
         }
         break;
@@ -1402,6 +1497,7 @@ void apply_keyboard(const std::string &entered) noexcept
             config::Settings &settings = config::current();
             if (settings.seerr_host != address.host || settings.seerr_port != address.port)
             {
+                settings.seerr_watched_requests.clear();
                 settings.seerr_cookie.clear();
                 settings.seerr_api_key.clear();
                 settings.seerr_user.clear();
@@ -1905,11 +2001,61 @@ void open_sheet_for_request(const Request &request) noexcept
 
 void reload_catalog() noexcept
 {
-    g_view.grid_index = g_view.grid_scroll = 0;
+    g_view.grid_index = 0;
+    g_view.grid_scroll.jump(0.0f);
     start_search(g_view.query);
 }
 
-bool search_input() noexcept
+constexpr int kCatalogViewport = gfx::kHeight - kGridY - 50;
+constexpr int kRequestRow = 152;
+constexpr int kRequestViewport = gfx::kHeight - kListY - 20;
+
+float scroll_limit(int count, int columns, int row_height, int viewport) noexcept
+{
+    return static_cast<float>(
+        std::max(0, ((count + columns - 1) / columns) * row_height - viewport));
+}
+void reveal_selection(motion::Spring &scroll, int index, int count, int columns, int row_height,
+                      int viewport) noexcept
+{
+    const float limit = scroll_limit(count, columns, row_height, viewport);
+    if (scroll.value() > limit)
+        scroll.jump(limit);
+    const float top = static_cast<float>((index / columns) * row_height);
+    const float bottom = top + row_height;
+    if (top < scroll.target())
+        scroll.aim(top);
+    else if (bottom > scroll.target() + viewport)
+        scroll.aim(std::min(limit, bottom - viewport));
+}
+bool scroll_with_stick(motion::Spring &scroll, int &index, int count, int columns, int row_height,
+                       int viewport, float dt) noexcept
+{
+    const float stick = pad::scroll_axis();
+    if (count == 0 || stick == 0.0f || (g_view.field_focused && stick < 0.0f))
+        return false;
+    g_view.field_focused = false;
+    const float limit = scroll_limit(count, columns, row_height, viewport);
+    const float at = std::clamp(scroll.value() + stick * 2.6f * row_height * dt, 0.0f, limit);
+    scroll.jump(at);
+    const int first = static_cast<int>(at) / row_height;
+    const int last = std::max(first, static_cast<int>(at + viewport - 1) / row_height);
+    index =
+        std::min(count - 1, std::clamp(index / columns, first, last) * columns + index % columns);
+    return true;
+}
+void draw_scrollbar(float position, float limit, int total_height, int viewport) noexcept
+{
+    if (limit <= 0.0f)
+        return;
+    const int x = ui::kContentRight + 12, y = kGridY;
+    const int thumb = std::max(30, viewport * viewport / total_height);
+    gfx::rounded_rect(x, y, 3, viewport, 1, gfx::palette::control_border);
+    gfx::rounded_rect(x - 1, y + static_cast<int>((viewport - thumb) * position / limit), 5, thumb,
+                      2, gfx::palette::focus_border);
+}
+
+bool search_input(float dt) noexcept
 {
     const int count = results_size();
     if (pad::pressed(pad::Button::triangle))
@@ -1917,6 +2063,9 @@ bool search_input() noexcept
         open_keyboard(Field::query);
         return true;
     }
+    if (scroll_with_stick(g_view.grid_scroll, g_view.grid_index, count, grid_columns(), kCardStepY,
+                          kCatalogViewport, dt))
+        return true;
     if (g_view.field_focused)
     {
         if (pad::pressed(pad::Button::cross))
@@ -1974,9 +2123,12 @@ bool search_input() noexcept
         open_sheet_for_result(g_view.grid_index);
     else if (pad::pressed(pad::Button::circle))
         return false;
+    if (count > 0)
+        reveal_selection(g_view.grid_scroll, g_view.grid_index, count, columns, kCardStepY,
+                         kCatalogViewport);
     return true;
 }
-bool requests_input() noexcept
+bool requests_input(float dt) noexcept
 {
     if (pad::pressed(pad::Button::triangle))
     {
@@ -1985,6 +2137,9 @@ bool requests_input() noexcept
     }
     const auto visible = visible_requests();
     const int count = static_cast<int>(visible.size());
+    if (scroll_with_stick(g_view.request_scroll, g_view.request_index, count, 1, kRequestRow,
+                          kRequestViewport, dt))
+        return true;
     if (g_view.field_focused)
     {
         if (pad::pressed(pad::Button::cross))
@@ -2013,6 +2168,9 @@ bool requests_input() noexcept
             visible[static_cast<std::size_t>(g_view.request_index)])]);
     else if (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::circle))
         return false;
+    if (count > 0)
+        reveal_selection(g_view.request_scroll, g_view.request_index, count, 1, kRequestRow,
+                         kRequestViewport);
     return true;
 }
 bool sheet_can_submit() noexcept
@@ -2165,13 +2323,15 @@ bool sheet_input() noexcept
 
 const std::string &poster_url_for(const std::string &path, int height) noexcept
 {
-    constexpr const char *sizes[] = {"w92", "w154", "w342", "w500", "w780"};
-    const int bucket = height <= 100   ? 0
-                       : height <= 200 ? 1
-                       : height <= 400 ? 2
-                       : height <= 600 ? 3
-                                       : 4;
-    static std::unordered_map<std::string, std::array<std::string, 5>> cache;
+    constexpr const char *sizes[] = {"w92", "w154", "w185", "w342", "w500", "w780"};
+    const int pixels = gfx::to_physical_size(height);
+    const int bucket = pixels <= 138   ? 0
+                       : pixels <= 231 ? 1
+                       : pixels <= 278 ? 2
+                       : pixels <= 513 ? 3
+                       : pixels <= 750 ? 4
+                                       : 5;
+    static std::unordered_map<std::string, std::array<std::string, 6>> cache;
     if (cache.size() >= 512 && cache.find(path) == cache.end())
         cache.clear();
     auto &url = cache[path][static_cast<std::size_t>(bucket)];
@@ -2185,7 +2345,7 @@ void draw_poster(const std::string &path, int x, int y, int w, int h, int radius
 {
     const gfx::Bitmap *art = nullptr;
     if (!path.empty())
-        art = images::acquire(poster_url_for(path, h), {}, images::Kind::remote, h + 120);
+        art = images::acquire(poster_url_for(path, h), {}, images::Kind::remote, h);
     if (art != nullptr && art->valid())
     {
         gfx::blit_cover(*art, x, y, w, h, radius, 255);
@@ -2286,7 +2446,7 @@ void draw_field() noexcept
     if (g_view.mode == 0)
     {
         constexpr int width = 188, height = 36;
-        const int x = ui::kContentRight - width, y = gfx::kHeight - height - 14;
+        const int x = gfx::kWidth - width - 24, y = gfx::kHeight - height - 24;
         gfx::rounded_rect(x, y, width, height, 12, gfx::palette::control);
         gfx::stroke_rounded_rect(x, y, width, height, 12, 1,
                                  g_view.search_loading ? gfx::palette::focus_border
@@ -2381,55 +2541,43 @@ void draw_results() noexcept
 
     const int columns = grid_columns();
     const int rows = (count + columns - 1) / columns;
-    const int visible_rows =
-        1 + std::max(0, gfx::kHeight - ui::kSafeY - kGridY - (kCardH + 58)) / kCardStepY;
-    const int focused_row = g_view.grid_index / columns;
-    int first = g_view.grid_scroll;
-    if (focused_row < first)
-        first = focused_row;
-    if (focused_row >= first + visible_rows)
-        first = focused_row - visible_rows + 1;
-    first = std::clamp(first, 0, std::max(0, rows - visible_rows));
-    g_view.grid_scroll = first;
+    const float limit = scroll_limit(count, columns, kCardStepY, kCatalogViewport);
+    const int scroll = static_cast<int>(std::clamp(g_view.grid_scroll.value(), 0.0f, limit));
+    const int first = scroll / kCardStepY;
+    const int last = std::min(rows, 1 + (scroll + kCatalogViewport) / kCardStepY);
 
     gfx::push_clip(ui::kContentX - 8, kGridY - 8, ui::kContentWidth + 16,
                    gfx::kHeight - kGridY - 50);
-    for (int i = 0; i < count; ++i)
+    const auto draw_card = [&](int i)
     {
-        const int row = i / columns;
-        if (row < first || row >= first + visible_rows)
-            continue;
-        const int column = i % columns;
+        const int row = i / columns, column = i % columns;
         draw_result_card(
             g_view.results[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])],
-            ui::kContentX + column * kCardStepX, kGridY + (row - first) * kCardStepY,
+            ui::kContentX + column * kCardStepX, kGridY + row * kCardStepY - scroll,
             i == g_view.grid_index && !g_view.field_focused);
-    }
-    /* Warm the row just below the window, so scrolling does not stall. */
-    const int warm_row = first + visible_rows;
-    if (warm_row < rows)
-        for (int column = 0; column < columns; ++column)
-        {
-            const int index = warm_row * columns + column;
-            if (index >= count)
-                break;
-            const std::string &path =
-                g_view.results[static_cast<std::size_t>(visible[static_cast<std::size_t>(index)])]
-                    .poster_path;
-            if (!path.empty())
-                images::prefetch(poster_url_for(path, kCardH), {}, images::Kind::remote,
-                                 kCardH + 120);
-        }
+    };
+    for (int i = first * columns; i < std::min(count, last * columns); ++i)
+        if (i != g_view.grid_index)
+            draw_card(i);
+    if (g_view.grid_index >= first * columns && g_view.grid_index < std::min(count, last * columns))
+        draw_card(g_view.grid_index);
+    for (int row = std::max(0, first - 2); row < std::min(rows, last + 2); ++row)
+        if (row < first || row >= last)
+            for (int column = 0; column < columns; ++column)
+            {
+                const int index = row * columns + column;
+                if (index >= count)
+                    break;
+                const auto &path =
+                    g_view
+                        .results[static_cast<std::size_t>(visible[static_cast<std::size_t>(index)])]
+                        .poster_path;
+                if (!path.empty())
+                    images::prefetch(poster_url_for(path, kCardH), {}, images::Kind::remote,
+                                     kCardH);
+            }
     gfx::pop_clip();
-    if (rows > visible_rows)
-    {
-        const int x = ui::kContentRight + 12, y = kGridY;
-        const int height = gfx::kHeight - kGridY - 70;
-        const int thumb = std::max(30, height * visible_rows / rows);
-        gfx::rounded_rect(x, y, 3, height, 1, gfx::palette::control_border);
-        gfx::rounded_rect(x - 1, y + (height - thumb) * first / (rows - visible_rows), 5, thumb, 2,
-                          gfx::palette::focus_border);
-    }
+    draw_scrollbar(static_cast<float>(scroll), limit, rows * kCardStepY, kCatalogViewport);
 }
 
 void draw_progress(const Request &request, int x, int y, int width) noexcept
@@ -2524,24 +2672,17 @@ void draw_requests() noexcept
         return;
     }
 
-    constexpr int kRowH = 152;
-    const int visible_rows = std::max(1, (gfx::kHeight - 40 - kListY) / kRowH);
-    g_view.request_index = std::clamp(g_view.request_index, 0, count - 1);
-    int first = g_view.request_scroll;
-    if (g_view.request_index < first)
-        first = g_view.request_index;
-    if (g_view.request_index >= first + visible_rows)
-        first = g_view.request_index - visible_rows + 1;
-    first = std::clamp(first, 0, std::max(0, count - visible_rows));
-    g_view.request_scroll = first;
-
+    const float limit = scroll_limit(count, 1, kRequestRow, kRequestViewport);
+    const int scroll = static_cast<int>(std::clamp(g_view.request_scroll.value(), 0.0f, limit));
+    const int first = scroll / kRequestRow;
+    const int visible_rows = 2 + kRequestViewport / kRequestRow;
     gfx::push_clip(ui::kContentX - 12, kListY - 8, ui::kContentWidth + 24,
                    gfx::kHeight - kListY - 20);
     for (int i = first; i < std::min(count, first + visible_rows); ++i)
     {
         const Request &request =
             g_view.requests[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])];
-        draw_request_row(request, kListY + (i - first) * kRowH,
+        draw_request_row(request, kListY + i * kRequestRow - scroll,
                          i == g_view.request_index && !g_view.field_focused);
     }
     for (int i = first; i < std::min(count, first + visible_rows + 1); ++i)
@@ -2549,7 +2690,7 @@ void draw_requests() noexcept
         const auto &item =
             g_view.requests[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])];
         if (!item.poster_path.empty())
-            images::prefetch(poster_url_for(item.poster_path, 112), {}, images::Kind::remote, 232);
+            images::prefetch(poster_url_for(item.poster_path, 112), {}, images::Kind::remote, 112);
         if (item.name.empty() && item.tmdb_id > 0)
         {
             const auto connection = connection_snapshot();
@@ -2572,15 +2713,37 @@ void draw_requests() noexcept
         }
     }
     gfx::pop_clip();
+    draw_scrollbar(static_cast<float>(scroll), limit, count * kRequestRow, kRequestViewport);
 }
 
+const request::SavedProfile *saved_profile() noexcept
+{
+    const request::SavedProfile *latest = nullptr;
+    for (const auto &saved : g_view.options.saved_profiles)
+    {
+        if (saved.is4k != g_view.is4k)
+            continue;
+        if (g_view.sheet_from_requests && saved.request_id == g_view.sheet_request_id)
+            return &saved;
+        if (!latest || saved.request_id > latest->request_id)
+            latest = &saved;
+    }
+    return g_view.sheet_from_requests && g_view.sheet_request_id > 0 ? nullptr : latest;
+}
 std::string profile_label() noexcept
 {
     if (sheet_locked())
     {
         if (const auto *item = recorded_request(); item && !item->profile_name.empty())
             return item->profile_name;
-        return "Quality set by request server";
+        if (const auto *saved = saved_profile())
+        {
+            if (!saved->name.empty())
+                return saved->name;
+            if (saved->profile_id > 0)
+                return "Quality profile " + std::to_string(saved->profile_id);
+        }
+        return g_view.options_loading ? "Loading quality…" : "Quality not recorded";
     }
     if (g_view.server_index < 0)
         return "Server default";
@@ -2597,30 +2760,39 @@ std::string profile_label() noexcept
             return profile.name + " (default)";
     return "Server default";
 }
+void draw_corner_close(const std::string &label) noexcept
+{
+    const int width = 31 + text::measure(label, 20, Weight::regular);
+    ui::draw_button_hints(gfx::kWidth - width - 24, gfx::kHeight - 46,
+                          {{icons::Icon::ps_circle, label.c_str()}});
+}
 void draw_sheet() noexcept
 {
     gfx::clear(gfx::rgb(0x08, 0x09, 0x0d));
-    constexpr int x = ui::kContentX - 20, y = 92, width = ui::kContentWidth + 20, height = 896;
-    gfx::rounded_rect(x, y, width, height, 20, gfx::rgb(0x12, 0x15, 0x1d));
-    constexpr int tx = x + 350, tw = width - 390;
+    constexpr int x = ui::kContentX, y = 100, width = ui::kContentWidth;
+    constexpr int tx = x + 348, tw = width - 348;
     const auto title = effective_title();
-    draw_poster(title.poster_path, x + 40, y + 48, 264, 396, 14, title.name);
-    text::draw_ellipsized(tx, y + 40, tw, title.name, 38, Weight::bold, gfx::palette::text);
+    draw_poster(title.poster_path, x, y + 8, 280, 420, 14, title.name);
+    text::draw_ellipsized(tx, y, tw, title.name, 42, Weight::bold, gfx::palette::text);
     std::string meta = title.media_type == "tv" ? "SERIES" : "MOVIE";
     if (title.year)
         meta += "  ·  " + std::to_string(title.year);
     if (title.rating > 0)
         meta += "  ·  " + format("%.1f", title.rating) + " / 10";
-    text::draw(tx, y + 98, meta, 21, Weight::medium, gfx::palette::text_dim);
-    text::draw_wrapped(tx, y + 146, tw, 3, 32,
+    text::draw(tx, y + 64, meta, 21, Weight::medium, gfx::palette::text_dim);
+    text::draw_wrapped(tx, y + 112, tw, 3, 32,
                        title.overview.empty() ? "No description available." : title.overview, 23,
                        Weight::regular, gfx::palette::text_dim);
-    draw_status_pill(x + 40, y + 472, title.availability,
+    draw_status_pill(x, y + 456, title.availability,
                      title.availability == Availability::processing ? "Requested" : "");
+    text::draw(x, y + 518, "Quality", 20, Weight::medium, gfx::palette::text_faint);
+    text::draw_wrapped(x, y + 552, 280, 3, 32,
+                       std::string(g_view.is4k ? "4K · " : "") + profile_label(), 26,
+                       Weight::medium, gfx::palette::text);
     const auto rows = sheet_rows();
     const int count = static_cast<int>(rows.size());
     g_view.sheet_row = std::clamp(g_view.sheet_row, 0, count);
-    constexpr int row_y = y + 308, row_h = 60, visible_rows = 6;
+    constexpr int row_y = y + 260, row_h = 60, visible_rows = 6;
     if (g_view.sheet_row < count)
     {
         if (g_view.sheet_row < g_view.season_scroll)
@@ -2636,7 +2808,7 @@ void draw_sheet() noexcept
         const int ry = row_y + (i - g_view.season_scroll) * row_h;
         const bool focused = g_view.sheet_row == i;
         if (focused)
-            ui::focus_pill(tx - 14, ry, tw + 28, 54, ui::FocusGroup::discover_sheet, title.tmdb_id);
+            ui::focus_pill(tx, ry, tw, 54, ui::FocusGroup::discover_sheet, title.tmdb_id);
         std::string label, value;
         bool enabled = true;
         switch (row.kind)
@@ -2710,52 +2882,52 @@ void draw_sheet() noexcept
                           row_y + (track - bar) * g_view.season_scroll / (count - visible_rows), 3,
                           bar, 1, gfx::palette::text_dim);
     }
+    const int by = row_y + std::min(count, visible_rows) * row_h + 28;
     const std::string note = !g_view.options.error.empty() ? g_view.options.error
                              : !g_view.sheet_error.empty() ? g_view.sheet_error
                              : !sheet_locked()             ? g_view.options.profile_error
                                                            : "";
-    text::draw_wrapped(tx, y + 690, tw, 2, 27, note, 20, Weight::regular,
+    text::draw_wrapped(tx, by + 88, tw, 2, 27, note, 20, Weight::regular,
                        !g_view.sheet_error.empty() || !g_view.options.error.empty()
                            ? gfx::palette::danger
                            : gfx::palette::text_dim);
     const auto action = sheet_action();
-    const int by = y + std::clamp(308 + std::min(count, 6) * 60 + 92, 420, 768);
     constexpr int bh = 66;
     const bool actionable = sheet_action_enabled();
     const bool clear = can_clear_data();
-    const int clear_width = clear ? 236 : 0;
-    const int action_width = tw + 28 - (clear ? clear_width + 20 : 0);
-    gfx::rounded_rect(tx - 14, by, action_width, bh, 14, gfx::palette::control);
-    if (g_view.sheet_row == count && actionable && !g_view.clear_focused)
-        ui::focus_pill(tx - 14, by, action_width, bh, ui::FocusGroup::discover_sheet,
-                       title.tmdb_id);
-    if (actionable)
-        icons::draw(icons::Icon::ps_cross, tx + 12, by + 20, 26, icons::button::cross);
-    text::draw_ellipsized(tx + 58, text::centered_y(by, bh, action, 26, Weight::bold),
-                          action_width - 90, action, 26, Weight::bold,
-                          actionable ? gfx::palette::text : gfx::palette::text_faint);
-    if (clear)
+    const int action_width = (tw - 24) / 2;
+    const auto action_button = [&](int bx, const std::string &label, bool focused, bool enabled)
     {
-        const int cx = tx + tw + 14 - clear_width;
-        gfx::rounded_rect(cx, by, clear_width, bh, 14, gfx::palette::control);
-        if (g_view.sheet_row == count && g_view.clear_focused)
-            ui::focus_pill(cx, by, clear_width, bh, ui::FocusGroup::discover_sheet, title.tmdb_id);
-        text::draw(cx + (clear_width - text::measure("Clear Data", 24, Weight::medium)) / 2,
-                   text::centered_y(by, bh, "Clear Data", 24, Weight::medium), "Clear Data", 24,
-                   Weight::medium, gfx::palette::text_dim);
-    }
+        gfx::rounded_rect(bx, by, action_width, bh, 14, gfx::palette::control);
+        if (focused && enabled)
+            ui::focus_pill(bx, by, action_width, bh, ui::FocusGroup::discover_sheet, title.tmdb_id);
+        const int words = std::min(action_width - 80, text::measure(label, 25, Weight::medium));
+        const int left = bx + (action_width - words - (focused && enabled ? 38 : 0)) / 2;
+        if (focused && enabled)
+            icons::draw(icons::Icon::ps_cross, left, by + 21, 24, icons::button::cross);
+        text::draw_ellipsized(left + (focused && enabled ? 38 : 0),
+                              text::centered_y(by, bh, label, 25, Weight::medium),
+                              action_width - 80, label, 25, Weight::medium,
+                              enabled ? gfx::palette::text : gfx::palette::text_faint);
+    };
+    action_button(tx, action, g_view.sheet_row == count && !g_view.clear_focused, actionable);
+    if (clear)
+        action_button(tx + action_width + 24, "Clear Data",
+                      g_view.sheet_row == count && g_view.clear_focused, true);
     const auto *record = recorded_request();
     std::string owner = record ? record->requested_by : "";
+    if (owner.empty())
+        if (const auto *saved = saved_profile())
+            owner = saved->requested_by;
     if (owner.empty() && !sheet_locked())
         owner = config::current().seerr_user;
     const std::string attribution =
-        owner.empty() ? "" : std::string(record ? "Requested by " : "Requesting as ") + owner;
-    text::draw_ellipsized(x + 40, y + 832, width - 260, attribution, 20, Weight::medium,
+        owner.empty()
+            ? ""
+            : std::string(record || sheet_locked() ? "Requested by " : "Requesting as ") + owner;
+    text::draw_ellipsized(x, gfx::kHeight - 46, width - 260, attribution, 20, Weight::medium,
                           gfx::palette::text_dim);
-    text::draw_ellipsized(x + 40, y + 862, width - 260,
-                          std::string(g_view.is4k ? "4K · " : "") + profile_label(), 19,
-                          Weight::regular, gfx::palette::text_faint);
-    ui::draw_button_hints(x + width - 156, y + 854, {{icons::Icon::ps_circle, "Close"}});
+    draw_corner_close("Close");
 }
 
 void draw_episode_panel() noexcept
@@ -2792,7 +2964,7 @@ void draw_episode_panel() noexcept
                            item.overview.empty() ? "No description available." : item.overview, 21,
                            Weight::regular, gfx::palette::text_dim);
     }
-    ui::draw_button_hints(x + 40, y + 842, {{icons::Icon::ps_circle, "Back to seasons"}});
+    draw_corner_close("Back to seasons");
 }
 void draw_cancel_confirmation() noexcept
 {
@@ -2839,9 +3011,9 @@ void open() noexcept
     g_view.field_focused = true;
     g_view.sheet_open = false;
     g_view.grid_index = 0;
-    g_view.grid_scroll = 0;
+    g_view.grid_scroll.jump(0.0f);
     g_view.request_index = 0;
-    g_view.request_scroll = 0;
+    g_view.request_scroll.jump(0.0f);
     g_view.refresh_at = std::chrono::steady_clock::now();
     refresh_server();
     refresh_requests();
@@ -2854,7 +3026,8 @@ void preview_search(const std::string &query) noexcept
     g_view.query = query;
     g_view.mode = 0;
     g_view.field_focused = false;
-    g_view.grid_index = g_view.grid_scroll = 0;
+    g_view.grid_index = 0;
+    g_view.grid_scroll.jump(0.0f);
     start_search(query);
 }
 #endif
@@ -2889,8 +3062,11 @@ void close_settings() noexcept
     g_view.password.clear();
 }
 
-bool handle_input() noexcept
+bool handle_input(float elapsed) noexcept
 {
+    const float dt = std::clamp(elapsed, 0.0f, 1.0f / 15.0f);
+    g_view.grid_scroll.step(motion::kScroll, dt);
+    g_view.request_scroll.step(motion::kScroll, dt);
     if (g_connection.host.empty())
     {
         if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::triangle))
@@ -2920,8 +3096,6 @@ bool handle_input() noexcept
             g_view.sort = (g_view.sort + 1) % 5;
             g_view.query.clear();
         }
-        g_view.toolbar = media ? 1 : 2;
-        g_view.field_focused = true;
         reload_catalog();
         return true;
     }
@@ -2932,14 +3106,15 @@ bool handle_input() noexcept
             std::clamp(g_view.page + (pad::pressed(pad::Button::l1) ? -1 : 1), 1, g_view.pages);
         if (page != g_view.page)
         {
-            g_view.grid_index = g_view.grid_scroll = 0;
+            g_view.grid_index = 0;
+            g_view.grid_scroll.jump(0.0f);
             start_search(g_view.query, page);
         }
         return true;
     }
     if (g_view.mode == 0)
-        return search_input();
-    return requests_input();
+        return search_input(dt);
+    return requests_input(dt);
 }
 
 void draw() noexcept
@@ -2992,6 +3167,41 @@ void poll() noexcept
         }
     }
     snapshot();
+    static auto next_watch = std::chrono::steady_clock::time_point{};
+    static std::size_t watch_cursor = 0;
+    const auto &watched = config::current().seerr_watched_requests;
+    const auto now = std::chrono::steady_clock::now();
+    if (!watched.empty() && now >= next_watch)
+    {
+        sync_connection();
+        const auto connection = connection_snapshot();
+        std::vector<std::string> batch;
+        {
+            std::lock_guard<std::mutex> guard(g_mutex);
+            if (g_model.watching || connection.host.empty() ||
+                (connection.api_key.empty() && connection.cookie.empty()))
+                return;
+            g_model.watching = true;
+        }
+        for (std::size_t n = 0; n < std::min<std::size_t>(watched.size(), 4); ++n)
+            batch.push_back(watched[(watch_cursor + n) % watched.size()]);
+        watch_cursor = (watch_cursor + batch.size()) % watched.size();
+        next_watch = now + std::chrono::seconds(5);
+        if (!background::run([connection, batch] { job_watch_requests(connection, batch); },
+                             background::Lane::requests))
+        {
+            std::lock_guard<std::mutex> guard(g_mutex);
+            g_model.watching = false;
+        }
+    }
+}
+
+bool take_library_changed() noexcept
+{
+    std::lock_guard<std::mutex> guard(g_mutex);
+    const bool changed = g_model.library_changed;
+    g_model.library_changed = false;
+    return changed;
 }
 
 enum class Setting
@@ -3020,7 +3230,7 @@ const char *settings_row_label(Setting row) noexcept
     switch (row)
     {
     case Setting::server:
-        return "Server address";
+        return "Seerr server URL";
     case Setting::method:
         return "Connect using";
     case Setting::key:
@@ -3044,7 +3254,7 @@ std::string settings_row_value(Setting row) noexcept
     {
     case Setting::server:
         return settings.seerr_host.empty()
-                   ? "Not set"
+                   ? "requests.example.com or 192.168.1.10:5055"
                    : server_address::origin(settings.seerr_host, settings.seerr_port);
     case Setting::method:
         return settings.seerr_auth == 2   ? "API key"
@@ -3071,7 +3281,8 @@ const char *settings_row_hint(Setting row) noexcept
     switch (row)
     {
     case Setting::server:
-        return "Use a hostname, such as request.example.com, or a local IP and port.";
+        return "Enter your Seerr, Jellyseerr or Overseerr URL, including any port or base path. "
+               "Use the request service address, rather than your Jellyfin media server.";
     case Setting::method:
         return "Use your Jellyfin account, a request-server account, or an API key.";
     case Setting::key:
@@ -3089,17 +3300,25 @@ const char *settings_row_hint(Setting row) noexcept
     return "";
 }
 
+void open_settings() noexcept
+{
+    if (!config::current().seerr_host.empty())
+        refresh_server();
+}
+
 void draw_settings() noexcept
 {
     snapshot();
-    text::draw(ui::kContentX, kHeaderY, "Requests", 38, Weight::bold, gfx::palette::text);
+    text::draw(ui::kContentX, kHeaderY, "Discover", 38, Weight::bold, gfx::palette::text);
+    text::draw(ui::kContentX, kHeaderY + 60, "Connect Seerr, Jellyseerr or Overseerr", 25,
+               Weight::medium, gfx::palette::text_dim);
     const auto &settings = config::current();
     std::string state;
     gfx::Color colour = gfx::palette::text_dim;
     if (settings.seerr_host.empty())
-        state = "Connect Seerr or Jellyseerr to discover and request movies and shows.";
+        state = "Not connected";
     else if (g_view.signing_in || g_view.refreshing)
-        state = "Connecting to your request server…";
+        state = "Connecting…";
     else if (g_view.authenticated)
     {
         state = "Connected to " + (g_view.server_title.empty() ? std::string{"your request server"}
@@ -3111,11 +3330,11 @@ void draw_settings() noexcept
     else if (!g_view.connection_error.empty() &&
              (!settings.seerr_api_key.empty() || !settings.seerr_cookie.empty()))
     {
-        state = g_view.connection_error;
+        state = "Connection failed — " + g_view.connection_error;
         colour = gfx::palette::danger;
     }
     else
-        state = "Choose how to connect, then enter your details below.";
+        state = "Not connected — enter your server URL and sign in below.";
     text::draw_ellipsized(ui::kContentX, kGridY - 46, ui::kContentWidth, state, 24, Weight::regular,
                           colour);
     const auto rows = settings_rows();
@@ -3142,8 +3361,6 @@ void draw_settings() noexcept
         text::draw_ellipsized(ui::kContentX, kGridY + static_cast<int>(rows.size()) * 76 + 102,
                               1100, g_view.settings_notice, 24, Weight::medium,
                               gfx::palette::accent_alt);
-    ui::draw_button_hints(ui::kContentRight - 320, kGridY - 52,
-                          {{icons::Icon::ps_cross, "Choose"}, {icons::Icon::ps_circle, "Back"}});
 }
 
 void handle_settings_input() noexcept
@@ -3179,6 +3396,7 @@ void handle_settings_input() noexcept
             open_keyboard(Field::password);
             break;
         case Setting::method:
+            settings.seerr_watched_requests.clear();
             settings.seerr_auth =
                 (settings.seerr_auth + (pad::pressed(pad::Button::left) ? 2 : 1)) % 3;
             settings.seerr_cookie.clear();
@@ -3236,6 +3454,7 @@ void handle_settings_input() noexcept
             break;
         }
         case Setting::disconnect:
+            settings.seerr_watched_requests.clear();
             settings.seerr_cookie.clear();
             settings.seerr_api_key.clear();
             settings.seerr_user.clear();

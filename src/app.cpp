@@ -52,6 +52,7 @@
 #include <deque>
 #include <optional>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -319,6 +320,8 @@ struct View
     int setup_index = 0; /* server_setup and sign_in menus */
     int settings_index = 0;
     int settings_page = 0;
+    int navigation_index = 0;
+    bool startup_navigation_done = false;
     float settings_stick_steps = 0.0f;
     int settings_stick_direction = 0;
     int account_row = 0; /* the row focused on the Account screen */
@@ -498,25 +501,73 @@ struct SidebarEntry
     bool gap_before = false; /* a little air between the groups */
 };
 
-std::vector<SidebarEntry> build_sidebar(const std::vector<jellyfin::Library> &libraries) noexcept
-{
-    std::vector<SidebarEntry> entries;
-    entries.push_back({"Discover", SidebarEntry::Kind::discover, {}, false});
-    entries.push_back({"Home", SidebarEntry::Kind::home, {}, false});
+std::uint64_t g_navigation_revision = 0;
 
-    bool first_library = true;
-    for (const jellyfin::Library &library : libraries)
+std::string category_key(const SidebarEntry &entry)
+{
+    switch (entry.kind)
     {
-        /* Skip the views this client cannot show anything useful for. */
+    case SidebarEntry::Kind::home:
+        return "home";
+    case SidebarEntry::Kind::discover:
+        return "discover";
+    case SidebarEntry::Kind::library:
+        return "library:" + entry.library_id;
+    case SidebarEntry::Kind::settings:
+        return "settings";
+    case SidebarEntry::Kind::search:
+        return "search";
+    }
+    return {};
+}
+
+bool category_hidden(const std::string &key)
+{
+    const auto &hidden = config::current().navigation_hidden;
+    return key != "settings" && std::find(hidden.begin(), hidden.end(), key) != hidden.end();
+}
+
+std::vector<SidebarEntry> build_sidebar(const std::vector<jellyfin::Library> &libraries,
+                                        bool include_hidden = false) noexcept
+{
+    std::vector<SidebarEntry> entries{{"Discover", SidebarEntry::Kind::discover, {}, false},
+                                      {"Home", SidebarEntry::Kind::home, {}, false}};
+    for (const auto &library : libraries)
+    {
         if (library.collection_type == "music" || library.collection_type == "books" ||
             library.collection_type == "photos" || library.collection_type == "livetv")
             continue;
-        entries.push_back({library.name, SidebarEntry::Kind::library, library.id, first_library});
-        first_library = false;
+        entries.push_back({library.name, SidebarEntry::Kind::library, library.id, false});
     }
-
+    const auto &order = config::current().navigation_order;
+    std::stable_sort(entries.begin(), entries.end(),
+                     [&](const auto &a, const auto &b)
+                     {
+                         return std::find(order.begin(), order.end(), category_key(a)) <
+                                std::find(order.begin(), order.end(), category_key(b));
+                     });
+    if (!include_hidden)
+        std::erase_if(entries,
+                      [](const auto &entry) { return category_hidden(category_key(entry)); });
+    for (std::size_t i = 1; i < entries.size(); ++i)
+        entries[i].gap_before = (entries[i].kind == SidebarEntry::Kind::library) !=
+                                (entries[i - 1].kind == SidebarEntry::Kind::library);
     entries.push_back({"Settings", SidebarEntry::Kind::settings, {}, true});
     return entries;
+}
+
+std::vector<SidebarEntry> navigation_entries()
+{
+    std::lock_guard<std::mutex> guard(g_shared.mutex);
+    auto entries = build_sidebar(g_shared.libraries, true);
+    entries.pop_back();
+    return entries;
+}
+
+void save_navigation()
+{
+    config::save();
+    ++g_navigation_revision;
 }
 
 /* Render-loop timing, so a stutter can be attributed rather than guessed at. */
@@ -5205,9 +5256,9 @@ struct SettingsCategory
     int page;
 };
 constexpr SettingsCategory kSettingsMenu[] = {
-    {"Subtitles", 1}, {"Playback", 2}, {"Audio & video", 8}, {"Controller", 3}, {"Server", 4},
-    {"Account", 5},   {"Requests", 9}, {"Diagnostics", 6},   {"Updates", 7}};
-constexpr int kSettingsMenuCount = 9;
+    {"Account", 5},     {"Subtitles", 1}, {"Playback", 2}, {"Audio/Video", 8},
+    {"Navigation", 10}, {"Discover", 9},  {"Updates", 7},  {"Diagnostics", 6}};
+constexpr int kSettingsMenuCount = static_cast<int>(std::size(kSettingsMenu));
 
 /* A screen's single action row, focused, with the menu's look. */
 void draw_settings_action(int y, const std::string &label, const std::string &value) noexcept
@@ -5272,12 +5323,11 @@ const char *account_row_hint(AccountRow row) noexcept
 void draw_settings(const std::string &server_name) noexcept
 {
     const config::Settings &settings = config::current();
-    const std::string address = server_address::origin(settings.host, settings.port);
     switch (g_view.settings_page)
     {
     case 8:
     {
-        text::draw(kContentX, kSafeY + 96, "Audio & video", 38, Weight::bold, gfx::palette::text);
+        text::draw(kContentX, kSafeY + 96, "Audio/Video", 38, Weight::bold, gfx::palette::text);
         const bool software = player::software_audio_available();
         const char *const rows[] = {"HDMI audio passthrough", "Decode TrueHD / DTS / E-AC-3 on PS5",
                                     "Dolby Vision HDR10 fallback"};
@@ -5384,15 +5434,6 @@ void draw_settings(const std::string &server_name) noexcept
                    22, Weight::regular, gfx::palette::text_dim);
         break;
     }
-    case 4:
-        text::draw(kContentX, kSafeY + 96, "Server", 38, Weight::bold, gfx::palette::text);
-        text::draw(kContentX, kGridTop, server_name.empty() ? address : server_name, 30,
-                   Weight::medium, gfx::palette::text);
-        if (!server_name.empty())
-            text::draw(kContentX, kGridTop + 46, address, 22, Weight::regular,
-                       gfx::palette::text_dim);
-        draw_settings_action(kGridTop + 110, "Change server", "");
-        break;
     case 7:
     {
         const auto info = update::status();
@@ -5442,9 +5483,8 @@ void draw_settings(const std::string &server_name) noexcept
                                  : info.phase == update::Phase::available ? "Download update"
                                                                           : "Check for updates";
             draw_settings_action(action_y, action, "");
-            ui::draw_button_hints(
-                kContentX, kGridTop + (has_notes ? 560 : 444),
-                {{icons::Icon::ps_cross, action}, {icons::Icon::ps_triangle, "Check again"}});
+            ui::draw_button_hints(kContentX, kGridTop + (has_notes ? 560 : 444),
+                                  {{icons::Icon::ps_cross, action}});
         }
         text::draw_wrapped(
             kContentX, kGridTop + (has_notes ? 624 : 518), 1110, 2, 28,
@@ -5504,8 +5544,10 @@ void draw_settings(const std::string &server_name) noexcept
     {
         text::draw(kContentX, kSafeY + 96, "Account", 38, Weight::bold, gfx::palette::text);
         text::draw(kContentX, kGridTop,
-                   "Signed in to " + (server_name.empty() ? address : server_name), 30,
-                   Weight::medium, gfx::palette::text);
+                   "Signed in to " + (server_name.empty()
+                                          ? server_address::origin(settings.host, settings.port)
+                                          : server_name),
+                   30, Weight::medium, gfx::palette::text);
         /* The same places the profile menu leads . */
         const std::vector<AccountRow> rows = account_rows();
         ui::focus_pill(kContentX - 28, kGridTop + 84 + g_view.account_row * 84 - 6, 620, 66,
@@ -5522,6 +5564,54 @@ void draw_settings(const std::string &server_name) noexcept
                    account_row_hint(rows[static_cast<std::size_t>(
                        std::clamp(g_view.account_row, 0, static_cast<int>(rows.size()) - 1))]),
                    22, Weight::regular, gfx::palette::text_dim);
+        break;
+    }
+    case 10:
+    {
+        const auto entries = navigation_entries();
+        g_view.navigation_index =
+            std::clamp(g_view.navigation_index, 0, static_cast<int>(entries.size()));
+        text::draw(kContentX, kSafeY + 96, "Navigation", 38, Weight::bold, gfx::palette::text);
+        const bool controller = g_view.navigation_index == 0;
+        if (controller)
+            ui::focus_pill(kContentX - 16, kGridTop - 6, 1000, 64, ui::FocusGroup::settings, 10);
+        ui::control_label(kContentX + 8, kGridTop - 6, 900, 64, "Controller", 28, Weight::medium,
+                          controller ? gfx::palette::text : gfx::palette::text_dim);
+        icons::draw(icons::Icon::chevron_right, kContentX + 940, kGridTop + 14, 24,
+                    gfx::palette::text_dim);
+        text::draw(kContentX, kGridTop + 100, "Categories", 22, Weight::medium,
+                   gfx::palette::text_dim);
+        const int first = std::max(0, g_view.navigation_index - 6);
+        const int count = static_cast<int>(entries.size());
+        for (int i = first; i < std::min(count, first + 6); ++i)
+        {
+            const int y = kGridTop + 146 + (i - first) * 66;
+            const bool focused = g_view.navigation_index == i + 1;
+            const bool hidden = category_hidden(category_key(entries[static_cast<std::size_t>(i)]));
+            if (focused)
+                ui::focus_pill(kContentX - 16, y, 1000, 58, ui::FocusGroup::settings, 10);
+            const auto ink = focused ? gfx::palette::text : gfx::palette::text_dim;
+            ui::control_label(kContentX + 8, y, 760, 58, entries[static_cast<std::size_t>(i)].label,
+                              28, Weight::medium, ink);
+            ui::control_label(kContentX + 800, y, 160, 58, hidden ? "Hidden" : "Shown", 24,
+                              Weight::regular, hidden ? gfx::palette::text_faint : ink);
+        }
+        if (count > 6)
+        {
+            constexpr int track = 6 * 66 - 8;
+            const int thumb = track * 6 / count;
+            gfx::rounded_rect(kContentX + 1020, kGridTop + 146, 5, track, 2,
+                              gfx::palette::control_border);
+            gfx::rounded_rect(kContentX + 1020,
+                              kGridTop + 146 + (track - thumb) * first / (count - 6), 5, thumb, 2,
+                              gfx::palette::accent_alt);
+        }
+        if (!controller)
+            ui::draw_button_hints(kContentX, kGridTop + 580,
+                                  {{icons::Icon::ps_cross, "Show / hide"},
+                                   {icons::Icon::r2, "Move up", "L1"},
+                                   {icons::Icon::r2, "Move down", "R1"},
+                                   {icons::Icon::ps_square, "Reset"}});
         break;
     }
     case 9:
@@ -5548,18 +5638,6 @@ void draw_settings(const std::string &server_name) noexcept
         gfx::rounded_rect(
             track_x, track_y + (track_height - thumb_height) * first / (kSettingsMenuCount - 7), 5,
             thumb_height, 2, gfx::palette::accent_alt);
-        const std::string range = std::to_string(first + 1) + "–" +
-                                  std::to_string(std::min(first + 7, kSettingsMenuCount)) + " of " +
-                                  std::to_string(kSettingsMenuCount);
-        text::draw(kContentX + 690, kGridTop + 8, range, 20, Weight::regular,
-                   gfx::palette::text_dim);
-        if (first + 7 < kSettingsMenuCount)
-        {
-            icons::draw(icons::Icon::chevron_down, kContentX + 690, kGridTop + 7 * 84 - 48, 20,
-                        gfx::palette::accent_alt);
-            text::draw(kContentX + 722, kGridTop + 7 * 84 - 48, "More below", 20, Weight::medium,
-                       gfx::palette::text_dim);
-        }
         text::draw(kContentX, kGridTop + 7 * 84 + 40,
                    "SlopFin " + update::display_version(update::status().current) +
                        "   unofficial Jellyfin client",
@@ -7562,6 +7640,7 @@ void apply_account_choice(account::Choice choice, Screen from) noexcept
         }
         break;
     case account::Choice::sign_out:
+        g_view.startup_navigation_done = false;
         account::forget();
         set_status(Screen::connecting, "Signing out");
         submit(Request::sign_out);
@@ -7572,7 +7651,7 @@ void apply_account_choice(account::Choice choice, Screen from) noexcept
     }
 }
 
-void scroll_settings_menu(float axis, float seconds) noexcept
+void scroll_settings_selection(int &index, int maximum, float axis, float seconds) noexcept
 {
     const int direction = axis > 0 ? 1 : axis < 0 ? -1 : 0;
     if (!direction)
@@ -7590,7 +7669,12 @@ void scroll_settings_menu(float axis, float seconds) noexcept
         g_view.settings_stick_steps += axis * 7.0f * seconds;
     const int step = static_cast<int>(g_view.settings_stick_steps);
     g_view.settings_stick_steps -= step;
-    g_view.settings_index = std::clamp(g_view.settings_index + step, 0, kSettingsMenuCount - 1);
+    index = std::clamp(index + step, 0, maximum);
+}
+
+void scroll_settings_menu(float axis, float seconds) noexcept
+{
+    scroll_settings_selection(g_view.settings_index, kSettingsMenuCount - 1, axis, seconds);
 }
 
 void handle_settings_input() noexcept
@@ -7600,11 +7684,65 @@ void handle_settings_input() noexcept
     config::Settings &settings = config::current();
     if (g_view.settings_page != 0 && pad::pressed(pad::Button::circle))
     {
-        g_view.settings_page = 0;
+        g_view.settings_page = g_view.settings_page == 3 ? 10 : 0;
         return;
     }
     switch (g_view.settings_page)
     {
+    case 10:
+    {
+        auto entries = navigation_entries();
+        const int count = static_cast<int>(entries.size());
+        scroll_settings_selection(g_view.navigation_index, count, pad::scroll_axis(),
+                                  frame_seconds());
+        g_view.navigation_index = std::clamp(g_view.navigation_index, 0, count);
+        if (pad::pressed(pad::Button::down))
+            g_view.navigation_index = std::min(count, g_view.navigation_index + 1);
+        else if (pad::pressed(pad::Button::up))
+            g_view.navigation_index = std::max(0, g_view.navigation_index - 1);
+        else if (pad::pressed(pad::Button::square))
+        {
+            settings.navigation_order.clear();
+            settings.navigation_hidden.clear();
+            g_view.navigation_index = 0;
+            save_navigation();
+        }
+        else if (pad::pressed(pad::Button::cross))
+        {
+            if (g_view.navigation_index == 0)
+                g_view.settings_page = 3;
+            else
+            {
+                const auto key =
+                    category_key(entries[static_cast<std::size_t>(g_view.navigation_index - 1)]);
+                auto &hidden = settings.navigation_hidden;
+                if (const auto it = std::find(hidden.begin(), hidden.end(), key);
+                    it != hidden.end())
+                    hidden.erase(it);
+                else
+                    hidden.push_back(key);
+                save_navigation();
+            }
+        }
+        else if (g_view.navigation_index > 0 &&
+                 (pad::pressed(pad::Button::l1) || pad::pressed(pad::Button::r1)))
+        {
+            const int from = g_view.navigation_index - 1;
+            const int to =
+                std::clamp(from + (pad::pressed(pad::Button::l1) ? -1 : 1), 0, count - 1);
+            if (to != from)
+            {
+                std::swap(entries[static_cast<std::size_t>(from)],
+                          entries[static_cast<std::size_t>(to)]);
+                settings.navigation_order.clear();
+                for (const auto &entry : entries)
+                    settings.navigation_order.push_back(category_key(entry));
+                g_view.navigation_index = to + 1;
+                save_navigation();
+            }
+        }
+        return;
+    }
     case 9:
         seerr::handle_settings_input();
         return;
@@ -7664,16 +7802,10 @@ void handle_settings_input() noexcept
                                                             : pad::TriggerFeel::none);
         }
         return;
-    case 4:
-        if (pad::pressed(pad::Button::cross))
-            ask_keyboard(View::Prompt::host);
-        return;
     case 7:
     {
         const auto info = update::status();
-        if (pad::pressed(pad::Button::triangle))
-            update::check();
-        else if (pad::pressed(pad::Button::cross))
+        if (pad::pressed(pad::Button::cross))
         {
             if (info.phase == update::Phase::available)
                 update::download();
@@ -7751,6 +7883,8 @@ void handle_settings_input() noexcept
     else if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::right))
     {
         g_view.settings_page = kSettingsMenu[g_view.settings_index].page;
+        if (g_view.settings_page == 9)
+            seerr::open_settings();
         g_view.subtitle_row = 1;
     }
 }
@@ -8040,12 +8174,41 @@ void frame() noexcept
 
     static std::vector<SidebarEntry> sidebar_cache;
     static std::uint64_t sidebar_epoch = ~std::uint64_t{0};
-    if (sidebar_epoch != seen_libraries)
+    static std::uint64_t navigation_epoch = ~std::uint64_t{0};
+    if (sidebar_epoch != seen_libraries || navigation_epoch != g_navigation_revision)
     {
+        const auto previous_key = [&](int index)
+        {
+            return index >= 0 && index < static_cast<int>(sidebar_cache.size())
+                       ? category_key(sidebar_cache[static_cast<std::size_t>(index)])
+                       : std::string{};
+        };
+        const auto active = previous_key(g_view.active_section);
+        const auto focused = previous_key(g_view.sidebar_index);
         sidebar_cache = build_sidebar(libraries);
+        for (std::size_t i = 0; i < sidebar_cache.size(); ++i)
+        {
+            const auto key = category_key(sidebar_cache[i]);
+            if (key == active)
+                g_view.active_section = static_cast<int>(i);
+            if (key == focused)
+                g_view.sidebar_index = static_cast<int>(i);
+        }
         sidebar_epoch = seen_libraries;
+        navigation_epoch = g_navigation_revision;
     }
     const std::vector<SidebarEntry> &sidebar = sidebar_cache;
+    if (!g_view.startup_navigation_done && screen == Screen::home)
+    {
+        g_view.startup_navigation_done = true;
+        if (category_hidden("home"))
+        {
+            g_view.sidebar_index = 0;
+            open_section(sidebar, 0, false);
+            std::lock_guard<std::mutex> guard(g_shared.mutex);
+            screen = g_shared.screen;
+        }
+    }
     g_view.sidebar_index =
         std::clamp(g_view.sidebar_index, 0, std::max(0, static_cast<int>(sidebar.size()) - 1));
     const SearchScope scope = search_scope(screen, sidebar, libraries);
@@ -8174,7 +8337,7 @@ void frame() noexcept
                 break;
             case Screen::discover:
                 /* Circle at the top level hands the input back to the sidebar. */
-                if (!seerr::handle_input())
+                if (!seerr::handle_input(frame_seconds()))
                     g_view.sidebar_focused = true;
                 if (const auto id = seerr::take_open_item(); !id.empty())
                     open_detail(id);
@@ -8187,8 +8350,9 @@ void frame() noexcept
                     {
                         g_view.sidebar_index = static_cast<int>(it - sidebar.begin());
                         open_section(sidebar, g_view.sidebar_index, false);
-                        g_view.settings_index = 8;
+                        g_view.settings_index = 5;
                         g_view.settings_page = 9;
+                        seerr::open_settings();
                     }
                 }
                 break;
@@ -8564,6 +8728,34 @@ void frame() noexcept
         g_shared.progress_stale = true;
     }
     g_was_playing = playing_now;
+
+    static auto arrivals_refresh_until = std::chrono::steady_clock::time_point{};
+    static auto arrivals_refresh_at = std::chrono::steady_clock::time_point{};
+    const auto arrivals_now = std::chrono::steady_clock::now();
+    if (seerr::take_library_changed())
+    {
+        arrivals_refresh_until = arrivals_now + std::chrono::minutes(2);
+        arrivals_refresh_at = arrivals_now;
+    }
+    if (arrivals_now < arrivals_refresh_until && arrivals_now >= arrivals_refresh_at &&
+        config::current().signed_in())
+    {
+        bool queued = false;
+        {
+            std::lock_guard<std::mutex> guard(g_shared.mutex);
+            if (!g_shared.busy && g_shared.request == Request::none)
+            {
+                g_latest_due = true;
+                g_shared.request = Request::refresh_progress;
+                queued = true;
+            }
+        }
+        if (queued)
+        {
+            arrivals_refresh_at = arrivals_now + std::chrono::seconds(15);
+            g_request_wake.notify_one();
+        }
+    }
 
     /* Refresh stale Home progress immediately and then periodically. */
     if (screen == Screen::home)

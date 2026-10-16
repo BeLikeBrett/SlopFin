@@ -8,6 +8,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cerrno>
 #include <fcntl.h>
@@ -144,6 +145,21 @@ void load() noexcept
             g_settings.user_id = std::string{root->str("userId")};
             g_settings.device_id = std::string{root->str("deviceId")};
             g_settings.trigger_feedback = root->num("triggerFeedback", 1.0) != 0.0;
+            const auto read_categories = [&](const char *key, auto &out)
+            {
+                const auto *values = root->find(key);
+                if (!values || values->type != json::Type::array)
+                    return;
+                for (std::size_t i = 0; i < std::min<std::size_t>(values->size(), 256); ++i)
+                    if (const auto *value = values->at(i);
+                        value && value->type == json::Type::string && !value->text.empty() &&
+                        value->text.size() <= 256 && value->text != "settings" &&
+                        std::find(out.begin(), out.end(), value->text) == out.end())
+                        out.push_back(value->text);
+            };
+            read_categories("navigationOrder", g_settings.navigation_order);
+            read_categories("navigationHidden", g_settings.navigation_hidden);
+            read_categories("seerrWatchedRequests", g_settings.seerr_watched_requests);
             g_settings.audio_passthrough = root->num("audioPassthrough", 1.0) != 0.0;
             g_settings.software_audio = root->num("softwareAudio", 0.0) != 0.0;
             g_settings.dv_hdr10_base = root->num("dvHdr10Base", 0.0) != 0.0;
@@ -232,6 +248,20 @@ void save() noexcept
     (void)mkdir(directory(), 0700);
 #endif
     std::string text = "{\n";
+    const auto write_categories = [&](const char *key, const auto &values)
+    {
+        text += "  \"" + std::string(key) + "\": [";
+        bool first = true;
+        for (const auto &value : values)
+        {
+            text += std::string(first ? "" : ", ") + "\"" + json::escape(value) + "\"";
+            first = false;
+        }
+        text += "],\n";
+    };
+    write_categories("navigationOrder", g_settings.navigation_order);
+    write_categories("navigationHidden", g_settings.navigation_hidden);
+    write_categories("seerrWatchedRequests", g_settings.seerr_watched_requests);
     text += "  \"host\": \"" + json::escape(g_settings.host) + "\",\n";
     text += "  \"port\": " + std::to_string(g_settings.port) + ",\n";
     text += "  \"reportServer\": \"" + json::escape(g_settings.report_server) + "\",\n";

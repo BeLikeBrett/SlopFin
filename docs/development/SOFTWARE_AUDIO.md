@@ -2,7 +2,7 @@
 
 This optional path decodes **E-AC-3, DTS core and TrueHD** on the PS5 CPU
 and feeds the production AudioOut queue. It is compiled into the public builds
-and is enabled in **Settings → Audio & video → Decode TrueHD / DTS / E-AC-3 on PS5**.
+and is enabled in **Settings → Audio/Video → Decode TrueHD / DTS / E-AC-3 on PS5**.
 It defaults to Off. Changes apply on the next playback; no marker file is required.
 TrueHD uses this decoder when enabled and compatible, even if HDMI passthrough is on.
 Passthrough takes priority for DTS/E-AC-3.

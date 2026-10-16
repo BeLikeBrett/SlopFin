@@ -47,7 +47,7 @@ Use the sidebar to choose a library. Triangle opens Search; Square opens your
 profile menu. [Controls](CONTROLS.md) explains DualSense seeking and playback
 shortcuts. [Compatibility](COMPATIBILITY.md) covers codecs and output limits.
 
-Use **Settings → Audio & video** for optional audio decoding, HDMI passthrough
+Use **Settings → Audio/Video** for optional audio decoding, HDMI passthrough
 and Dolby Vision HDR10 fallback. [Playback stats](PLAYBACK_STATS.md) explains who
 decodes or converts each stream.
 
@@ -55,4 +55,10 @@ Folder builds from 01.000.003 include **Settings → Updates**. Older public
 01.000.000 builds need one manual folder upgrade to obtain it.
 [Update status and requirements](UPDATES.md).
 
+Use **Settings → Navigation** to reorder or hide Home, Discover and library
+categories. Controller options are inside Navigation. To change your Jellyfin
+server, sign out in **Settings → Account** and enter another address on the sign-in screen.
+
 For a source build, use the [developer build guide](development/BUILD.md).
+
+![Category customization in the Linux preview](images/navigation-preview.png)

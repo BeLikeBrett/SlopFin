@@ -5,6 +5,7 @@
 | Control | Action |
 | --- | --- |
 | D-pad | Navigate rows, artwork and menus |
+| Right stick | Scroll libraries, Discover and Settings |
 | Cross | Select or play |
 | Circle | Go back |
 | Triangle on Home/library pages | Search with the PlayStation keyboard |
@@ -18,11 +19,16 @@ A compact L2/R2 hint at the bottom of the sidebar lights while a trigger is held
 
 **Discover**, the request server, sits at the top of the sidebar. Triangle
 searches it, Cross opens a title, Square swaps Browse / My requests, L3 changes
-media type, R3 changes the catalog sort, and L1/R1
+media type, R3 changes the catalog sort without moving focus to the toolbar, and L1/R1
 changes catalog pages. Media and sorting choices sit beside search. In a title,
 choose seasons and quality with the D-pad; Triangle opens a season’s episode guide.
 Options focuses the primary action. Existing requests show Cancel when permitted;
 available media opens in Jellyfin. See [Discover](DISCOVER.md).
+
+Use **Settings → Navigation** to show, hide or reorder Home, Discover and your
+libraries. Cross toggles visibility, L1/R1 move a category, and Square restores
+the default layout. Settings stays visible. Controller options are inside Navigation.
+New libraries appear automatically; renaming a library keeps its saved position.
 
 ## Playback and seeking
 
@@ -38,7 +44,7 @@ available media opens in Jellyfin. See [Discover](DISCOVER.md).
 | Touchpad or R3 | Toggle playback diagnostics |
 
 DualSense adaptive triggers add resistance during playback. Switch it off in
-**Settings → Controller → Trigger feedback**. Seeking still works with feedback
+**Settings → Navigation → Controller → Trigger feedback**. Seeking still works with feedback
 off or with a controller that cannot apply the effect.
 
 The picture pauses while you aim a seek and resumes in its previous state

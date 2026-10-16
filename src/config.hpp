@@ -14,6 +14,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace slopfin::config
 {
@@ -29,6 +30,9 @@ struct Settings
     /* Whether the triggers load up while seeking. Hardware that has no trigger
        effects ignores it. */
     bool trigger_feedback = true;
+    std::vector<std::string> navigation_order;
+    std::vector<std::string> navigation_hidden;
+    std::vector<std::string> seerr_watched_requests;
     bool audio_passthrough = true;
     bool software_audio = false;
     bool dv_hdr10_base = false;
