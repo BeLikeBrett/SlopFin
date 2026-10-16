@@ -1138,6 +1138,8 @@ void snapshot() noexcept
                     : 0;
             g_view.seen_requests_epoch = g_model.requests_epoch;
             g_view.requests = g_model.requests;
+            if (g_view.mode == 1 && g_view.requests.empty() && !g_view.sheet_open)
+                g_view.field_focused = true;
             const auto visible = visible_requests();
             for (std::size_t i = 0; i < visible.size(); ++i)
                 if (g_view.requests[static_cast<std::size_t>(visible[i])].id == selected)
@@ -2071,9 +2073,11 @@ void draw_field() noexcept
         x += w + 24;
     }
     const std::string summary =
-        g_view.mode == 1 ? std::to_string(g_view.requests.size()) + " requests"
+        g_view.mode == 1 ? std::to_string(g_view.requests.size()) +
+                               (g_view.requests.size() == 1 ? " request" : " requests")
                          : (g_view.query.empty() ? kSorts[g_view.sort] : "Search results") +
-                               std::string("  ·  ") + std::to_string(results_size()) + " titles";
+                               std::string("  ·  ") + std::to_string(results_size()) +
+                               (results_size() == 1 ? " title" : " titles");
     text::draw(ui::kContentX, kFieldY + 86, summary, 20, Weight::regular, gfx::palette::text_dim);
     if (g_view.mode == 0)
     {
