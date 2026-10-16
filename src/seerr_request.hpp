@@ -131,6 +131,9 @@ inline std::string payload(const std::string &type, int id, bool is4k, const Opt
                        ",\"is4k\":" + (is4k ? "true" : "false");
     if (is4k && !options.allow4k)
         return {};
+    const int media_status = is4k ? options.status4k : options.status;
+    if (type == "movie" && media_status > 1 && media_status != 6)
+        return {};
     if (type == "tv")
     {
         std::string numbers;

@@ -80,7 +80,7 @@ HDR math, scaling, URL handling and bitrate measurement.
 - Do not close an audio port underneath the thread blocked in its output call.
 - Condition-based worker synchronization is preferable to short-sleep spinning.
 - Return from `main` is unsafe on this runtime; failure paths park explicitly.
-- Detailed ABI findings and investigation rules live in [CLAUDE.md](../../CLAUDE.md).
+- Detailed ABI findings and investigation rules live in [platform constraints](CONSTRAINTS.md).
 
 ---
 

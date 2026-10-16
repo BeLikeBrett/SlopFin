@@ -8185,7 +8185,8 @@ void frame() noexcept
     }
     if (home_background_covers_top)
         gfx::fill_rect(0, 720, gfx::kWidth, gfx::kHeight - 720, kPageBottom);
-    else if (screen != Screen::playing && !detail_background_covers_frame)
+    else if (screen != Screen::playing && !detail_background_covers_frame &&
+             !(screen == Screen::discover && seerr::covers_background()))
         draw_background();
 
     /* Search replaces category content while preserving the underlying browsing state. */

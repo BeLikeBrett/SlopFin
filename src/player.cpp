@@ -1917,7 +1917,7 @@ bool start(const jellyfin::PlaybackRequest &request, const std::string &title,
      * this thread inherited its core, and it converts every picture -- about
      * 22 ms a 4K frame when an HDR source is tone mapped to SDR. Sharing the
      * core that must finish a frame every 16 ms held Backrooms to 21 fps with
-     * 60% of render loops over 20 ms. CLAUDE.md's rule for background threads.
+     * 60% of render loops over 20 ms. Keep background threads off the render core.
      */
     if (const std::uint64_t spare = images::spare_cores(); created == 0 && spare != 0)
         (void)scePthreadSetaffinity(g_thread, spare);

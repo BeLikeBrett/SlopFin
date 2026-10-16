@@ -462,7 +462,21 @@ inline float rounded_coverage(int px, int py, int rx, int ry, int rw, int rh, in
     const float cy = top ? static_cast<float>(ry) + radius : static_cast<float>(ry + rh) - radius;
     const float dx = static_cast<float>(px) + 0.5f - cx;
     const float dy = static_cast<float>(py) + 0.5f - cy;
-    return std::clamp(radius - std::sqrt(dx * dx + dy * dy) + 0.5f, 0.0f, 1.0f);
+    const float distance = std::sqrt(dx * dx + dy * dy) - radius;
+    if (distance <= -0.75f)
+        return 1.0f;
+    if (distance >= 0.75f)
+        return 0.0f;
+    float coverage = 0;
+    for (int sy = 0; sy < 4; ++sy)
+        for (int sx = 0; sx < 4; ++sx)
+        {
+            const float sample_x = dx + (static_cast<float>(sx) + 0.5f) * 0.25f - 0.5f;
+            const float sample_y = dy + (static_cast<float>(sy) + 0.5f) * 0.25f - 0.5f;
+            const float edge = std::sqrt(sample_x * sample_x + sample_y * sample_y) - radius;
+            coverage += std::clamp(0.5f - edge * 4.0f, 0.0f, 1.0f);
+        }
+    return coverage / 16.0f;
 }
 
 /* The same colour at a fraction of its alpha, for a partly covered pixel. */
@@ -1674,22 +1688,28 @@ void rounded_rect_phys(int x, int y, int w, int h, int radius, Color color) noex
     if (x0 >= x1 || y0 >= y1)
         return;
 
+    fill_rect_phys(x, y + radius, w, h - radius * 2, color);
+    fill_rect_phys(x + radius, y, w - radius * 2, radius, color);
+    fill_rect_phys(x + radius, y + h - radius, w - radius * 2, radius, color);
     std::uint32_t *frame = back_buffer();
     for (int py = y0; py < y1; ++py)
     {
+        if (py >= y + radius && py < y + h - radius)
+        {
+            py = y + h - radius - 1;
+            continue;
+        }
         std::uint32_t *row = frame + static_cast<std::size_t>(py) * g_phys_w;
-        const bool straight_row = py >= y + radius && py < y + h - radius;
         for (int px = x0; px < x1; ++px)
         {
-            if (straight_row || (px >= x + radius && px < x + w - radius))
+            if (px >= x + radius && px < x + w - radius)
             {
-                blend_pixel(row + px, color);
+                px = x + w - radius - 1;
                 continue;
             }
             const float coverage = rounded_coverage(px, py, x, y, w, h, radius);
-            if (coverage <= 0.0f)
-                continue;
-            blend_pixel(row + px, coverage >= 1.0f ? color : at_coverage(color, coverage));
+            if (coverage > 0.0f)
+                blend_pixel(row + px, coverage >= 1.0f ? color : at_coverage(color, coverage));
         }
     }
 }

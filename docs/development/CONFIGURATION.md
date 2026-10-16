@@ -111,7 +111,7 @@ make PACBREW_PACKAGES="sdl2 openssl" \
   APP_INCLUDE_PATHS="include"
 ```
 
-Set the same environment variables before `./build.ps1` on Windows. Paths in
+Set the same environment variables before `./tools/build.ps1` on Windows. Paths in
 these lists cannot contain spaces. See [PacBrew dependencies](PACBREW.md) for
 manual archive examples.
 
@@ -133,7 +133,7 @@ Frequently used local build and deployment values may be kept in an ignored
 hidden file:
 
 ```bash
-cp .env.example .env
+cp tools/env.example .env
 ```
 
 The file uses ordinary GNU Make `NAME=value` syntax. Do not put title identity

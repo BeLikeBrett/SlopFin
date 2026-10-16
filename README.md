@@ -88,7 +88,7 @@ Open **Settings → Updates** to check for updates in the app. Installation need
 
 ## Contribute
 
-Start with [contributing](CONTRIBUTING.md) and the
+Start with [contributing](.github/CONTRIBUTING.md) and the
 [developer guide](docs/development/README.md) for builds, architecture,
 playback internals and validation. Player instructions are in the
 [help index](docs/README.md).

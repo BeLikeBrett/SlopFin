@@ -20,7 +20,8 @@ A compact L2/R2 hint at the bottom of the sidebar lights while a trigger is held
 searches it, Cross opens a title, Square swaps Browse / My requests, and L1/R1
 changes catalog pages. Media and sorting choices sit beside search. In a title,
 choose seasons and quality with the D-pad; Triangle opens a season’s episode guide.
-Options focuses the request button. See [Discover](DISCOVER.md).
+Options focuses the primary action. Existing requests show Cancel when permitted;
+available media opens in Jellyfin. See [Discover](DISCOVER.md).
 
 ## Playback and seeking
 
@@ -55,3 +56,5 @@ the field and clears artwork while typing; the PS5 controls final placement.
 
 In the picture editor, D-pad moves the circular crop,
 L1/R1 or the triggers zoom, Triangle resets, Cross saves and Circle goes back.
+
+The right stick also scrolls the Settings category list. Updates is at the bottom.

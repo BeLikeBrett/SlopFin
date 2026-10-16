@@ -28,12 +28,13 @@ Jellyfin sign-in.
 | Triangle | Search using the PlayStation keyboard |
 | D-pad | Browse titles |
 | Cross | Open a title, then choose its action |
-| Square | Switch Browse / My requests; shown beside the destination tab |
+| Square | Switch Browse / My requests; fixed hint beside the tabs |
 | L1 / R1 | Previous / next catalog page |
 | Circle | Close the title or return to the sidebar |
 
-Availability badges come from the request server. Processing can include
-waiting for a download; it does not mean bytes are currently arriving.
+Availability badges come from the request server. Approved or queued titles
+show **Requested** in the catalog. My requests shows actual download progress
+when the server provides it.
 Choose Movies & series, Movies or Series beside the search field. The adjacent
 sort control cycles Trending, Popular, Top rated, Newest and Upcoming. Changes
 apply immediately. These catalogs use the server's discovery endpoints and
@@ -67,6 +68,9 @@ Open a title to review its request options before sending anything:
 count, then press Cross to submit. Circle closes without requesting anything.
 Server quotas, approval rules and account permissions still apply.
 
+Existing requests show their saved quality profile as read-only. **Cancel request**
+is the main action when your account can remove that request; otherwise it shows
+a disabled **Requested** state. Available titles cannot be requested again.
 Available titles with a Jellyfin item ID offer **Open in Jellyfin**. Circle
 returns to the same Discover view. The Jellyfin server you use in SlopFin must
 contain that item and allow your account to access it.

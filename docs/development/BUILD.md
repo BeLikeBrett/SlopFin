@@ -31,7 +31,7 @@ See [software audio](SOFTWARE_AUDIO.md) for its Settings toggle and limits.
 
 ## Deploy to a development console
 
-Copy `.env.example` to `.env` and set `PS5_HOST`. Close SlopFin before replacing
+Copy `tools/env.example` to `.env` and set `PS5_HOST`. Close SlopFin before replacing
 files and preserve `/data/slopfin/config.json`. With FTP and elfldr running:
 
 ```sh
