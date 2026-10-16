@@ -1,6 +1,5 @@
 /*
- * SlopFin - one background thread for the screens that talk to the server
- * outside the main data worker: the profile and the dashboard.
+ * SlopFin - serialized background jobs, isolated by service.
  * Copyright (C) 2026 Brett
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
@@ -17,7 +16,16 @@
 namespace slopfin::background
 {
 
-void run(std::function<void()> job) noexcept;
+enum class Lane
+{
+    general,
+    requests,
+    updates,
+    count
+};
+
+/* Separate lanes keep a slow request server from delaying account or update work. */
+bool run(std::function<void()> job, Lane lane = Lane::general) noexcept;
 
 /* Jobs queued or running; for a "working" indicator. */
 int pending() noexcept;

@@ -9,6 +9,7 @@
 | Get Skip Intro working | [Intro skipping](INTRO_SKIPPING.md) |
 | Set autoplay and idle prompts | [Autoplay](AUTOPLAY.md) |
 | Change my profile or use the server dashboard | [Profile and dashboard](PROFILE_AND_DASHBOARD.md) |
+| Ask my request server for a movie or series | [Discover](DISCOVER.md) |
 | Update or recover an installation | [Updates](UPDATES.md) |
 | Fix a connection or playback problem | [Troubleshooting](TROUBLESHOOTING.md) |
 | Find logs or report a crash | [Diagnostics](DIAGNOSTICS.md) |

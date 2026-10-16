@@ -32,6 +32,15 @@ struct Settings
     bool audio_passthrough = true;
     bool software_audio = false;
     bool dv_hdr10_base = false;
+    /* The request server behind Discover: a Seerr/Jellyseerr/Overseerr address,
+       an API key, or a signed-in session. Empty host leaves Discover offered
+       but unconfigured. */
+    std::string seerr_host; /* scheme + host + optional base path */
+    int seerr_port = 443;
+    std::string seerr_api_key;
+    std::string seerr_cookie; /* the connect.sid value, when signed in */
+    std::string seerr_user;   /* the signed-in request account's display name */
+    int seerr_auth = 0;       /* 0 Jellyfin account, 1 local account, 2 API key */
     /* Seconds sooner each title's subtitles are shown, keyed by item id; a
        title at its original timing has no entry (subtitle_timing.hpp). */
     std::map<std::string, double> subtitle_offsets;

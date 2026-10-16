@@ -147,6 +147,18 @@ void load() noexcept
             g_settings.audio_passthrough = root->num("audioPassthrough", 1.0) != 0.0;
             g_settings.software_audio = root->num("softwareAudio", 0.0) != 0.0;
             g_settings.dv_hdr10_base = root->num("dvHdr10Base", 0.0) != 0.0;
+            g_settings.seerr_host = std::string{root->str("seerrHost")};
+            g_settings.seerr_port = static_cast<int>(root->num("seerrPort", 443.0));
+            if (g_settings.seerr_port < 1 || g_settings.seerr_port > 65535)
+                g_settings.seerr_port = 443;
+            g_settings.seerr_api_key = std::string{root->str("seerrApiKey")};
+            g_settings.seerr_cookie = std::string{root->str("seerrCookie")};
+            g_settings.seerr_user = std::string{root->str("seerrUser")};
+            g_settings.seerr_auth = static_cast<int>(root->num("seerrAuth", 0.0));
+            if (g_settings.seerr_auth < 0 || g_settings.seerr_auth > 2)
+                g_settings.seerr_auth = 0;
+            if (!g_settings.seerr_api_key.empty() && g_settings.seerr_cookie.empty())
+                g_settings.seerr_auth = 2;
 #ifndef SLOPFIN_HOST
             // Carry marker-based choices forward once; saved settings take precedence.
             if (root->find("audioPassthrough") == nullptr &&
@@ -232,6 +244,12 @@ void save() noexcept
         "  \"audioPassthrough\": " + std::string{g_settings.audio_passthrough ? "1" : "0"} + ",\n";
     text += "  \"softwareAudio\": " + std::string{g_settings.software_audio ? "1" : "0"} + ",\n";
     text += "  \"dvHdr10Base\": " + std::string{g_settings.dv_hdr10_base ? "1" : "0"} + ",\n";
+    text += "  \"seerrHost\": \"" + json::escape(g_settings.seerr_host) + "\",\n";
+    text += "  \"seerrPort\": " + std::to_string(g_settings.seerr_port) + ",\n";
+    text += "  \"seerrApiKey\": \"" + json::escape(g_settings.seerr_api_key) + "\",\n";
+    text += "  \"seerrCookie\": \"" + json::escape(g_settings.seerr_cookie) + "\",\n";
+    text += "  \"seerrUser\": \"" + json::escape(g_settings.seerr_user) + "\",\n";
+    text += "  \"seerrAuth\": " + std::to_string(g_settings.seerr_auth) + ",\n";
     {
         const auto &c = g_settings.subtitle_look;
         text +=

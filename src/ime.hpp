@@ -31,7 +31,7 @@ void shutdown() noexcept;
 
 /* Queues a keyboard. Ignored while one is already open. */
 void request(const std::string &initial, const std::string &title, const std::string &placeholder,
-             Mode mode) noexcept;
+             Mode mode, int search_top = 244) noexcept;
 
 /* Drives the dialog; call once per frame. */
 void poll() noexcept;

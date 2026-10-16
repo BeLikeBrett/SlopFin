@@ -22,6 +22,11 @@ class WebRequest
     {
         return location_;
     }
+    /* Raw "Name: value" response header lines, in order. */
+    const std::vector<std::string> &headers() const noexcept
+    {
+        return response_headers_;
+    }
     int status() const noexcept
     {
         return status_;
@@ -30,6 +35,7 @@ class WebRequest
   private:
     int status_ = 0;
     std::string location_;
+    std::vector<std::string> response_headers_;
     std::atomic<bool> interrupted_{false};
 #ifdef SLOPFIN_HOST
     void *easy_ = nullptr;
@@ -37,8 +43,11 @@ class WebRequest
     void *headers_ = nullptr;
     std::vector<unsigned char> pending_;
     bool done_ = false, failed_ = false, paused_ = false;
+    bool headers_complete_ = false;
+    std::size_t header_bytes_ = 0;
     bool pump() noexcept;
     static std::size_t write(char *, std::size_t, std::size_t, void *);
+    static std::size_t header(char *, std::size_t, std::size_t, void *);
 #else
     std::atomic<int> request_{-1};
     int connection_ = -1;

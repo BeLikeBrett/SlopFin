@@ -90,8 +90,9 @@ int main(void)
     if (!t || sf_update_prepare(t, "/data/slopfin/update/staged", "/data/homebrew/PPSA99001",
                                 "/data/slopfin/update/backup") < 0)
     {
-        result("Could not prepare the update. Check free space and try again. Your app was not "
-               "changed.");
+        result(!t ? "Not enough memory to prepare the update. Your app was not changed."
+                  : "Could not verify the update files or save a backup. Download the update "
+                    "again. Your app was not changed.");
         free(t);
         unlink(lock);
         return 1;

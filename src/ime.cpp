@@ -89,6 +89,7 @@ std::string g_initial;
 std::string g_title;
 std::string g_placeholder;
 slopfin::ime::Mode g_mode = slopfin::ime::Mode::text;
+int g_search_top = 244;
 std::string g_result;
 
 std::array<std::uint16_t, kMaxCharacters + 1> g_text_buffer{};
@@ -208,7 +209,7 @@ void start_requested() noexcept
     {
         // Place below the search field; PS5 owns the final dialog dimensions.
         param.pos_x = 1080.0f;
-        param.pos_y = 244.0f;
+        param.pos_y = static_cast<float>(g_search_top);
         param.horizontal_alignment = 1;
         param.vertical_alignment = 0;
     }
@@ -274,7 +275,7 @@ void shutdown() noexcept
 }
 
 void request(const std::string &initial, const std::string &title, const std::string &placeholder,
-             Mode mode) noexcept
+             Mode mode, int search_top) noexcept
 {
     if (!g_ready || g_active || g_requested)
         return;
@@ -284,6 +285,7 @@ void request(const std::string &initial, const std::string &title, const std::st
     g_title = title;
     g_placeholder = placeholder;
     g_mode = mode;
+    g_search_top = search_top < 0 ? 0 : search_top > 1080 ? 1080 : search_top;
     g_requested = true;
 }
 

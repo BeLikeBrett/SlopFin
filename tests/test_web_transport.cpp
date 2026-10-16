@@ -4,6 +4,7 @@
 #include "server_address.hpp"
 #include "json.hpp"
 #include <cassert>
+#include <algorithm>
 #include <cstdio>
 namespace slopfin::trace
 {
@@ -44,5 +45,9 @@ int main(int argc, char **argv)
     auto posted =
         slopfin::http::post(address.host, address.port, "/echo", {}, "payload", "text/plain");
     assert(posted.ok() && posted.body == "payload");
+    assert(posted.header("SET-cookie") == "other=ignored; Path=/");
+    assert(std::count_if(posted.headers.begin(), posted.headers.end(), [](const auto &line)
+                         { return line.find("connect.sid=test-session") != std::string::npos; }) ==
+           1);
     std::puts("HTTPS API, incremental reads, cancellation and certificate verification passed");
 }

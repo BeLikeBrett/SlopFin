@@ -147,6 +147,8 @@ void step(const char *name) noexcept
 
 int g_video = -1;
 std::atomic<bool> g_hdr_output{false};
+/* Render-thread state, published to row workers by run_rows' synchronization. */
+bool g_render_hdr = false;
 std::atomic<std::uint64_t> g_hdr_requested{0};
 std::atomic<std::uint64_t> g_hdr_applied{0};
 /* Set by /data/slopfin-sdr-only: SDR whatever the console's HDR setting says. */
@@ -224,11 +226,11 @@ void copy_slice(std::uint32_t *frame, unsigned first_row, unsigned stride) noexc
                 const unsigned y = origin_y + g_tile_y[word];
                 out[word] =
                     (x < static_cast<unsigned>(g_phys_w) && y < static_cast<unsigned>(g_phys_h))
-                        ? (g_hdr_output
+                        ? (g_render_hdr
                                ? g_staging[static_cast<std::size_t>(y) * g_phys_w + x]
                                : slopfin::gfx::scanout_pixel(
                                      g_staging[static_cast<std::size_t>(y) * g_phys_w + x]))
-                        : (g_hdr_output ? slopfin::hdr::pack(0, 0, 0) : 0xff000000u);
+                        : (g_render_hdr ? slopfin::hdr::pack(0, 0, 0) : 0xff000000u);
             }
         }
     }
@@ -416,7 +418,7 @@ inline std::uint32_t over_255(std::uint32_t value) noexcept
 /* Source-over blend of a straight-alpha colour onto an opaque destination. */
 inline void blend_pixel(std::uint32_t *dst, slopfin::gfx::Color src) noexcept
 {
-    if (g_hdr_output)
+    if (g_render_hdr)
     {
         *dst = g_hdr_compositor.blend(*dst, src);
         return;
@@ -515,7 +517,7 @@ namespace slopfin::gfx
 {
 bool hdr_output() noexcept
 {
-    return g_hdr_output;
+    return g_hdr_output.load(std::memory_order_acquire);
 }
 std::uint32_t to_hdr_pixel(Color color) noexcept
 {
@@ -743,14 +745,15 @@ bool initialize() noexcept
     if (registered < 0)
         return false;
 
-    g_hdr_output = chosen == slopfin::hdr::kPixelFormat;
+    g_render_hdr = chosen == slopfin::hdr::kPixelFormat;
+    g_hdr_output.store(g_render_hdr, std::memory_order_release);
     g_hdr_compositor.initialize();
     if (std::FILE *sdr_only = std::fopen("/data/slopfin-sdr-only", "rb"); sdr_only != nullptr)
     {
         g_sdr_only = true;
         (void)std::fclose(sdr_only);
     }
-    slopfin::trace::mark(g_hdr_output ? "gfx: HDR10 PQ compositor enabled"
+    slopfin::trace::mark(g_render_hdr ? "gfx: HDR10 PQ compositor enabled"
                                       : "gfx: SDR compositor enabled");
 
     slopfin::trace::mark("gfx: step registered " + std::to_string(registered));
@@ -1475,7 +1478,7 @@ bool capture_region(const char *path, int x, int y, int w, int h, int shrink) no
      * whether what is on screen is sharp.
      */
     const std::uint32_t header[4] = {UINT32_C(0x46504c53), static_cast<std::uint32_t>(out_w),
-                                     static_cast<std::uint32_t>(out_h), g_hdr_output ? 1u : 0u};
+                                     static_cast<std::uint32_t>(out_h), g_render_hdr ? 1u : 0u};
     if (std::fwrite(header, sizeof(std::uint32_t), 4, file) != 4)
     {
         (void)std::fclose(file);
@@ -1489,7 +1492,7 @@ bool capture_region(const char *path, int x, int y, int w, int h, int shrink) no
         for (int ox = 0; ox < out_w; ++ox)
         {
             // Keep HDR codes intact: byte-wise averaging corrupts packed 10-bit samples.
-            if (shrink == 1 || g_hdr_output)
+            if (shrink == 1 || g_render_hdr)
             {
                 row[static_cast<std::size_t>(ox)] =
                     g_staging[static_cast<std::size_t>(y + oy * shrink) * g_phys_w + x +
@@ -1560,7 +1563,7 @@ void apply_pending_output_mode() noexcept
     const SystemHdr setting = read_system_hdr();
     g_system_hdr.store(setting, std::memory_order_release);
     const bool desired = (request & 1) != 0 && !g_sdr_only && setting == SystemHdr::on;
-    if (desired != g_hdr_output.load(std::memory_order_relaxed))
+    if (desired != g_render_hdr)
     {
         VideoAttribute attribute{};
         sceVideoOutSetBufferAttribute2(
@@ -1570,7 +1573,10 @@ void apply_pending_output_mode() noexcept
         slopfin::trace::mark(std::string{"gfx: change to "} + (desired ? "HDR10" : "SDR") +
                              " result=" + std::to_string(result));
         if (result >= 0)
+        {
+            g_render_hdr = desired;
             g_hdr_output.store(desired, std::memory_order_release);
+        }
     }
     g_hdr_applied.store(request, std::memory_order_release);
 }
@@ -1579,7 +1585,7 @@ void clear(Color color) noexcept
 {
     apply_pending_output_mode();
     const std::uint32_t value =
-        g_hdr_output ? g_hdr_compositor.blend(slopfin::hdr::pack(0, 0, 0), color | 0xff000000u)
+        g_render_hdr ? g_hdr_compositor.blend(slopfin::hdr::pack(0, 0, 0), color | 0xff000000u)
                      : color | 0xff000000u;
     struct ClearJob
     {
@@ -1617,7 +1623,7 @@ void fill_rows(void *context, unsigned first, unsigned stride) noexcept
     std::uint32_t *frame = back_buffer();
     /* An opaque fill is a run of identical words, which vectorises; going
        through the blend a pixel at a time costs twice as much for nothing. */
-    const bool opaque = (job.color >> 24) == 255u && !g_hdr_output;
+    const bool opaque = (job.color >> 24) == 255u && !g_render_hdr;
     const std::uint32_t value = job.color | 0xff000000u;
     for (int py = job.y0 + static_cast<int>(first); py < job.y1; py += static_cast<int>(stride))
     {
@@ -2078,7 +2084,7 @@ void blit_video_phys(const Bitmap &src, int x, int y, int w, int h) noexcept
           x,    y,
           h,    x0,
           y0,   x1,
-          y1,   w == src.width && h == src.height && src.hdr10 == g_hdr_output};
+          y1,   w == src.width && h == src.height && src.hdr10 == g_render_hdr};
 
     run_rows(
         [](void *context, unsigned first, unsigned stride)
@@ -2108,7 +2114,7 @@ void blit_video_phys(const Bitmap &src, int x, int y, int w, int h) noexcept
                     const auto pixel =
                         slopfin::video_scale::mix(top, bottom, ys.weight, v.src->hdr10);
                     out[px] = v.src->hdr10   ? pixel
-                              : g_hdr_output ? g_hdr_compositor.blend(slopfin::hdr::pack(0, 0, 0),
+                              : g_render_hdr ? g_hdr_compositor.blend(slopfin::hdr::pack(0, 0, 0),
                                                                       pixel | 0xff000000u)
                                              : pixel | 0xff000000u;
                 }

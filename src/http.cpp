@@ -9,6 +9,7 @@
 #include "server_address.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -137,7 +138,8 @@ bool send_all(int fd, std::string_view data) noexcept
 }
 
 /* Reads until the server closes or the declared body length is satisfied. */
-bool read_response(int fd, int &status, std::string &body) noexcept
+bool read_response(int fd, int &status, std::string &body,
+                   std::vector<std::string> &response_headers) noexcept
 {
     std::string buffer;
     char chunk[16384];
@@ -167,6 +169,8 @@ bool read_response(int fd, int &status, std::string &body) noexcept
         const std::string line = headers.substr(
             line_start + 2,
             (line_end == std::string::npos ? headers.size() : line_end) - line_start - 2);
+        if (!line.empty() && line.find(':') != std::string::npos)
+            response_headers.push_back(line);
         std::string lowered = line;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -247,6 +251,30 @@ std::string build_request(std::string_view method, std::string_view host, int po
 namespace slopfin::http
 {
 
+std::string Response::header(std::string_view name) const noexcept
+{
+    for (const std::string &line : headers)
+    {
+        const auto colon = line.find(':');
+        if (colon == std::string::npos || colon != name.size())
+            continue;
+        bool match = true;
+        for (std::size_t i = 0; i < colon && match; ++i)
+            match = std::tolower(static_cast<unsigned char>(line[i])) ==
+                    std::tolower(static_cast<unsigned char>(name[i]));
+        if (!match)
+            continue;
+        std::size_t start = colon + 1;
+        while (start < line.size() && (line[start] == ' ' || line[start] == '\t'))
+            ++start;
+        std::size_t end = line.size();
+        while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t'))
+            --end;
+        return line.substr(start, end - start);
+    }
+    return {};
+}
+
 Response get(std::string_view host, int port, std::string_view path,
              const std::vector<std::string> &headers) noexcept
 {
@@ -294,6 +322,7 @@ Response send(std::string_view method, std::string_view host, int port, std::str
             }
             response.body.append(chunk, static_cast<std::size_t>(count));
         }
+        response.headers = request.headers();
         if (count < 0)
         {
             response.status = 0;
@@ -310,7 +339,7 @@ Response send(std::string_view method, std::string_view host, int port, std::str
     if (body.empty() && method != "GET")
         request.insert(request.size() - 2, "Content-Length: 0\r\n");
     if (send_all(fd, request))
-        (void)read_response(fd, response.status, response.body);
+        (void)read_response(fd, response.status, response.body, response.headers);
     (void)close(fd);
     return response;
 }

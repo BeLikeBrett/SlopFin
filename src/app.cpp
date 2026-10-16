@@ -36,6 +36,7 @@
 #include "seek.hpp"
 #include "server_address.hpp"
 #include "search_sections.hpp"
+#include "seerr.hpp"
 #include "subtitle_style.hpp"
 #include "subtitle_timing.hpp"
 #include "subtitles.hpp"
@@ -163,6 +164,7 @@ enum class Screen
     settings,
     profile,   /* the signed-in user's page (account.cpp) */
     dashboard, /* the server's administration pages (dashboard.cpp) */
+    discover,  /* the request server's catalogue (seerr.cpp) */
 };
 
 struct Row
@@ -289,8 +291,8 @@ std::condition_variable g_request_wake;
 /* Cursor, animation and everything else only the render thread touches. */
 struct View
 {
-    int sidebar_index = 0;  /* where the cursor is while browsing the list */
-    int active_section = 0; /* which section is actually open */
+    int sidebar_index = 1;  /* where the cursor is while browsing the list */
+    int active_section = 1; /* which section is actually open */
     bool sidebar_focused = false;
 
     int row_index = 0;
@@ -304,6 +306,11 @@ struct View
     /* How far the content is dimmed while the sidebar holds the input. */
     motion::Spring sidebar_dim;
     motion::Spring sidebar_scroll;
+    motion::Spring shortcut_left;
+    motion::Spring shortcut_right;
+    motion::Spring shortcut_feedback;
+    std::uint64_t shortcut_until = 0;
+    std::string shortcut_name;
 
     std::string server_draft;
     bool server_draft_initialized = false;
@@ -479,6 +486,7 @@ struct SidebarEntry
         search,
         library,
         settings,
+        discover, /* the request server (seerr.cpp) */
     };
 
     std::string label;
@@ -490,6 +498,7 @@ struct SidebarEntry
 std::vector<SidebarEntry> build_sidebar(const std::vector<jellyfin::Library> &libraries) noexcept
 {
     std::vector<SidebarEntry> entries;
+    entries.push_back({"Discover", SidebarEntry::Kind::discover, {}, false});
     entries.push_back({"Home", SidebarEntry::Kind::home, {}, false});
 
     bool first_library = true;
@@ -644,6 +653,12 @@ void advance_motion() noexcept
     g_view.sidebar_dim.aim(g_view.sidebar_focused ? 1.0f : 0.0f);
     g_view.sidebar_dim.step(motion::kFade, dt);
     g_view.sidebar_scroll.step(motion::kSlide, dt);
+    g_view.shortcut_left.aim(pad::held(pad::Button::l2) ? 1.0f : 0.0f);
+    g_view.shortcut_right.aim(pad::held(pad::Button::r2) ? 1.0f : 0.0f);
+    g_view.shortcut_left.step(motion::kControlFocus, dt);
+    g_view.shortcut_right.step(motion::kControlFocus, dt);
+    g_view.shortcut_feedback.aim(slopfin::app::now_us() < g_view.shortcut_until ? 1.0f : 0.0f);
+    g_view.shortcut_feedback.step(motion::kFade, dt);
     for (motion::Spring &row : g_view.row_offset)
         row.step(motion::kSlide, dt);
 }
@@ -833,6 +848,8 @@ const char *screen_name(Screen screen) noexcept
         return "profile";
     case Screen::dashboard:
         return "dashboard";
+    case Screen::discover:
+        return "discover";
     }
     return "?";
 }
@@ -1410,6 +1427,43 @@ void draw_wordmark(int x, int y) noexcept
     text::draw(x + 64, y + 3, "SlopFin", 36, Weight::bold, gfx::palette::text);
 }
 
+void draw_category_shortcut() noexcept
+{
+    constexpr int x = kSafeX - 8;
+    constexpr int y = 140;
+    const auto cap = [&](int cx, const char *label, float glow)
+    {
+        gfx::rounded_horizontal_gradient(
+            cx, y, 52, 38, 11,
+            gfx::rgba(0x00, 0xa4, 0xdc, static_cast<std::uint8_t>(20 + glow * 65)),
+            gfx::rgba(0x40, 0xd0, 0xef, static_cast<std::uint8_t>(10 + glow * 34)));
+        gfx::stroke_rounded_rect(cx, y, 52, 38, 11, 1,
+                                 gfx::with_alpha(gfx::palette::focus_border,
+                                                 static_cast<std::uint8_t>(60 + glow * 160)));
+        text::draw(
+            cx + (52 - text::measure(label, 19, Weight::bold)) / 2,
+            text::centered_y(y, 38, label, 19, Weight::bold) + static_cast<int>(glow * 2), label,
+            19, Weight::bold,
+            gfx::with_alpha(gfx::palette::text, static_cast<std::uint8_t>(150 + glow * 105)));
+    };
+    cap(x, "L2", g_view.shortcut_left.value());
+    text::draw(x + 58, text::centered_y(y, 38, "/", 18, Weight::regular), "/", 18, Weight::regular,
+               gfx::palette::text_faint);
+    cap(x + 74, "R2", g_view.shortcut_right.value());
+    text::draw(x + 136, text::centered_y(y, 38, "+", 20, Weight::regular), "+", 20, Weight::regular,
+               gfx::palette::text_dim);
+    icons::draw(icons::Icon::chevron_up, x + 170, y + 1, 20,
+                pad::held(pad::Button::up) ? gfx::palette::focus_border : gfx::palette::text_dim);
+    icons::draw(icons::Icon::chevron_down, x + 170, y + 17, 20,
+                pad::held(pad::Button::down) ? gfx::palette::focus_border : gfx::palette::text_dim);
+    const float feedback = g_view.shortcut_feedback.value();
+    const bool switching = feedback > 0.05f && !g_view.shortcut_name.empty();
+    const std::string label = switching ? g_view.shortcut_name : "Switch categories";
+    text::draw_ellipsized(x + static_cast<int>(feedback * 4), y + 46, kSidebarWidth - x - 20, label,
+                          18, switching ? Weight::medium : Weight::regular,
+                          switching ? gfx::palette::accent_alt : gfx::palette::text_faint);
+}
+
 void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,
                   const std::string &server_name) noexcept
 {
@@ -1420,10 +1474,11 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,
                    gfx::rgba(0x08, 0x08, 0x0c, lit ? 0xdc : 0xf0));
     draw_wordmark(kSafeX - 8, kSafeY + 16);
 
-    const bool navigable =
-        screen == Screen::home || screen == Screen::grid || screen == Screen::settings;
+    const bool navigable = screen == Screen::home || screen == Screen::grid ||
+                           screen == Screen::settings || screen == Screen::discover;
     if (!navigable)
         return;
+    draw_category_shortcut();
 
     if (!server_name.empty())
     {
@@ -1708,6 +1763,7 @@ struct Wash
     std::string key; /* what it was composed from */
     int shape = -1;  /* which layout composed it */
     bool ready = false;
+    bool hdr = false;
 };
 Wash g_wash;
 /* Counts compositions, so the trace can say whether the cache is being hit. */
@@ -1729,7 +1785,8 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
     if (g_wash.pixels == nullptr)
         return true; /* no cache: draw straight to the frame, as before */
 
-    if (g_wash.ready && g_wash.shape == shape && g_wash.key == key)
+    if (g_wash.ready && g_wash.shape == shape && g_wash.key == key &&
+        g_wash.hdr == gfx::hdr_output())
     {
         if (shape == 0)
             gfx::blit_surface_height(g_wash.pixels, 720);
@@ -1738,6 +1795,7 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
         return false;
     }
     g_wash.key = key;
+    g_wash.hdr = gfx::hdr_output();
     g_wash.shape = shape;
     g_wash.ready = false;
     /* Hero art covers only the upper part of Home, so it needs the page base
@@ -5126,9 +5184,10 @@ int idle_index(int minutes) noexcept
     return 3; /* whatever was stored, ninety is the one it means */
 }
 
-constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback",    "Controller", "Server",
-                                         "Account",   "Diagnostics", "Updates",    "Audio & video"};
-constexpr int kSettingsMenuCount = 8;
+constexpr const char *kSettingsMenu[] = {"Subtitles", "Playback",      "Controller",
+                                         "Server",    "Account",       "Diagnostics",
+                                         "Updates",   "Audio & video", "Requests"};
+constexpr int kSettingsMenuCount = 9;
 
 /* A screen's single action row, focused, with the menu's look. */
 void draw_settings_action(int y, const std::string &label, const std::string &value) noexcept
@@ -5434,6 +5493,9 @@ void draw_settings(const std::string &server_name) noexcept
                    22, Weight::regular, gfx::palette::text_dim);
         break;
     }
+    case 9:
+        seerr::draw_settings();
+        break;
     default:
     {
         text::draw(kContentX, kSafeY + 96, "Settings", 38, Weight::bold, gfx::palette::text);
@@ -6021,10 +6083,11 @@ bool go_back() noexcept
             g_view.focus.jump(1.0f);
             g_view.focus.aim(1.0f);
             return true;
+        case Screen::discover:
         case Screen::home:
         {
             std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.screen = Screen::home;
+            g_shared.screen = entry.screen;
             return true;
         }
         default:
@@ -6062,7 +6125,15 @@ void open_section(const std::vector<SidebarEntry> &entries, int index, bool keep
         g_shared.screen = Screen::settings;
         break;
     }
+    case SidebarEntry::Kind::discover:
+    {
+        seerr::open();
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.screen = Screen::discover;
+        break;
     }
+    }
+    seerr::close_settings();
     g_view.active_section = index;
     /* Picking a section is a fresh start, so circle in it goes to the sidebar
        rather than unwinding wherever the viewer happened to have been. */
@@ -7442,6 +7513,8 @@ void apply_account_choice(account::Choice choice, Screen from) noexcept
 
 void handle_settings_input() noexcept
 {
+    if (g_view.settings_page == 9 && pad::pressed(pad::Button::circle))
+        seerr::close_settings();
     config::Settings &settings = config::current();
     if (g_view.settings_page != 0 && pad::pressed(pad::Button::circle))
     {
@@ -7450,6 +7523,9 @@ void handle_settings_input() noexcept
     }
     switch (g_view.settings_page)
     {
+    case 9:
+        seerr::handle_settings_input();
+        return;
     case 8:
         if (pad::pressed(pad::Button::down))
             g_view.audio_row = (g_view.audio_row + 1) % 3;
@@ -7675,6 +7751,14 @@ void open_item(const std::string &item_id) noexcept
 #ifdef SLOPFIN_HOST
 void preview_search(const std::string &term) noexcept
 {
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        if (g_shared.screen == Screen::discover)
+        {
+            seerr::preview_search(term);
+            return;
+        }
+    }
     g_view.search.open = true;
     g_view.search.draft = term;
     g_view.search.reveal.jump(1.0f);
@@ -7719,6 +7803,9 @@ void frame() noexcept
         --g_view.ime_input_guard;
     ime::poll();
     handle_keyboard_result();
+    /* Discover keeps its own keyboard; it reads a result the search bar above
+       did not claim. */
+    seerr::poll();
 
     Screen screen;
     std::string status;
@@ -7890,15 +7977,20 @@ void frame() noexcept
                                             std::max(0, static_cast<int>(search_items.size()) - 1));
 
     /* Trigger plus vertical direction switches categories. */
-    const bool section_shortcut =
-        !g_view.search.open && !ime::busy() &&
-        (pad::held(pad::Button::l2) || pad::held(pad::Button::r2)) &&
-        (screen == Screen::home || screen == Screen::grid || screen == Screen::settings);
+    const bool section_shortcut = !g_view.search.open && !ime::busy() &&
+                                  g_view.ime_input_guard == 0 && !account::menu_visible() &&
+                                  !seerr::modal_open() &&
+                                  (pad::held(pad::Button::l2) || pad::held(pad::Button::r2)) &&
+                                  (screen == Screen::home || screen == Screen::grid ||
+                                   screen == Screen::settings || screen == Screen::discover);
     bool shortcut_used = false;
     if (section_shortcut && !sidebar.empty())
     {
         const int count = static_cast<int>(sidebar.size());
         int wanted = g_view.sidebar_index;
+        shortcut_used = pad::pressed(pad::Button::down) || pad::pressed(pad::Button::up);
+        if (shortcut_used)
+            g_view.shortcut_until = slopfin::app::now_us() + 1400000;
         if (pad::pressed(pad::Button::down) && wanted + 1 < count)
             ++wanted;
         else if (pad::pressed(pad::Button::up) && wanted > 0)
@@ -7909,6 +8001,7 @@ void frame() noexcept
             open_section(sidebar, wanted, g_view.sidebar_focused);
             shortcut_used = true;
         }
+        g_view.shortcut_name = sidebar[static_cast<std::size_t>(wanted)].label;
     }
 
     /* Browsing screens only: Settings reaches the same places through Account. */
@@ -7940,7 +8033,8 @@ void frame() noexcept
             /* the search has the frame */
         }
         else if (g_view.sidebar_focused &&
-                 (screen == Screen::home || screen == Screen::grid || screen == Screen::settings))
+                 (screen == Screen::home || screen == Screen::grid || screen == Screen::settings ||
+                  screen == Screen::discover))
         {
             handle_sidebar_input(sidebar);
         }
@@ -7995,6 +8089,26 @@ void frame() noexcept
                     g_shared.screen = g_view.return_screen;
                 }
                 break;
+            case Screen::discover:
+                /* Circle at the top level hands the input back to the sidebar. */
+                if (!seerr::handle_input())
+                    g_view.sidebar_focused = true;
+                if (const auto id = seerr::take_open_item(); !id.empty())
+                    open_detail(id);
+                if (seerr::take_settings_request())
+                {
+                    const auto it =
+                        std::find_if(sidebar.begin(), sidebar.end(), [](const auto &entry)
+                                     { return entry.kind == SidebarEntry::Kind::settings; });
+                    if (it != sidebar.end())
+                    {
+                        g_view.sidebar_index = static_cast<int>(it - sidebar.begin());
+                        open_section(sidebar, g_view.sidebar_index, false);
+                        g_view.settings_index = 8;
+                        g_view.settings_page = 9;
+                    }
+                }
+                break;
             case Screen::server_setup:
             case Screen::sign_in:
                 handle_setup_input(screen);
@@ -8022,7 +8136,22 @@ void frame() noexcept
 
     // Playback draws its own full frame/bars. A menu gradient here both
     // wastes HDR work and invalidates an unchanged video staging buffer.
-    if (screen != Screen::playing)
+    const bool detail_background_covers_frame =
+        screen == Screen::detail && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
+        g_wash.ready && g_wash.shape == 1 && g_wash.words == gfx::surface_words();
+    bool home_background_covers_top = false;
+    if (screen == Screen::home && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
+        !rows.empty())
+    {
+        const auto &row = rows[static_cast<std::size_t>(g_view.row_index)];
+        if (!row.items.empty())
+            home_background_covers_top =
+                hero_art(row.items[static_cast<std::size_t>(
+                    g_view.column[static_cast<std::size_t>(g_view.row_index)])]) != nullptr;
+    }
+    if (home_background_covers_top)
+        gfx::fill_rect(0, 720, gfx::kWidth, gfx::kHeight - 720, kPageBottom);
+    else if (screen != Screen::playing && !detail_background_covers_frame)
         draw_background();
 
     /* Search replaces category content while preserving the underlying browsing state. */
@@ -8217,6 +8346,9 @@ void frame() noexcept
         case Screen::dashboard:
             dashboard::draw();
             break;
+        case Screen::discover:
+            seerr::draw();
+            break;
         }
         if (page_moving)
         {
@@ -8233,7 +8365,8 @@ void frame() noexcept
     }
     /* Dim content while sidebar navigation owns input. */
     if (g_view.sidebar_dim.value() > 0.004f &&
-        (screen == Screen::home || screen == Screen::grid || screen == Screen::settings))
+        (screen == Screen::home || screen == Screen::grid || screen == Screen::settings ||
+         screen == Screen::discover))
     {
         const float t = g_view.sidebar_dim.value();
         gfx::horizontal_gradient(kSidebarWidth, 0, gfx::kWidth - kSidebarWidth, gfx::kHeight,

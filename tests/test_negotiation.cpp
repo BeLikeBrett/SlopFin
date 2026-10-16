@@ -28,13 +28,13 @@ Response post(std::string_view, int, std::string_view path, const std::vector<st
 {
     requests.emplace_back(path);
     bodies.emplace_back(body);
-    return {response_body.empty() ? 500 : 200, response_body};
+    return {response_body.empty() ? 500 : 200, response_body, {}};
 }
 Response get(std::string_view, int, std::string_view path,
              const std::vector<std::string> &) noexcept
 {
     last_get_path = path;
-    return {200, session_body};
+    return {200, session_body, {}};
 }
 std::string url_encode(std::string_view value) noexcept
 {
