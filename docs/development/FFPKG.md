@@ -9,9 +9,9 @@ Every application or package build creates and validates
 `dist/<TITLE_ID>/`. The Make targets map to the same PowerShell
 `-OutputFormat` selections:
 
-All formats remain available for local development. Tagged GitHub Releases
-attach the complete compressed `.ffpfsc` image, a ZIP of the validated
-directory-style application, and their shared `SHA256SUMS`.
+The image formats remain available for local development. Public GitHub Releases
+attach the complete **folder ZIP**, matching optional FFmpeg source and
+`SHA256SUMS`. Native PKG testing is documented [separately](NATIVE_FPKG.md).
 
 | Make target / selection | Additional output | Packaging tool |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ make packages
 ```
 
 The release workflow uses Python's standard-library `zipfile` module to archive
-`dist/<TITLE_ID>/` as `<TITLE_ID>.zip`. The ZIP is a distribution convenience,
+`dist/<TITLE_ID>/` as `SlopFin-<version>-folder.zip`. The ZIP is a distribution convenience,
 not another console filesystem format; extract it before directory deployment.
 
 `-Ffpkg` remains accepted as a compatibility alias for
@@ -78,8 +78,9 @@ slack and verifies the resulting UFS2 superblock magic.
 The same UFS2Tool-generated image was mounted through ShadowMountPlus and
 launched successfully on PS5 system software 6.02 and 12.70.
 
-Despite the similar names, `.ffpkg` here is a mountable filesystem image. This
-project does not create a signed retail PKG/FPKG container.
+Despite the similar names, `.ffpkg` here is a mountable filesystem image. These
+outputs are not native installable packages. The separate experimental
+`make fpkg` target creates a homebrew `.pkg`; see [native packaging](NATIVE_FPKG.md).
 
 Package files from older builds are not automatically deleted when a different
 format is selected. Rebuild the exact format immediately before deployment so

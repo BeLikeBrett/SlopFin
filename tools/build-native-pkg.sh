@@ -4,9 +4,14 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
+compression=${NATIVE_PKG_COMPRESSION:-stored}
+case "$compression" in
+    stored|fast|balanced|smallest) ;;
+    *) echo 'NATIVE_PKG_COMPRESSION must be stored, fast, balanced, or smallest.' >&2; exit 2 ;;
+esac
 command -v cargo >/dev/null || { echo 'Native packaging needs Rust/Cargo; see docs/development/NATIVE_FPKG.md.' >&2; exit 2; }
 engine="$root/.deps/fpkg/ps5upload"
-revision=a364f7a473bfd6aa5582e7474bfce54fb88a0f5a
+revision=c16e5ab26463c238cc1265d0c2d5e2c32b349d59
 mkdir -p "$(dirname "$engine")" "$root/dist/native-pkg"
 if [[ ! -d $engine/.git ]]; then
     git clone --no-checkout https://github.com/phantomptr/ps5upload.git "$engine"
@@ -53,14 +58,16 @@ PY
 # Pin the scene-compatible layout even if unrelated experiments set overrides.
 unset PS5UPLOAD_FPKG_IMAGE_MODE PS5UPLOAD_FPKG_PARAM_FILE PS5UPLOAD_FPKG_FW
 unset PS5UPLOAD_FPKG_KRAKEN_STORE PS5UPLOAD_FPKG_META_CODEC PS5UPLOAD_FPKG_CHUNKS
-export PS5UPLOAD_FPKG_KRAKEN=1 PS5UPLOAD_FPKG_LEVEL=balanced
+export PS5UPLOAD_FPKG_KRAKEN=1 PS5UPLOAD_FPKG_LEVEL="$compression"
 binaries="$engine/engine/target/release/examples"
 "$binaries/fpkg_build" "$work/source" "$work/output" 2>&1 | tee "$work/build.txt"
 packages=("$work/output/"*.pkg)
 [[ ${#packages[@]} == 1 && -f ${packages[0]} ]] || { echo 'Expected exactly one package.' >&2; exit 2; }
 "$binaries/fpkg_verify" "${packages[0]}" | tee "$work/verification.txt"
+verify_options=()
+[[ $compression != stored ]] || verify_options+=(--stored)
 "$root/build/native-pkg-check/release/slopfin-package-check" \
-    "${packages[0]}" "$work/source" | tee -a "$work/verification.txt"
+    "${packages[0]}" "$work/source" "${verify_options[@]}" | tee -a "$work/verification.txt"
 name=$(basename -- "${packages[0]}")
 cp -- "${packages[0]}" "$root/dist/native-pkg/$name.tmp"
 mv -- "$root/dist/native-pkg/$name.tmp" "$root/dist/native-pkg/$name"
