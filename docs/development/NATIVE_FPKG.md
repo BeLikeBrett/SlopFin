@@ -15,7 +15,8 @@ installed applications; the folder uses a homebrew mount service.
 | Byte comparison with source, including executable/metadata normalization | Passed; every source file compared |
 | Earlier compressed package: installer registration | Passed on firmware 8.20, isolated test title PPSA99002 |
 | Earlier compressed package: launch | Blocked at PPR mount; no app startup |
-| 1.10 stored package: console install / launch | Pending hardware test |
+| 1.10 stored package: console install | Passed on firmware 8.20; installed image matches source through the SI boundary |
+| 1.10 stored package: launch | Not working; media category rejected, game-category comparison stalls before app startup |
 
 The earlier compressed package stalled inside PPR mounting before the app process started.
 Header validation and `verifyImage` emulation pass; two G6 key-index hooks
@@ -28,6 +29,14 @@ The current build defaults to **stored blocks**, following PS5Upload's
 [uncompressed-package fallback](https://github.com/phantomptr/ps5upload/commit/ab8cbcdd44922df2f11a1df42e5a67bbb7c0f34d)
 for consoles that install compressed packages but cannot launch them. Offline
 validation does not establish that this resolves SlopFin's 8.20 mount stall.
+
+The stored 1.10 candidate was also installed under PPSA99002 on 2026-10-16.
+The complete installed image and title metadata were checked against the package;
+the installer then exited before launch testing. With the folder build's media
+category, launch returned `0x80a40020`. Changing only the category to `0` removed
+that immediate error, but the launch call did not return and no new SlopFin
+startup trace appeared. Stored blocks therefore do not resolve the launch
+blocker in this tested setup. No package from these tests is a working release.
 
 Use the folder build for normal use. A stalled package mount can require a
 console restart; do not change selectors while package I/O is outstanding.
