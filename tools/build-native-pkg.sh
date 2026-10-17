@@ -44,7 +44,11 @@ if test_title:
     param['conceptId'] = test_title[4:]
     language = param['localizedParameters']['defaultLanguage']
     param['localizedParameters'][language]['titleName'] = 'SlopFin Package Test'
-    (stage / 'sce_sys/param.json').write_text(json.dumps(param, indent=2) + '\n')
+# The media category requests PSN signup when launched as an installed package.
+param['applicationCategoryType'] = 0
+param['contentBadgeType'] = 1
+param['gameIntent'] = {'permittedIntents': [{'intentType': 'launchActivity'}]}
+(stage / 'sce_sys/param.json').write_text(json.dumps(param, indent=2) + '\n')
 for item in stage.rglob('*'):
     if item.is_symlink():
         raise SystemExit(f'Package source must not contain symlinks: {item}')

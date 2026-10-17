@@ -46,6 +46,14 @@ launch APIs returned `0x80020060`; SlopFin never started. The normal folder app
 reopened afterward without a restart. This comparison does not establish a fix
 or identify the failing kernel operation.
 
+A subsequent stored-package test used the complete game metadata tuple
+(`applicationCategoryType=0`, `contentBadgeType=1`, and a `launchActivity`
+intent) under PPSA99003. Official kstuff-lite 1.11 and the exact 8.20 A53
+selector ran in a clean session without ShadowMount or etaHEN. Installed bytes
+and metadata matched the candidate, but launch again stalled before app startup
+and later file reads returned I/O errors. Correct game metadata is now staged
+by the native build script; it does not resolve the mount blocker.
+
 Use the folder build for normal use. A stalled package mount can require a
 console restart; do not change selectors while package I/O is outstanding.
 [Compatibility](../COMPATIBILITY.md) covers the separate folder playback results.
@@ -99,8 +107,10 @@ plaintext/no-auth package markers, native block layout with stored blocks and li
 homebrew data; no proprietary publishing SDK or `right.sprx` is bundled.
 The engine adjusts executable signatures/version padding and installed-package
 metadata only in the packaged copy. The folder build remains byte-for-byte
-unchanged. The additional verifier reads every block, rejects compressed blocks in stored mode, walks
-inner file paths, checks all source files and verifies container artwork.
+unchanged. Native staging selects the game category, matching badge and launch
+intent; the folder retains its media category. The additional verifier reads
+every block, rejects compressed blocks in stored mode, walks inner file paths,
+checks all source files and verifies container artwork.
 
 For an isolated install test that preserves the normal title registration:
 
