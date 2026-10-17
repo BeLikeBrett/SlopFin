@@ -1,26 +1,33 @@
 # Native PS5 package
 
-SlopFin provides a folder download and an experimental native `.pkg` download.
-Both contain the same application. Packaging does not improve playback quality
+Public releases currently provide the folder download. Native `.pkg` builds
+are available from source for testing; no launch-verified PKG is published.
+Both formats contain the same application. Packaging does not improve playback quality
 or performance. Native packages use Sony's package installer and appear as
 installed applications; the folder uses a homebrew mount service.
 
-## Validation status — 2026-10-03
+## Validation status
 
 | Check | Result |
 | --- | --- |
-| Finalized-image container, digests and layout | Passed |
-| Full Kraken decode and inner filesystem walk | Passed |
-| Byte comparison with source, including known executable/metadata normalization | Passed |
-| Installer registration and installed `app.pkg` | Passed on firmware 8.20, isolated test title PPSA99002 |
-| Launch | Blocked at PPR mount after kstuff-lite 1.11 and an exact-profile A53 selector install; no app startup |
+| 1.10 stored package: container, digests and layout | Passed offline, 2026-10-16 |
+| Stored package: all blocks and inner filesystem walk | Passed; every block read, zero compressed |
+| Byte comparison with source, including executable/metadata normalization | Passed; every source file compared |
+| Earlier compressed package: installer registration | Passed on firmware 8.20, isolated test title PPSA99002 |
+| Earlier compressed package: launch | Blocked at PPR mount; no app startup |
+| 1.10 stored package: console install / launch | Pending hardware test |
 
-The blocker occurs inside PPR mounting before the app process starts.
+The earlier compressed package stalled inside PPR mounting before the app process started.
 Header validation and `verifyImage` emulation pass; two G6 key-index hooks
 apply, but the mount does not return. Tests used official kstuff-lite 1.11
 and ppr-patch revision `fd4c8224563130e9698d3b2b2f44712826ceb525`
 with the exact retail 8.20 profile. This does not establish compatibility
 with other firmware or identify the cause of the stalled mount.
+
+The current build defaults to **stored blocks**, following PS5Upload's
+[uncompressed-package fallback](https://github.com/phantomptr/ps5upload/commit/ab8cbcdd44922df2f11a1df42e5a67bbb7c0f34d)
+for consoles that install compressed packages but cannot launch them. Offline
+validation does not establish that this resolves SlopFin's 8.20 mount stall.
 
 Use the folder build for normal use. A stalled package mount can require a
 console restart; do not change selectors while package I/O is outstanding.
@@ -70,12 +77,12 @@ Output is `dist/native-pkg/UP9000-PPSA99001_00-SLOPFIN000000000.pkg`, plus its
 checksum, input manifest, build log and verification report.
 
 The build fetches public GPL tooling from PS5Upload revision
-`a364f7a473bfd6aa5582e7474bfce54fb88a0f5a` into ignored `.deps/`. It uses
-plaintext/no-auth package markers, native Kraken layout and license-free
+`c16e5ab26463c238cc1265d0c2d5e2c32b349d59` (v7.0.31) into ignored `.deps/`. It uses
+plaintext/no-auth package markers, native block layout with stored blocks and license-free
 homebrew data; no proprietary publishing SDK or `right.sprx` is bundled.
 The engine adjusts executable signatures/version padding and installed-package
 metadata only in the packaged copy. The folder build remains byte-for-byte
-unchanged. The additional verifier reconstructs every compressed block, walks
+unchanged. The additional verifier reads every block, rejects compressed blocks in stored mode, walks
 inner file paths, checks all source files and verifies container artwork.
 
 For an isolated install test that preserves the normal title registration:
@@ -86,3 +93,8 @@ NATIVE_PKG_TITLE_ID=PPSA99002 make fpkg PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=
 
 This stages a separate identity named SlopFin Package Test. Use an unused title
 ID and close SlopFin before testing; both identities use the same saved settings.
+
+For a compression comparison, set `NATIVE_PKG_COMPRESSION=balanced` (also accepts
+`fast` or `smallest`). `stored` is the default. Compression only changes package
+size; it does not improve playback. Keep these comparisons local until the
+corresponding package has been installed and launched on the target firmware.

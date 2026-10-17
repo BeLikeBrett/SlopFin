@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-fn verify(package: &Path, source: &Path) -> Result<(), Box<dyn Error>> {
+fn verify(package: &Path, source: &Path, require_stored: bool) -> Result<(), Box<dyn Error>> {
     let mut pkg = PkgFile::open(package)?;
     let header = pkg.read_at(0, fih::HEADER_LEN)?;
     let envelope = fih::parse(&header)?;
@@ -28,6 +28,10 @@ fn verify(package: &Path, source: &Path) -> Result<(), Box<dyn Error>> {
     };
     let compressed = read("pfs_image.dat")?;
     let blocks = kraken_image::describe(&read("naps_pkg_layout.dat")?)?;
+    let compressed_blocks = blocks.iter().filter(|b| b.even_lz || b.odd_lz).count();
+    if require_stored && compressed_blocks != 0 {
+        return Err("Stored package contains compressed blocks".into());
+    }
     let length = blocks
         .iter()
         .map(|b| b.logical + b.len)
@@ -159,8 +163,9 @@ fn verify(package: &Path, source: &Path) -> Result<(), Box<dyn Error>> {
         .into());
     }
     println!(
-        "Payload verified: {} decoded blocks, {} source files, valid inner paths; console launch remains a separate test.",
+        "Payload verified: {} blocks ({} compressed), {} source files, valid inner paths; console launch remains a separate test.",
         blocks.len(),
+        compressed_blocks,
         checked.len()
     );
     Ok(())
@@ -168,8 +173,15 @@ fn verify(package: &Path, source: &Path) -> Result<(), Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    if arguments.len() != 2 {
-        return Err("Usage: slopfin-package-check <package> <source-folder>".into());
+    if arguments.len() < 2
+        || arguments.len() > 3
+        || (arguments.len() == 3 && arguments[2] != "--stored")
+    {
+        return Err("Usage: slopfin-package-check <package> <source-folder> [--stored]".into());
     }
-    verify(Path::new(&arguments[0]), Path::new(&arguments[1]))
+    verify(
+        Path::new(&arguments[0]),
+        Path::new(&arguments[1]),
+        arguments.len() == 3,
+    )
 }
