@@ -17,6 +17,7 @@ installed applications; the folder uses a homebrew mount service.
 | Earlier compressed package: launch | Blocked at PPR mount; no app startup |
 | 1.10 stored package: console install | Passed on firmware 8.20; installed image matches source through the SI boundary |
 | 1.10 stored package: launch | Not working; media category rejected, game-category comparison stalls before app startup |
+| 1.10 encrypted outer-image comparison | Installed and byte-verified on 8.20; launch returns `0x80020060` before app startup |
 
 The earlier compressed package stalled inside PPR mounting before the app process started.
 Header validation and `verifyImage` emulation pass; two G6 key-index hooks
@@ -37,6 +38,13 @@ category, launch returned `0x80a40020`. Changing only the category to `0` remove
 that immediate error, but the launch call did not return and no new SlopFin
 startup trace appeared. Stored blocks therefore do not resolve the launch
 blocker in this tested setup. No package from these tests is a working release.
+
+On 2026-10-17, the same game-category source was packaged with encrypted outer
+blocks (`PS5UPLOAD_FPKG_IMAGE_MODE=native`), without loading an A53 selector in
+that session. Offline payload comparison and installed-image comparison passed. Both
+launch APIs returned `0x80020060`; SlopFin never started. The normal folder app
+reopened afterward without a restart. This comparison does not establish a fix
+or identify the failing kernel operation.
 
 Use the folder build for normal use. A stalled package mount can require a
 console restart; do not change selectors while package I/O is outstanding.
