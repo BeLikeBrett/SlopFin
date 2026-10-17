@@ -38,11 +38,16 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   Administrators can manage sessions, libraries and tasks from the controller.
   [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
 
-| Discover | Seasons and saved quality |
+| Discover | Choose seasons and quality |
 | --- | --- |
 | ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
 
-Linux previews of the shared interface with sample requests.
+Linux previews of the shared interface. The request example shows an unrequested
+series with individual seasons selected.
+
+![Request download progress on PS5](docs/images/downloads-console.png)
+
+Download progress captured on PS5.
 
 ## What plays, and where it is decoded
 
@@ -93,6 +98,8 @@ and version-specific patch notes.
 
 Open **Settings → Updates** to check for updates in the app. Installation needs
 **ELF Loader (`elfldr`, port 9021)**. [Update guide](docs/UPDATES.md).
+
+![Updates on PS5](docs/images/updates-console.png)
 
 ## Contribute
 

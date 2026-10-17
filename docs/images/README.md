@@ -18,7 +18,13 @@ and original project-authored geometric artwork covered by the project license.
 `request-preview.png` show the 1.10 Linux renderer on 2026-10-16. Connection and
 request data are fictional; Discover uses public TMDB catalog metadata and
 artwork displayed through the client. Media artwork belongs to its respective
-owners and is not bundled as app assets. No credentials are visible.
+owners and is not bundled as app assets. No credentials are visible. `request-preview.png` shows an unrequested series
+with a subset of seasons selected; no request was submitted for the capture.
+
+`downloads-console.png` and `updates-console.png` are direct full-resolution PS5
+captures of SlopFin 1.10, showing an active request download and the installed
+version/update check. The owner authorized publishing the displayed
+account/library names. No credentials are visible.
 
 The Linux preview does not play video or implement the PlayStation system
 keyboard. System keyboard overlays are also absent from SlopFin's own console
