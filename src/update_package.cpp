@@ -378,6 +378,10 @@ bool stage_archive(const std::string &archive, const std::string &stage, const R
         if (std::none_of(entries.begin(), entries.end(),
                          [path](const Entry &e) { return e.path == path && e.size >= 1024; }))
             return fail("Required application assets are missing.");
+    if (version_number(release.version) >= version_number("1.13") &&
+        std::none_of(entries.begin(), entries.end(), [](const Entry &e)
+                     { return e.path == "assets/ca-certificates.pem" && e.size >= 1024; }))
+        return fail("The update is missing its HTTPS certificates. Download the full folder.");
     if (!executable || !metadata || !runtime)
         return fail("Required application files are missing.");
     if (!write_file(stage + "/manifest", manifest.data(), manifest.size()))

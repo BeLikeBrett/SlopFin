@@ -46,6 +46,15 @@ class Updates(unittest.TestCase):
             for name, data in self.files.items():
                 self.assertIn(hashlib.sha256(data).hexdigest() + " " + name + "\n", manifest)
 
+    def test_new_release_requires_https_certificates(self):
+        metadata = json.dumps({"titleId": "PPSA99001", "contentVersion": "01.000.013"}).encode()
+        archive = self.archive({"sce_sys/param.json": metadata})
+        command = [PACKAGE, archive, self.root / "staged", "01.000.013"]
+        self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+        archive = self.archive({"sce_sys/param.json": metadata,
+                                "assets/ca-certificates.pem": (ROOT / "assets/ca-certificates.pem").read_bytes()})
+        self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+
     def test_reject_path_escape(self):
         for name in ("../escape", "assets/../../escape", "assets/evil\\file", "config.json", "assets/a\0evil"):
             with self.subTest(name=name):

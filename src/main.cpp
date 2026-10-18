@@ -13,6 +13,7 @@
 #include "telemetry.hpp"
 #include "text.hpp"
 #include "trace.hpp"
+#include "update.hpp"
 
 #include <cstdint>
 
@@ -33,8 +34,6 @@ namespace
 int main()
 {
     slopfin::trace::begin();
-    /* Before anything that can fault, so the first crash is reported too. */
-    slopfin::crash::install();
 
     if (!slopfin::gfx::initialize())
     {
@@ -53,6 +52,27 @@ int main()
     else
         slopfin::trace::mark("pad: ready");
 
+    /* Load packaged fonts while /app0 is mounted, then recover shared data before
+       config::load can mistake inaccessible settings for a new account. */
+    while (!slopfin::update::prepare_storage())
+    {
+        do
+        {
+            using namespace slopfin;
+            pad::poll();
+            gfx::clear(gfx::palette::background);
+            text::draw(160, 330, "Can't open saved app data", 42, text::Weight::bold,
+                       gfx::palette::text);
+            text::draw(160, 410, "Your saved sign-in and settings have not been changed.", 26,
+                       text::Weight::regular, gfx::palette::text_dim);
+            text::draw(160, 465, "Start ELF Loader, then press X to retry.", 26,
+                       text::Weight::regular, gfx::palette::text);
+            gfx::present();
+        } while (!slopfin::pad::pressed(slopfin::pad::Button::cross));
+    }
+    slopfin::trace::begin();
+    slopfin::trace::mark("storage: shared settings readable and directory writable");
+    slopfin::crash::install();
     slopfin::app::start();
 
     /*

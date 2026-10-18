@@ -24,6 +24,8 @@ struct Status
     bool preview = false;
 };
 Status status() noexcept;
+/* Before loading settings: recover shared data access without discarding a saved account. */
+bool prepare_storage() noexcept;
 void check() noexcept;
 void download() noexcept;
 void install() noexcept;
