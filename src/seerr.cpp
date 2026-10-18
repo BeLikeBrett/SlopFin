@@ -158,6 +158,7 @@ struct View
     int media_filter = 0;
     /* Where the filter's pill is, sliding toward media_filter. */
     motion::Spring filter_slide{0.0f};
+    long filter_changed_frame = -100;
     int sort = 0;
     bool entered = false; /* the tab has been opened at least once */
     bool cancel_confirm = false;
@@ -2446,8 +2447,20 @@ void draw_header() noexcept
     }
     if (requests)
         return;
-    const ui::Segmented filter{{"All", "Movies", "Series"}};
+    const ui::Segmented filter{{"All", "Movies", "Shows"}};
     const int width = ui::segmented_width(filter);
+    constexpr int key_width = 58, gap = 14;
+    const int key_x = ui::kContentRight - width - gap - key_width;
+    const int key_y = kFieldY - 2;
+    const bool pressed = g_view.frames - g_view.filter_changed_frame < 18;
+    gfx::rounded_rect(key_x, key_y, key_width, filter.height, 16,
+                      pressed ? gfx::rgb(0x47, 0x38, 0x69) : gfx::palette::control);
+    gfx::stroke_rounded_rect(key_x, key_y, key_width, filter.height, 16, 1,
+                             pressed ? ui::kDiscoverTheme.accent_from
+                                     : gfx::rgba(0xff, 0xff, 0xff, 0x42));
+    text::draw(key_x + (key_width - text::measure("R3", 21, Weight::bold)) / 2,
+               text::centered_y(key_y, filter.height, "R3", 21, Weight::bold), "R3", 21,
+               Weight::bold, gfx::palette::text);
     (void)ui::draw_segmented(ui::kContentRight - width, kFieldY - 2, filter,
                              g_view.filter_slide.value(), ui::kDiscoverTheme,
                              g_view.field_focused && !g_view.sheet_open && g_view.content_focused);
@@ -3148,11 +3161,12 @@ bool handle_input(float elapsed) noexcept
         return true;
     if (g_view.sheet_open)
         return sheet_input();
-    /* L3 still cycles the media filter from anywhere on the page. The sidebar
+    /* R3 cycles the media filter from anywhere on the page. The sidebar
        chooses the category; L1 and R1 belong to the tabs. */
-    if (g_view.mode == 0 && pad::pressed(pad::Button::l3))
+    if (g_view.mode == 0 && pad::pressed(pad::Button::r3))
     {
         g_view.media_filter = (g_view.media_filter + 1) % 3;
+        g_view.filter_changed_frame = g_view.frames;
         reload_catalog();
         return true;
     }

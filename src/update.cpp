@@ -21,6 +21,12 @@ std::mutex mutex;
 Status state;
 Release release;
 std::atomic<bool> restart{false};
+std::atomic<bool> recovered_storage{false};
+[[maybe_unused]] std::string application_file(std::string_view path)
+{
+    return std::string(recovered_storage ? "/data/homebrew/PPSA99001/" : "/app0/") +
+           std::string(path);
+}
 std::string base()
 {
 #ifdef SLOPFIN_HOST
@@ -65,7 +71,7 @@ void initialize()
 #ifdef SLOPFIN_HOST
                        const auto param = json::parse(small_file("sce_sys/param.json"));
 #else
-            const auto param = json::parse(small_file("/app0/sce_sys/param.json"));
+            const auto param = json::parse(small_file(application_file("sce_sys/param.json")));
 #endif
                        std::lock_guard<std::mutex> lock(mutex);
                        state.current =
@@ -95,6 +101,66 @@ void run_update(std::function<void()> job) noexcept
 [[maybe_unused]] bool save(const std::string &path, std::string_view text)
 {
     return sf_update_write(path.c_str(), text.data(), text.size()) == 0;
+}
+std::string storage_error(int code)
+{
+    switch (code)
+    {
+    case ENOSPC:
+        return "There is not enough free space to create the update folder.";
+    case ENOENT:
+        return "App data storage is unavailable to this launch. Install the folder release "
+               "manually.";
+    case EACCES:
+    case EPERM:
+        return "The PS5 denied access to update storage. Check the app data folder permissions.";
+    default:
+        return "Could not prepare update storage (error " + std::to_string(code) + ").";
+    }
+}
+bool recover_storage()
+{
+#ifdef SLOPFIN_HOST
+    return false;
+#else
+    const auto payload = small_file(application_file("assets/slopfin-storage.bin"), 256 * 1024);
+    if (payload.empty() || (unlink("/download0/slopfin-storage-result") < 0 && errno != ENOENT) ||
+        (unlink("/download0/slopfin-storage-pid") < 0 && errno != ENOENT))
+        return false;
+    /* The descriptor remains readable when the helper changes this process's root. */
+    const int result =
+        open("/download0/slopfin-storage-result", O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+    if (result < 0)
+        return false;
+    const int request =
+        open("/download0/slopfin-storage-pid", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    const std::string pid = std::to_string(getpid());
+    const bool prepared =
+        fchmod(result, 0666) == 0 && request >= 0 &&
+        write(request, pid.data(), pid.size()) == static_cast<ssize_t>(pid.size()) &&
+        fchmod(request, 0644) == 0;
+    if (request >= 0)
+        close(request);
+    bool ready = false;
+    if (prepared && http::send_bytes("127.0.0.1", 9021, payload))
+        for (unsigned i = 0; i < 50; ++i)
+        {
+            char response[16] = {0};
+            lseek(result, 0, SEEK_SET);
+            const auto count = read(result, response, sizeof(response) - 1);
+            if (count > 0)
+            {
+                ready = std::string_view(response, static_cast<std::size_t>(count)) == "ready";
+                break;
+            }
+            timespec wait{0, 100000000};
+            nanosleep(&wait, nullptr);
+        }
+    close(result);
+    if (ready)
+        recovered_storage = true;
+    return ready;
+#endif
 }
 std::unique_ptr<http::WebRequest> open_download(std::string url)
 {
@@ -210,11 +276,17 @@ void download() noexcept
             {
                 const auto code = errno;
                 trace::mark("update: prepare storage errno=" + std::to_string(code));
-                failure(code == ENOSPC
-                            ? "There is not enough free space to create the update folder."
-                            : "The PS5 denied access to the update folder. Reinstall the current "
-                              "folder build and retry.");
-                return;
+                if ((code != EACCES && code != EPERM && code != ENOENT) || !recover_storage())
+                {
+                    failure(storage_error(code));
+                    return;
+                }
+                if (sf_update_dirs(path.c_str()) < 0)
+                {
+                    failure(storage_error(errno));
+                    return;
+                }
+                trace::mark("update: recovered app data access");
             }
             DownloadResult downloaded;
             for (unsigned attempt = 0; attempt < 3; ++attempt)
@@ -307,15 +379,16 @@ void install() noexcept
             const std::string folder = base();
             /* Require the running folder to match before replacing anything. */
             char executable[65], param[65];
-            if (sf_update_hash_file("/app0/eboot.bin", executable) < 0 ||
-                sf_update_hash_file("/app0/sce_sys/param.json", param) < 0 ||
+            if (sf_update_hash_file(application_file("eboot.bin").c_str(), executable) < 0 ||
+                sf_update_hash_file(application_file("sce_sys/param.json").c_str(), param) < 0 ||
                 !save(folder + "/source", std::string(executable) + "\n" + param + "\n") ||
                 !save(folder + "/pid", std::to_string(getpid())))
             {
                 failure("Could not identify this app folder. Your app was not changed.");
                 return;
             }
-            const auto payload = small_file("/app0/assets/slopfin-update.bin", 1024 * 1024);
+            const auto payload =
+                small_file(application_file("assets/slopfin-update.bin"), 1024 * 1024);
             if (payload.empty())
             {
                 failure("The update helper is missing. Install the full release folder.");

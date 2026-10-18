@@ -9362,6 +9362,10 @@ void frame() noexcept
                     pad::inject(pad::Button::l2);
                 else if (name == "r2")
                     pad::inject(pad::Button::r2);
+                else if (name == "l3")
+                    pad::inject(pad::Button::l3);
+                else if (name == "r3")
+                    pad::inject(pad::Button::r3);
                 else if (name == "options")
                     pad::inject(pad::Button::options);
                 else if (name == "touchpad")

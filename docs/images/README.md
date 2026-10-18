@@ -12,7 +12,7 @@ as its source photo; the edit was cancelled without changing the profile.
 button. Both were captured on the PS5 on 2026-10-03.
 
 `home-preview.png`, `discover-preview.png`, `request-preview.png`,
-`episode-preview.png`, `settings-preview.png` and `navigation-preview.png` show
+`settings-preview.png` and `navigation-preview.png` show
 the 1.11 Home / Discover tab layout in the Linux renderer on 2026-10-18, served
 by a local stand-in Jellyfin and Jellyseerr. The account, library, request and
 download data are fictional; titles, posters and stills are public TMDB catalog
@@ -20,6 +20,10 @@ metadata and artwork displayed through the client. Media artwork belongs to its
 respective owners and is not bundled as app assets. No credentials are visible.
 `request-preview.png` shows a series with a subset of seasons selected; no
 request was submitted for the capture.
+
+`discover-preview.png` was refreshed for 1.12 using the same fictional fixture.
+It shows the R3 key and All/Movies/Shows filter. The R3 control cycles all three
+states without moving the catalog focus.
 
 `downloads-console.png` and `updates-console.png` are direct full-resolution PS5
 captures of SlopFin 1.10, showing an active request download and the installed
