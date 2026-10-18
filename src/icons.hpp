@@ -41,6 +41,7 @@ enum class Icon : unsigned char
     chevron_right,
     chevron_up,
     chevron_down,
+    r3,
     count,
 };
 

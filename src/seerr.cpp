@@ -2449,18 +2449,17 @@ void draw_header() noexcept
         return;
     const ui::Segmented filter{{"All", "Movies", "Shows"}};
     const int width = ui::segmented_width(filter);
-    constexpr int key_width = 58, gap = 14;
+    constexpr int key_width = 56, gap = 14;
     const int key_x = ui::kContentRight - width - gap - key_width;
-    const int key_y = kFieldY - 2;
+    const int key_y = kFieldY - 3;
     const bool pressed = g_view.frames - g_view.filter_changed_frame < 18;
-    gfx::rounded_rect(key_x, key_y, key_width, filter.height, 16,
-                      pressed ? gfx::rgb(0x47, 0x38, 0x69) : gfx::palette::control);
-    gfx::stroke_rounded_rect(key_x, key_y, key_width, filter.height, 16, 1,
-                             pressed ? ui::kDiscoverTheme.accent_from
-                                     : gfx::rgba(0xff, 0xff, 0xff, 0x42));
-    text::draw(key_x + (key_width - text::measure("R3", 21, Weight::bold)) / 2,
-               text::centered_y(key_y, filter.height, "R3", 21, Weight::bold), "R3", 21,
-               Weight::bold, gfx::palette::text);
+    const int press_offset = pressed ? 3 : 0;
+    icons::draw_gradient(icons::Icon::r3, key_x, key_y + press_offset, key_width,
+                         gfx::palette::text,
+                         pressed ? ui::kDiscoverTheme.accent_to : gfx::rgb(0xbb, 0xc0, 0xc9));
+    text::draw(key_x + (key_width - text::measure("R3", 18, Weight::bold)) / 2,
+               text::centered_y(key_y + 5 + press_offset, 33, "R3", 18, Weight::bold), "R3", 18,
+               Weight::bold, gfx::rgb(0x14, 0x15, 0x1a));
     (void)ui::draw_segmented(ui::kContentRight - width, kFieldY - 2, filter,
                              g_view.filter_slide.value(), ui::kDiscoverTheme,
                              g_view.field_focused && !g_view.sheet_open && g_view.content_focused);

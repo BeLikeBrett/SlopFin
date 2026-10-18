@@ -196,7 +196,7 @@ void draw_icon_sheet() noexcept
     static const char *names[] = {
         "play",   "pause", "skip_back", "skip_forward", "subtitles", "audio",     "quality",
         "info",   "check", "jellyfin",  "triangle",     "circle",    "cross",     "square",
-        "search", "r2",    "chev_left", "chev_right",   "chev_up",   "chev_down",
+        "search", "r2",    "chev_left", "chev_right",   "chev_up",   "chev_down", "R3 stick",
     };
     const int count = static_cast<int>(icons::Icon::count);
     for (int i = 0; i < count; ++i)
