@@ -786,8 +786,7 @@ void job_search(Connection connection, std::string term, long generation, int me
         if (fetched && more &&
             !background::run(
                 [connection, term = std::move(term), generation, media, sort, page, batch,
-                 catalog = std::move(catalog)]
-                {
+                 catalog = std::move(catalog)] {
                     job_search(connection, term, generation, media, sort, page, batch + 1, catalog);
                 },
                 background::Lane::requests))

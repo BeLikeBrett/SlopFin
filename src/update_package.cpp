@@ -83,8 +83,7 @@ std::string release_notes(std::string_view markdown) noexcept
         if (bullet)
             line.erase(0, 2);
         line.erase(std::remove_if(line.begin(), line.end(),
-                                  [](char c)
-                                  {
+                                  [](char c) {
                                       return c == '*' || c == '`' ||
                                              (static_cast<unsigned char>(c) < 32 && c != '\t');
                                   }),
