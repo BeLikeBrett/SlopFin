@@ -155,8 +155,10 @@ struct View
     int request_index = 0;
     motion::Spring request_scroll;
     int media_filter = 0;
-    int toolbar = 0;
+    /* Where the filter's pill is, sliding toward media_filter. */
+    motion::Spring filter_slide{0.0f};
     int sort = 0;
+    bool entered = false; /* the tab has been opened at least once */
     bool cancel_confirm = false;
     bool clear_confirm = false;
     bool clear_focused = false;
@@ -237,15 +239,20 @@ std::string g_open_item;
 
 /* ------------------------------------------------------------- small parts */
 
-constexpr int kHeaderY = ui::kSafeY + 66; /* the screen title's top line */
-constexpr int kFieldY = ui::kSafeY + 164;
-constexpr int kGridY = ui::kSafeY + 284;
+/* The tab bar owns the top of the screen; the category's own name sits under
+   it, with the media filter on the same line at the right. */
+constexpr int kHeaderY = ui::kPageTitleY;
+constexpr int kFieldY = kHeaderY;
+constexpr int kGridY = ui::kPageTitleY + 104;
 constexpr int kListY = kGridY;
 
-constexpr int kCardW = 186;
-constexpr int kCardH = 278;
-constexpr int kCardStepX = 236;
-constexpr int kCardStepY = 352;
+/* Six posters fill the content width exactly. */
+constexpr int kCardW = 200;
+constexpr int kCardH = 300;
+constexpr int kCardStepX = 248;
+constexpr int kCardStepY = 388;
+/* Infinite scroll stops asking for more once this many titles are held. */
+constexpr int kMaxResults = 600;
 
 std::string format(const char *pattern, double value) noexcept
 {
@@ -316,7 +323,7 @@ const char *approval_label(int approval) noexcept
 
 int grid_columns() noexcept
 {
-    return std::max(1, (ui::kContentWidth + 26) / (kCardW + 26));
+    return std::max(1, (ui::kContentWidth + kCardStepX - kCardW) / kCardStepX);
 }
 
 std::string key_for(const std::string &type, int id) noexcept
@@ -681,6 +688,9 @@ struct CatalogPage
     std::unordered_set<std::string> seen;
     std::array<int, 2> feed_pages{500, 500};
     int pages = 1;
+    /* Titles already on screen when this page was asked for. Only what comes
+       after them is sorted, so scrolling on never reshuffles what was seen. */
+    std::size_t base = 0;
 };
 void job_search(Connection connection, std::string term, long generation, int media = 0,
                 int sort = 0, int page = 1, int batch = 0,
@@ -743,7 +753,9 @@ void job_search(Connection connection, std::string term, long generation, int me
                 break;
         }
         if (feeds == 2)
-            std::stable_sort(results.begin(), results.end(),
+            std::stable_sort(results.begin() + static_cast<std::ptrdiff_t>(
+                                                   std::min(catalog->base, results.size())),
+                             results.end(),
                              [sort](const Title &a, const Title &b)
                              {
                                  if (sort == 2)
@@ -1235,21 +1247,32 @@ void refresh_requests() noexcept
     }
 }
 
-void start_search(const std::string &term, int page = 1) noexcept
+/* `append` keeps the titles already loaded and adds the next page under them. */
+void start_search(const std::string &term, int page = 1, bool append = false) noexcept
 {
     const auto connection = connection_snapshot();
     long generation;
+    auto catalog = std::make_shared<CatalogPage>();
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         generation = ++g_model.search_wanted;
         g_model.search_loading = !connection.host.empty();
         g_model.search_error.clear();
-        g_model.results.clear();
+        if (append)
+        {
+            catalog->results = g_model.results;
+            for (const auto &title : catalog->results)
+                catalog->seen.insert(key_for(title.media_type, title.tmdb_id));
+            catalog->base = catalog->results.size();
+            catalog->pages = g_model.pages;
+        }
+        else
+            g_model.results.clear();
         ++g_model.search_epoch;
     }
     if (!background::run(
-            [connection, term, generation, media = g_view.media_filter, sort = g_view.sort, page]
-            { job_search(connection, term, generation, media, sort, page); },
+            [connection, term, generation, media = g_view.media_filter, sort = g_view.sort, page,
+             catalog] { job_search(connection, term, generation, media, sort, page, 0, catalog); },
             background::Lane::requests))
     {
         std::lock_guard<std::mutex> guard(g_mutex);
@@ -1624,7 +1647,7 @@ void cancel_request() noexcept
     g_view.sheet_open = false;
     if (!background::run(
             [connection, id, catalog_epoch, query = g_view.query, media = g_view.media_filter,
-             sort = g_view.sort, page = g_view.page]
+             sort = g_view.sort, page = 1]
             {
                 {
                     std::lock_guard<std::mutex> guard(g_mutex);
@@ -1677,7 +1700,7 @@ void clear_data() noexcept
     g_view.sheet_open = false;
     if (!background::run(
             [connection, media_id, title, catalog_epoch, query = g_view.query,
-             media = g_view.media_filter, sort = g_view.sort, page = g_view.page]
+             media = g_view.media_filter, sort = g_view.sort, page = 1]
             {
                 {
                     std::lock_guard<std::mutex> guard(g_mutex);
@@ -2044,6 +2067,17 @@ bool scroll_with_stick(motion::Spring &scroll, int &index, int count, int column
         std::min(count - 1, std::clamp(index / columns, first, last) * columns + index % columns);
     return true;
 }
+/* Once something has scrolled off the top, soften the edge it leaves by
+   under the header instead of cutting it with a knife. */
+void draw_scroll_fade(int y, int scroll) noexcept
+{
+    if (scroll <= 0)
+        return;
+    constexpr int kFade = 40;
+    gfx::vertical_gradient(ui::kContentX - 24, y, ui::kContentWidth + 48, kFade,
+                           ui::page_at(ui::kDiscoverTheme, y),
+                           gfx::with_alpha(ui::page_at(ui::kDiscoverTheme, y + kFade), 0));
+}
 void draw_scrollbar(float position, float limit, int total_height, int viewport) noexcept
 {
     if (limit <= 0.0f)
@@ -2052,7 +2086,7 @@ void draw_scrollbar(float position, float limit, int total_height, int viewport)
     const int thumb = std::max(30, viewport * viewport / total_height);
     gfx::rounded_rect(x, y, 3, viewport, 1, gfx::palette::control_border);
     gfx::rounded_rect(x - 1, y + static_cast<int>((viewport - thumb) * position / limit), 5, thumb,
-                      2, gfx::palette::focus_border);
+                      2, ui::kDiscoverTheme.accent_from);
 }
 
 bool search_input(float dt) noexcept
@@ -2063,33 +2097,44 @@ bool search_input(float dt) noexcept
         open_keyboard(Field::query);
         return true;
     }
+    /* Near the bottom of what is loaded, quietly ask for the next page. */
+    const auto load_more = [count]
+    {
+        const int columns = grid_columns();
+        const int rows = (count + columns - 1) / columns;
+        if (!g_view.search_loading && g_view.page < g_view.pages && count > 0 &&
+            static_cast<int>(g_view.results.size()) < kMaxResults &&
+            g_view.grid_index / columns >= rows - 2)
+            start_search(g_view.query, g_view.page + 1, true);
+    };
     if (scroll_with_stick(g_view.grid_scroll, g_view.grid_index, count, grid_columns(), kCardStepY,
                           kCatalogViewport, dt))
+    {
+        load_more();
         return true;
+    }
+    /* A search in progress is left with Circle, back to the category. */
+    if (pad::pressed(pad::Button::circle) && !g_view.query.empty())
+    {
+        g_view.query.clear();
+        reload_catalog();
+        return true;
+    }
     if (g_view.field_focused)
     {
-        if (pad::pressed(pad::Button::cross))
+        /* The media filter: left and right choose, so there is nothing to
+           confirm. Off its left end is the sidebar. */
+        if (pad::pressed(pad::Button::right) && g_view.media_filter < 2)
         {
-            if (g_view.toolbar == 0)
-                open_keyboard(Field::query);
-            else
-            {
-                if (g_view.toolbar == 1)
-                    g_view.media_filter = (g_view.media_filter + 1) % 3;
-                else
-                    g_view.sort = (g_view.sort + 1) % 5;
-                g_view.query.clear();
-                reload_catalog();
-            }
+            ++g_view.media_filter;
+            reload_catalog();
         }
-        else if (pad::pressed(pad::Button::right))
-            g_view.toolbar = std::min(2, g_view.toolbar + 1);
         else if (pad::pressed(pad::Button::left))
         {
-            if (g_view.toolbar > 0)
-                --g_view.toolbar;
-            else
+            if (g_view.media_filter == 0)
                 return false;
+            --g_view.media_filter;
+            reload_catalog();
         }
         else if (pad::pressed(pad::Button::down) && count > 0)
             g_view.field_focused = false;
@@ -2112,10 +2157,7 @@ bool search_input(float dt) noexcept
     else if (pad::pressed(pad::Button::up))
     {
         if (g_view.grid_index < columns)
-        {
             g_view.field_focused = true;
-            g_view.toolbar = 0;
-        }
         else
             g_view.grid_index -= columns;
     }
@@ -2124,8 +2166,11 @@ bool search_input(float dt) noexcept
     else if (pad::pressed(pad::Button::circle))
         return false;
     if (count > 0)
+    {
         reveal_selection(g_view.grid_scroll, g_view.grid_index, count, columns, kCardStepY,
                          kCatalogViewport);
+        load_more();
+    }
     return true;
 }
 bool requests_input(float dt) noexcept
@@ -2137,29 +2182,16 @@ bool requests_input(float dt) noexcept
     }
     const auto visible = visible_requests();
     const int count = static_cast<int>(visible.size());
+    /* The list has no toolbar above it: Triangle refreshes, from anywhere. */
+    g_view.field_focused = false;
     if (scroll_with_stick(g_view.request_scroll, g_view.request_index, count, 1, kRequestRow,
                           kRequestViewport, dt))
         return true;
-    if (g_view.field_focused)
-    {
-        if (pad::pressed(pad::Button::cross))
-            refresh_requests();
-        else if (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::circle))
-            return false;
-        else if (pad::pressed(pad::Button::down) && count)
-            g_view.field_focused = false;
-        return true;
-    }
     g_view.request_index = std::clamp(g_view.request_index, 0, std::max(0, count - 1));
     if (pad::pressed(pad::Button::up))
     {
         if (g_view.request_index > 0)
             --g_view.request_index;
-        else
-        {
-            g_view.field_focused = true;
-            g_view.toolbar = 0;
-        }
     }
     else if (pad::pressed(pad::Button::down) && g_view.request_index + 1 < count)
         ++g_view.request_index;
@@ -2378,99 +2410,60 @@ void draw_status_pill(int x, int y, Availability value, const std::string &overr
                Weight::medium, gfx::rgb(0x10, 0x10, 0x12));
 }
 
-constexpr const char *kMediaFilters[] = {"Movies & series", "Movies", "Series"};
-constexpr const char *kSorts[] = {"Trending", "Popular", "Top rated", "Newest", "Upcoming"};
+constexpr const char *kSectionLabels[] = {"Trending",     "Popular",  "Top rated",
+                                          "New releases", "Upcoming", "Requests"};
+static_assert(std::size(kSectionLabels) == kSectionCount);
 
+/* The category's name under the tab bar, how many titles it holds beside it,
+   and the media filter on the same line at the right. */
 void draw_header() noexcept
 {
-    text::draw(ui::kContentX, kHeaderY, "Discover", 40, Weight::bold, gfx::palette::text);
-    text::draw_ellipsized(ui::kContentX, kHeaderY + 54, 800,
-                          g_view.server_title.empty() ? "Movies, series and your requests"
-                                                      : g_view.server_title,
-                          20, Weight::regular, gfx::palette::text_dim);
-    const char *names[] = {"Browse", "My requests"};
-    constexpr int w = 250, h = 60;
-    const int x = ui::kContentRight - 520, y = kHeaderY - 4;
-    icons::draw(icons::Icon::ps_square, x - 42, y + 18, 24, icons::button::square);
-    for (int i = 0; i < 2; ++i)
+    if (config::current().seerr_host.empty())
     {
-        const int bx = x + i * 270;
-        if (g_view.mode == i)
-            ui::focus_pill(bx, y, w, h, ui::FocusGroup::discover_tabs);
-        else
-            gfx::rounded_rect(bx, y, w, h, 14, gfx::palette::control);
-        constexpr int inset = 16;
-        ui::control_label(bx + inset, y, w - inset - 12, h, names[i], 24, Weight::medium,
-                          g_view.mode == i ? gfx::palette::text : gfx::palette::text_dim);
+        text::draw(ui::kContentX, kHeaderY, "Discover", 44, Weight::bold, gfx::palette::text);
+        return;
     }
-}
-void draw_field() noexcept
-{
-    const int widths[] = {688, 312, 392};
-    int x = ui::kContentX;
-    for (int i = 0; i < (g_view.mode == 1 ? 1 : 3); ++i)
+    const bool requests = g_view.mode == 1;
+    const bool searching = !requests && !g_view.query.empty();
+    const std::string title = requests    ? std::string{"Requests"}
+                              : searching ? "\xE2\x80\x9C" + g_view.query + "\xE2\x80\x9D"
+                                          : std::string{kSectionLabels[g_view.sort]};
+    const int count = requests ? static_cast<int>(g_view.requests.size()) : results_size();
+    constexpr int kTitleSize = 44;
+    const int title_w = std::min(820, text::measure(title, kTitleSize, Weight::bold));
+    text::draw_ellipsized(ui::kContentX, kHeaderY, 820, title, kTitleSize, Weight::bold,
+                          gfx::palette::text);
+    if (count > 0)
+        text::draw(ui::kContentX + title_w + 18, kHeaderY + 16, std::to_string(count), 22,
+                   Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x66));
+    /* Says where a search came from, and how to get back there. */
+    if (searching)
     {
-        const int w = g_view.mode == 1 ? 360 : widths[i];
-        const bool focused = g_view.field_focused && g_view.toolbar == i && !g_view.sheet_open;
-        gfx::rounded_rect(x, kFieldY, w, 60, 14, gfx::palette::control);
-        if (focused)
-            ui::focus_pill(x, kFieldY, w, 60, ui::FocusGroup::discover_toolbar);
-        const std::string label = g_view.mode == 1       ? "Refresh requests"
-                                  : i == 1               ? kMediaFilters[g_view.media_filter]
-                                  : i == 2               ? kSorts[g_view.sort]
-                                  : g_view.query.empty() ? "Search movies and series"
-                                                         : g_view.query;
-        if (i == 0)
-            icons::draw(icons::Icon::ps_triangle, x + 18, kFieldY + 18, 24,
-                        icons::button::triangle);
-        if (i != 0)
-        {
-            gfx::stroke_rounded_rect(x + 16, kFieldY + 14, 32, 32, 16, 1, gfx::palette::text_dim);
-            const std::string stick = i == 1 ? "L3" : "R3";
-            text::draw(x + 32 - text::measure(stick, 14, Weight::bold) / 2,
-                       text::centered_y(kFieldY + 14, 32, stick, 14, Weight::bold), stick, 14,
-                       Weight::bold, gfx::palette::text_dim);
-        }
-        text::draw_ellipsized(
-            x + (i == 0 ? 58 : 62), text::centered_y(kFieldY, 60, label, 24, Weight::medium),
-            w - (i == 0 ? 76 : 78), label, 24, Weight::medium, gfx::palette::text);
-        x += w + 24;
+        const std::string back = std::string{"Search results  \xC2\xB7  Circle returns to "} +
+                                 kSectionLabels[g_view.sort];
+        text::draw(ui::kContentX, kHeaderY + 62, back, 20, Weight::regular, gfx::palette::text_dim);
     }
-    const std::string summary =
-        g_view.mode == 1 ? std::to_string(g_view.requests.size()) +
-                               (g_view.requests.size() == 1 ? " request" : " requests")
-                         : (g_view.query.empty() ? kSorts[g_view.sort] : "Search results") +
-                               std::string("  ·  ") + std::to_string(results_size()) +
-                               (results_size() == 1 ? " title" : " titles");
-    text::draw(ui::kContentX, kFieldY + 86, summary, 20, Weight::regular, gfx::palette::text_dim);
-    if (g_view.mode == 0)
-    {
-        constexpr int width = 188, height = 36;
-        const int x = gfx::kWidth - width - 24, y = gfx::kHeight - height - 24;
-        gfx::rounded_rect(x, y, width, height, 12, gfx::palette::control);
-        gfx::stroke_rounded_rect(x, y, width, height, 12, 1,
-                                 g_view.search_loading ? gfx::palette::focus_border
-                                                       : gfx::palette::control_border);
-        const auto previous = g_view.page > 1 ? gfx::palette::text_dim : gfx::palette::text_faint;
-        const auto next =
-            g_view.page < g_view.pages ? gfx::palette::text_dim : gfx::palette::text_faint;
-        const std::string page = std::to_string(g_view.page) + " / " + std::to_string(g_view.pages);
-        text::draw(x + 12, text::centered_y(y, height, "L1", 16, Weight::medium), "L1", 16,
-                   Weight::medium, previous);
-        text::draw(x + (width - text::measure(page, 18, Weight::medium)) / 2,
-                   text::centered_y(y, height, page, 18, Weight::medium), page, 18, Weight::medium,
-                   gfx::palette::text);
-        text::draw(x + width - 32, text::centered_y(y, height, "R1", 16, Weight::medium), "R1", 16,
-                   Weight::medium, next);
-    }
+    if (requests)
+        return;
+    const ui::Segmented filter{{"All", "Movies", "Series"}};
+    const int width = ui::segmented_width(filter);
+    (void)ui::draw_segmented(ui::kContentRight - width, kFieldY - 2, filter,
+                             g_view.filter_slide.value(), ui::kDiscoverTheme,
+                             g_view.field_focused && !g_view.sheet_open);
 }
 
 void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
 {
-    draw_poster(title.poster_path, x, y, kCardW, kCardH, 10, title.name);
+    /* The chosen poster lifts a little off the page, ringed in white as the
+       library's cards are, so both tabs mean the same thing by "here". */
+    const int lift = focused ? 8 : 0;
     if (focused)
-        gfx::stroke_rounded_rect(x - 4, y - 4, kCardW + 8, kCardH + 8, 14, 3,
-                                 gfx::palette::focus_border);
+        gfx::drop_shadow(x, y - lift, kCardW, kCardH, 12, 22, 0x90);
+    draw_poster(title.poster_path, x, y - lift, kCardW, kCardH, 12, title.name);
+    if (focused)
+        gfx::stroke_rounded_rect(x - 5, y - lift - 5, kCardW + 10, kCardH + 10, 16, 3,
+                                 gfx::palette::text);
+    y -= lift;
     const bool fourk_only = title.availability == Availability::unknown;
     const auto availability = fourk_only ? title.availability4k : title.availability;
     if (availability != Availability::unknown)
@@ -2485,8 +2478,9 @@ void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
         text::draw(x + 21, text::centered_y(y + 10, 30, label, 17, Weight::medium), label, 17,
                    Weight::medium, gfx::rgb(0x10, 0x10, 0x12));
     }
-    text::draw_ellipsized(x, y + kCardH + 10, kCardW, title.name, 22, Weight::medium,
-                          gfx::palette::text);
+    y += lift; /* the words stay put under a lifted poster */
+    text::draw_ellipsized(x, y + kCardH + 12, kCardW, title.name, 22, Weight::medium,
+                          focused ? gfx::palette::text : gfx::rgba(0xff, 0xff, 0xff, 0xd8));
     std::string subtitle = title.media_type == "tv" ? "Series" : "Movie";
     if (title.year > 0)
         subtitle += "  ·  " + std::to_string(title.year);
@@ -2497,7 +2491,7 @@ void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
         subtitle += format("%.1f", title.rating);
     }
     if (!subtitle.empty())
-        text::draw(x, y + kCardH + 40, subtitle, 18, Weight::regular, gfx::palette::text_dim);
+        text::draw(x, y + kCardH + 44, subtitle, 18, Weight::regular, gfx::palette::text_faint);
 }
 
 void draw_results() noexcept
@@ -2546,8 +2540,9 @@ void draw_results() noexcept
     const int first = scroll / kCardStepY;
     const int last = std::min(rows, 1 + (scroll + kCatalogViewport) / kCardStepY);
 
-    gfx::push_clip(ui::kContentX - 8, kGridY - 8, ui::kContentWidth + 16,
-                   gfx::kHeight - kGridY - 50);
+    /* Room above the first row for a poster lifted by the focus, and its ring. */
+    gfx::push_clip(ui::kContentX - 24, kGridY - 24, ui::kContentWidth + 48,
+                   gfx::kHeight - kGridY - 26);
     const auto draw_card = [&](int i)
     {
         const int row = i / columns, column = i % columns;
@@ -2577,7 +2572,15 @@ void draw_results() noexcept
                                      kCardH);
             }
     gfx::pop_clip();
+    draw_scroll_fade(kGridY - 24, scroll);
     draw_scrollbar(static_cast<float>(scroll), limit, rows * kCardStepY, kCatalogViewport);
+    /* The next page arriving under what is already here. */
+    if (g_view.search_loading)
+    {
+        const char *more = "Loading more\xE2\x80\xA6";
+        text::draw(ui::kContentRight - text::measure(more, 19, Weight::medium), gfx::kHeight - 40,
+                   more, 19, Weight::medium, gfx::palette::text_faint);
+    }
 }
 
 void draw_progress(const Request &request, int x, int y, int width) noexcept
@@ -2587,7 +2590,9 @@ void draw_progress(const Request &request, int x, int y, int width) noexcept
     const double progress = request.progress < 0.0 ? 0.0 : request.progress;
     const int filled = static_cast<int>(width * progress);
     if (filled > 0)
-        gfx::rounded_rect(x, y, filled, kBarH, kBarH / 2, gfx::palette::accent_alt);
+        gfx::rounded_horizontal_gradient(x, y, filled, kBarH, kBarH / 2,
+                                         ui::kDiscoverTheme.accent_from,
+                                         ui::kDiscoverTheme.accent_to);
     std::string detail = format("%.0f%%", progress * 100.0);
     if (request.remaining_bytes > 0)
         detail += "  \xC2\xB7  " + human_bytes(request.remaining_bytes) + " left";
@@ -2713,6 +2718,7 @@ void draw_requests() noexcept
         }
     }
     gfx::pop_clip();
+    draw_scroll_fade(kListY - 8, scroll);
     draw_scrollbar(static_cast<float>(scroll), limit, count * kRequestRow, kRequestViewport);
 }
 
@@ -2768,7 +2774,10 @@ void draw_corner_close(const std::string &label) noexcept
 }
 void draw_sheet() noexcept
 {
-    gfx::clear(gfx::rgb(0x08, 0x09, 0x0d));
+    /* The sheet is still in the Discover tab, so it keeps the tab's glow. */
+    gfx::clear(gfx::rgb(0x0b, 0x0b, 0x10));
+    gfx::vertical_gradient(0, 0, gfx::kWidth, 520, ui::kDiscoverTheme.page_top,
+                           gfx::rgb(0x0b, 0x0b, 0x10));
     constexpr int x = ui::kContentX, y = 100, width = ui::kContentWidth;
     constexpr int tx = x + 348, tw = width - 348;
     const auto title = effective_title();
@@ -3007,17 +3016,77 @@ void draw_toast() noexcept
 
 void open() noexcept
 {
+    g_view.entered = true;
     g_view.mode = 0;
-    g_view.field_focused = true;
+    g_view.field_focused = false;
     g_view.sheet_open = false;
     g_view.grid_index = 0;
     g_view.grid_scroll.jump(0.0f);
     g_view.request_index = 0;
     g_view.request_scroll.jump(0.0f);
+    g_view.filter_slide.jump(static_cast<float>(g_view.media_filter));
     g_view.refresh_at = std::chrono::steady_clock::now();
     refresh_server();
     refresh_requests();
     start_search(g_view.query);
+}
+
+void enter() noexcept
+{
+    if (!g_view.entered)
+    {
+        open();
+        return;
+    }
+    /* Coming back to the tab: everything stays where it was left. Only what
+       may have moved on while away is asked for again. */
+    g_view.sheet_open = false;
+    g_view.filter_slide.jump(static_cast<float>(g_view.media_filter));
+    refresh_requests();
+    if (g_view.results.empty() && !g_view.search_loading)
+        start_search(g_view.query);
+}
+
+const char *section_label(int section) noexcept
+{
+    return kSectionLabels[static_cast<std::size_t>(std::clamp(section, 0, kSectionCount - 1))];
+}
+
+int section() noexcept
+{
+    return g_view.mode == 1 ? kRequestsSection : g_view.sort;
+}
+
+void set_section(int section) noexcept
+{
+    section = std::clamp(section, 0, kSectionCount - 1);
+    g_view.entered = true;
+    g_view.sheet_open = false;
+    if (section == kRequestsSection)
+    {
+        if (g_view.mode != 1)
+        {
+            g_view.mode = 1;
+            g_view.request_index = 0;
+            g_view.request_scroll.jump(0.0f);
+        }
+        g_view.field_focused = false;
+        refresh_requests();
+        return;
+    }
+    const bool same = g_view.mode == 0 && g_view.sort == section && g_view.query.empty();
+    g_view.mode = 0;
+    g_view.field_focused = false;
+    if (same && !g_view.results.empty())
+        return;
+    g_view.sort = section;
+    g_view.query.clear();
+    reload_catalog();
+}
+
+std::string server_label() noexcept
+{
+    return g_view.server_title.empty() ? std::string{"Seerr"} : g_view.server_title;
 }
 
 #ifdef SLOPFIN_HOST
@@ -3077,39 +3146,12 @@ bool handle_input(float elapsed) noexcept
         return true;
     if (g_view.sheet_open)
         return sheet_input();
-    if (pad::pressed(pad::Button::square))
+    /* L3 still cycles the media filter from anywhere on the page. The sidebar
+       chooses the category; L1 and R1 belong to the tabs. */
+    if (g_view.mode == 0 && pad::pressed(pad::Button::l3))
     {
-        g_view.mode = 1 - g_view.mode;
-        g_view.field_focused = true;
-        g_view.toolbar = 0;
-        if (g_view.mode == 1)
-            refresh_requests();
-        return true;
-    }
-    if (g_view.mode == 0 && (pad::pressed(pad::Button::l3) || pad::pressed(pad::Button::r3)))
-    {
-        const bool media = pad::pressed(pad::Button::l3);
-        if (media)
-            g_view.media_filter = (g_view.media_filter + 1) % 3;
-        else
-        {
-            g_view.sort = (g_view.sort + 1) % 5;
-            g_view.query.clear();
-        }
+        g_view.media_filter = (g_view.media_filter + 1) % 3;
         reload_catalog();
-        return true;
-    }
-    if (g_view.mode == 0 && !g_view.search_loading &&
-        (pad::pressed(pad::Button::l1) || pad::pressed(pad::Button::r1)))
-    {
-        const int page =
-            std::clamp(g_view.page + (pad::pressed(pad::Button::l1) ? -1 : 1), 1, g_view.pages);
-        if (page != g_view.page)
-        {
-            g_view.grid_index = 0;
-            g_view.grid_scroll.jump(0.0f);
-            start_search(g_view.query, page);
-        }
         return true;
     }
     if (g_view.mode == 0)
@@ -3124,6 +3166,8 @@ void draw() noexcept
     {
         refresh_requests();
     }
+    g_view.filter_slide.aim(static_cast<float>(g_view.media_filter));
+    g_view.filter_slide.step(motion::kSelect, 1.0f / 60.0f);
 
     if (g_view.sheet_open)
     {
@@ -3137,7 +3181,6 @@ void draw() noexcept
         return;
     }
     draw_header();
-    draw_field();
     if (g_view.mode == 0)
     {
         if (!ime::busy())

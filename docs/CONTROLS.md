@@ -8,26 +8,31 @@
 | Right stick | Scroll libraries, Discover and Settings |
 | Cross | Select or play |
 | Circle | Go back |
-| Triangle on Home/library pages | Search with the PlayStation keyboard |
-| Square on Home/library pages | Open your profile menu |
-| Hold L2 or R2 + Up/Down | Switch library/sidebar category |
+| L1 / R1 | Switch between the **Home** and **Discover** tabs |
+| Triangle | Search (Home, libraries and Discover) |
+| Square on Home, libraries and Discover | Open your profile menu |
+| Hold L2 or R2 + Up/Down | Switch category in the current tab's sidebar |
+
+The top bar holds two tabs. **Home** is your Jellyfin library: its sidebar lists
+Overview, your libraries and Settings. **Discover** is the request server: its
+sidebar lists Trending, Popular, Top rated, New releases, Upcoming and Requests.
+Each tab keeps its own place, so L1 returns to the library and card you left.
 
 Search separates Movies, Series and Episodes. Up/Down changes result rows;
 Left/Right browses within a row. A search inside a library keeps that scope.
 
 A compact L2/R2 hint at the bottom of the sidebar lights while a trigger is held.
 
-**Discover**, the request server, sits at the top of the sidebar. Triangle
-searches it, Cross opens a title, Square swaps Browse / My requests, L3 changes
-media type, R3 changes the catalog sort without moving focus to the toolbar, and L1/R1
-changes catalog pages. Media and sorting choices sit beside search. In a title,
-choose seasons and quality with the D-pad; Triangle opens a season’s episode guide.
-Options focuses the primary action. Existing requests show Cancel when permitted;
-available media opens in Jellyfin. See [Discover](DISCOVER.md).
+In **Discover**, Triangle searches the request server and Circle clears that
+search. Up from the first row reaches the All / Movies / Series filter, where
+Left/Right choose; L3 cycles it from anywhere. Scrolling down loads more titles.
+In a title, choose seasons and quality with the D-pad; Triangle opens a season’s
+episode guide. Options focuses the primary action. Existing requests show Cancel
+when permitted; available media opens in Jellyfin. See [Discover](DISCOVER.md).
 
-Use **Settings → Navigation** to show, hide or reorder Home, Discover and your
-libraries. Cross toggles visibility, L1/R1 move a category, and Square restores
-the default layout. Settings stays visible. Controller options are inside Navigation.
+Use **Settings → Navigation** to show or hide the Discover tab, and to show, hide
+or reorder Overview and your libraries. Cross toggles visibility, L1/R1 move a
+category, and Square restores the default layout. Settings stays visible. Controller options are inside Navigation.
 New libraries appear automatically; renaming a library keeps its saved position.
 
 ## Playback and seeking

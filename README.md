@@ -31,8 +31,10 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   Available titles open in Jellyfin when the request server supplies
   their library ID.
   [Connect your request server](docs/DISCOVER.md).
-- **Your navigation:** reorder or hide Home, Discover and libraries in Settings.
-  Hold L2/R2 and press Up/Down to move between libraries.
+- **Two tabs, Home and Discover:** L1/R1 switch between your Jellyfin library
+  and the request server. Each tab has its own sidebar and colour, and keeps
+  your place. Reorder or hide libraries, or hide Discover, in Settings.
+  Hold L2/R2 and press Up/Down to move between categories.
   A compact hint at the bottom of the sidebar keeps the shortcut visible.
 - **Profile and server dashboard:** crop avatars with D-pad and trigger zoom.
   Administrators can manage sessions, libraries and tasks from the controller.

@@ -31,6 +31,55 @@ inline constexpr int kContentWidth = kContentRight - kContentX;
 inline constexpr int kGridTop = 250;
 
 /*
+ * The tab bar across the top of every browsing screen: the wordmark, Home and
+ * Discover in the middle, search and the profile on the right, all on one
+ * line. A page's own title starts under it.
+ */
+inline constexpr int kTopBarY = kSafeY;
+inline constexpr int kTopBarHeight = 72;
+inline constexpr int kPageTitleY = 164;
+
+/*
+ * Home and Discover are two places, and each has its own light: the colour
+ * the page glows at the top, and the gradient its selection is drawn in.
+ */
+struct Theme
+{
+    gfx::Color page_top;
+    gfx::Color accent_from;
+    gfx::Color accent_to;
+};
+inline constexpr Theme kHomeTheme{gfx::rgb(0x10, 0x1d, 0x33), gfx::rgb(0x2f, 0x7c, 0xff),
+                                  gfx::rgb(0x00, 0xc2, 0xe6)};
+inline constexpr Theme kDiscoverTheme{gfx::rgb(0x29, 0x12, 0x3f), gfx::rgb(0x8b, 0x5c, 0xf6),
+                                      gfx::rgb(0xe0, 0x4f, 0xc2)};
+/* Between the two, for the moment one turns into the other. 0 Home, 1 Discover. */
+gfx::Color mix(gfx::Color from, gfx::Color to, float amount) noexcept;
+Theme theme_at(float discover) noexcept;
+
+/* The page glows from the top and settles to this by kPageRamp. */
+inline constexpr gfx::Color kPageBottom = gfx::rgb(0x0d, 0x0d, 0x12);
+inline constexpr int kPageRamp = 460;
+/* The page's colour at one row, so a fade over a scrolling list matches it. */
+gfx::Color page_at(const Theme &theme, int y) noexcept;
+
+/*
+ * A capsule of choices with the chosen one on a lifted, coloured pill.
+ * `chosen` is fractional while the pill slides from one choice to another.
+ * Returns the width used; segmented_width answers the same without drawing.
+ */
+struct Segmented
+{
+    std::initializer_list<const char *> labels;
+    int height = 52;
+    int size = 22;    /* label pixel size */
+    int padding = 26; /* either side of each label */
+};
+int segmented_width(const Segmented &control) noexcept;
+int draw_segmented(int x, int y, const Segmented &control, float chosen, const Theme &theme,
+                   bool focused) noexcept;
+
+/*
  * A row of "button — what it does" hints.
  *
  * Drawn from the pad's own shapes rather than written out, because "triangle"

@@ -93,9 +93,16 @@ int main()
     assert(host::write_png("build/tests/settings-menu.png"));
 
     g_shared.libraries = {{"movies", "Movies", "movies"}, {"tv", "Shows", "tvshows"}};
+    // Discover is a tab of its own now: the Home tab's sidebar is its
+    // overview, the libraries and Settings, and Discover lists its categories.
     auto entries = build_sidebar(g_shared.libraries);
-    assert(entries.size() == 5 && category_key(entries.front()) == "discover");
+    assert(entries.size() == 4 && category_key(entries.front()) == "home");
     assert(category_key(entries.back()) == "settings");
+    assert(discover_sidebar().size() == static_cast<std::size_t>(seerr::kSectionCount));
+    assert(discover_sidebar().back().gap_before &&
+           discover_sidebar().back().section == seerr::kRequestsSection);
+    assert(discover_tab_shown());
+    assert(category_key(navigation_entries().front()) == "discover");
     g_view.settings_page = 10;
     g_view.navigation_index = 0;
     press(pad::Button::cross, handle_settings_input);
@@ -109,7 +116,7 @@ int main()
     entries = build_sidebar(g_shared.libraries);
     assert(entries.size() == 4 && category_key(entries.front()) == "home");
     config::load();
-    assert(category_hidden("discover"));
+    assert(category_hidden("discover") && !discover_tab_shown());
     config::current().navigation_hidden = {"home", "discover", "library:movies", "library:tv",
                                            "settings"};
     entries = build_sidebar(g_shared.libraries);

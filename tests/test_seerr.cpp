@@ -622,23 +622,59 @@ int main()
     g_view.ime_guard = 0;
     g_view.mode = 0;
     g_view.media_filter = g_view.sort = 0;
-    for (bool toolbar_focus : {false, true})
-        for (auto button : {pad::Button::l3, pad::Button::r3})
-        {
-            g_view.media_filter = g_view.sort = 0;
-            g_view.field_focused = toolbar_focus;
-            g_view.toolbar = button == pad::Button::l3 ? 2 : 0;
-            const int toolbar_before = g_view.toolbar;
-            pressed_button = button;
-            handle_input();
-            assert(g_view.media_filter == (button == pad::Button::l3 ? 1 : 0));
-            assert(g_view.sort == (button == pad::Button::r3 ? 1 : 0));
-            drain();
-            snapshot();
-            assert(g_view.field_focused == toolbar_focus && g_view.toolbar == toolbar_before);
-        }
-    drain();
+    // L3 cycles the media filter from the grid or the filter itself, leaving
+    // the focus where it was. The category belongs to the sidebar now, so R3
+    // no longer changes it.
+    for (bool filter_focus : {false, true})
+    {
+        g_view.media_filter = g_view.sort = 0;
+        g_view.field_focused = filter_focus;
+        pressed_button = pad::Button::l3;
+        handle_input();
+        assert(g_view.media_filter == 1 && g_view.sort == 0);
+        drain();
+        snapshot();
+        assert(g_view.field_focused == filter_focus);
+        g_view.media_filter = 0;
+        pressed_button = pad::Button::r3;
+        handle_input();
+        assert(g_view.sort == 0 && g_view.media_filter == 0);
+        drain();
+    }
     pressed_button = pad::Button::count;
+    // The sidebar's sections: catalogue categories, then the request list.
+    g_view.query = "lost";
+    set_section(2);
+    assert(section() == 2 && g_view.mode == 0 && g_view.sort == 2 && g_view.query.empty());
+    drain();
+    set_section(kRequestsSection);
+    assert(section() == kRequestsSection && g_view.mode == 1 && g_view.sort == 2);
+    drain();
+    set_section(0);
+    assert(section() == 0 && g_view.mode == 0 && g_view.sort == 0);
+    drain();
+    assert(std::string_view(section_label(kRequestsSection)) == "Requests");
+    // Scrolling on appends the next page under what is loaded, without
+    // reshuffling what has been seen.
+    {
+        const int before_calls = calls;
+        g_view.media_filter = 0;
+        g_view.sort = 1;
+        start_search("", 1);
+        drain();
+        snapshot();
+        const auto first_page = g_model.results;
+        assert(!first_page.empty() && g_model.page == 1 && g_model.pages == 3);
+        start_search("", 2, true);
+        drain();
+        snapshot();
+        assert(calls > before_calls && g_model.page == 2);
+        assert(g_model.results.size() > first_page.size());
+        for (std::size_t i = 0; i < first_page.size(); ++i)
+            assert(g_model.results[i].tmdb_id == first_page[i].tmdb_id);
+        g_view.sort = 0;
+    }
+    drain();
     g_view.mode = 1;
     const int sort_before = g_view.sort;
     pressed_button = pad::Button::r3;
@@ -664,11 +700,13 @@ int main()
     g_view.field_focused = false;
     g_view.grid_index = 0;
     g_view.grid_scroll.jump(0.0f);
+    g_view.page = g_view.pages = 1; /* nothing more to load while scrolling here */
     scroll_axis_value = 1.0f;
     for (int i = 0; i < 60; ++i)
         search_input(1.0f / 60.0f);
     const float full_second = g_view.grid_scroll.value();
-    assert(full_second > 900 && full_second < 920 && g_view.grid_index >= 12);
+    const float rate = 2.6f * static_cast<float>(kCardStepY);
+    assert(full_second > rate - 10 && full_second < rate + 10 && g_view.grid_index >= 12);
     g_view.grid_scroll.jump(0.0f);
     g_view.grid_index = 0;
     for (int i = 0; i < 30; ++i)
@@ -682,6 +720,19 @@ int main()
     for (int i = 0; i < 1000; ++i)
         search_input(1.0f / 60.0f);
     assert(g_view.grid_scroll.value() == 0 && !g_view.field_focused);
+    scroll_axis_value = 0.0f;
+    // Reaching the last rows asks for the next page; it is appended, not swapped in.
+    assert(jobs.empty());
+    g_view.page = 1;
+    g_view.pages = 2;
+    g_view.search_loading = false;
+    g_view.grid_index = 100 - grid_columns() * 2;
+    pressed_button = pad::Button::down;
+    search_input(1.0f / 60.0f);
+    pressed_button = pad::Button::count;
+    assert(!jobs.empty() && g_model.search_loading);
+    drain();
+    g_view.page = g_view.pages = 1;
     g_view.requests.assign(30, active);
     g_view.request_index = 0;
     scroll_axis_value = 1.0f;

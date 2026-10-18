@@ -8,6 +8,7 @@
 
 #include "text.hpp"
 #include "motion.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -167,6 +168,111 @@ void control_label(int x, int y, int w, int h, std::string_view label, int size,
 {
     text::draw_ellipsized(x, text::centered_y(y, h, label, size, weight), w, label, size, weight,
                           color);
+}
+
+gfx::Color mix(gfx::Color from, gfx::Color to, float amount) noexcept
+{
+    const float t = std::clamp(amount, 0.0f, 1.0f);
+    const auto channel = [&](unsigned shift)
+    {
+        const float a = static_cast<float>((from >> shift) & 0xffu);
+        const float b = static_cast<float>((to >> shift) & 0xffu);
+        return static_cast<std::uint32_t>(std::lround(a + (b - a) * t)) << shift;
+    };
+    return channel(24) | channel(16) | channel(8) | channel(0);
+}
+
+Theme theme_at(float discover) noexcept
+{
+    return {mix(kHomeTheme.page_top, kDiscoverTheme.page_top, discover),
+            mix(kHomeTheme.accent_from, kDiscoverTheme.accent_from, discover),
+            mix(kHomeTheme.accent_to, kDiscoverTheme.accent_to, discover)};
+}
+
+gfx::Color page_at(const Theme &theme, int y) noexcept
+{
+    if (y >= kPageRamp)
+        return kPageBottom;
+    return mix(theme.page_top, kPageBottom,
+               static_cast<float>(std::max(0, y)) / static_cast<float>(kPageRamp));
+}
+
+namespace
+{
+constexpr int kSegmentInset = 5;
+
+int segment_width(const char *label, const Segmented &control) noexcept
+{
+    return text::measure(label, control.size, Weight::bold) + control.padding * 2;
+}
+} // namespace
+
+int segmented_width(const Segmented &control) noexcept
+{
+    int width = kSegmentInset * 2;
+    for (const char *label : control.labels)
+        width += segment_width(label, control);
+    return width;
+}
+
+int draw_segmented(int x, int y, const Segmented &control, float chosen, const Theme &theme,
+                   bool focused) noexcept
+{
+    const int width = segmented_width(control);
+    const int h = control.height;
+    gfx::rounded_rect(x, y, width, h, h / 2, gfx::rgba(0xff, 0xff, 0xff, 0x12));
+    gfx::stroke_rounded_rect(x, y, width, h, h / 2, focused ? 2 : 1,
+                             focused ? gfx::palette::focus_border
+                                     : gfx::rgba(0xff, 0xff, 0xff, 0x1c));
+
+    /* Where each segment starts, so the pill can sit between two of them. */
+    std::array<int, 8> starts{};
+    std::array<int, 8> widths{};
+    int at = x + kSegmentInset;
+    int i = 0;
+    for (const char *label : control.labels)
+    {
+        if (i >= static_cast<int>(starts.size()))
+            break;
+        starts[static_cast<std::size_t>(i)] = at;
+        widths[static_cast<std::size_t>(i)] = segment_width(label, control);
+        at += widths[static_cast<std::size_t>(i)];
+        ++i;
+    }
+    const float place = std::clamp(chosen, 0.0f, static_cast<float>(std::max(0, i - 1)));
+    const int low = static_cast<int>(std::floor(place));
+    const int high = std::min(i - 1, low + 1);
+    const float t = place - static_cast<float>(low);
+    const auto lerp = [t](int a, int b) {
+        return static_cast<int>(std::lround(static_cast<float>(a) + static_cast<float>(b - a) * t));
+    };
+    if (i > 0)
+    {
+        const int pill_x =
+            lerp(starts[static_cast<std::size_t>(low)], starts[static_cast<std::size_t>(high)]);
+        const int pill_w =
+            lerp(widths[static_cast<std::size_t>(low)], widths[static_cast<std::size_t>(high)]);
+        const int pill_h = h - kSegmentInset * 2;
+        gfx::drop_shadow(pill_x, y + kSegmentInset, pill_w, pill_h, pill_h / 2, 10, 0x50);
+        gfx::rounded_horizontal_gradient(pill_x, y + kSegmentInset, pill_w, pill_h, pill_h / 2,
+                                         theme.accent_from, theme.accent_to);
+    }
+
+    i = 0;
+    for (const char *label : control.labels)
+    {
+        if (i >= static_cast<int>(starts.size()))
+            break;
+        const float near = std::clamp(1.0f - std::fabs(place - static_cast<float>(i)), 0.0f, 1.0f);
+        const auto alpha = static_cast<std::uint8_t>(0x8c + std::lround(near * (0xff - 0x8c)));
+        const int label_w = text::measure(label, control.size, Weight::bold);
+        text::draw(starts[static_cast<std::size_t>(i)] +
+                       (widths[static_cast<std::size_t>(i)] - label_w) / 2,
+                   text::centered_y(y, h, label, control.size, Weight::bold), label, control.size,
+                   Weight::bold, gfx::rgba(0xff, 0xff, 0xff, alpha));
+        ++i;
+    }
+    return width;
 }
 
 void panel(int x, int y, int w, int h) noexcept
