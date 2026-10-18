@@ -1576,16 +1576,43 @@ void draw_wordmark(int x, int y) noexcept
     text::draw(x + 64, y + 3, "SlopFin", 36, Weight::bold, gfx::palette::text);
 }
 
+/* A controller button drawn as a small key, with its name centred on it.
+   Returns the width it took. */
+int keycap_width(const char *name, int h, int size) noexcept
+{
+    return std::max(h + 8, text::measure(name, size, Weight::bold) + 20);
+}
+
+int draw_keycap(int x, int y, const char *name, int h, int size, std::uint8_t ink,
+                gfx::Color fill) noexcept
+{
+    const int w = keycap_width(name, h, size);
+    gfx::rounded_rect(x, y, w, h, h / 3, fill);
+    gfx::stroke_rounded_rect(x, y, w, h, h / 3, 1, gfx::rgba(0xff, 0xff, 0xff, ink / 3));
+    text::draw(x + (w - text::measure(name, size, Weight::bold)) / 2,
+               text::centered_y(y, h, name, size, Weight::bold), name, size, Weight::bold,
+               gfx::rgba(0xff, 0xff, 0xff, ink));
+    return w;
+}
+
 void draw_category_shortcut() noexcept
 {
-    constexpr int x = kSafeX;
-    constexpr int y = gfx::kHeight - 152;
+    constexpr int kKey = 26;
+    int x = kSafeX;
+    constexpr int y = gfx::kHeight - 158;
     const bool held = g_view.shortcut_left.value() > 0.1f || g_view.shortcut_right.value() > 0.1f;
-    const auto colour = held ? gfx::palette::focus_border : gfx::palette::text_faint;
-    text::draw(x, y, "L2 / R2 +", 18, Weight::medium, colour);
-    icons::draw(icons::Icon::chevron_up, x + 99, y - 1, 17, colour);
-    icons::draw(icons::Icon::chevron_down, x + 115, y - 1, 17, colour);
-    text::draw(x + 143, y, "Categories", 18, Weight::regular, colour);
+    const std::uint8_t ink = held ? 0xff : 0x9a;
+    const gfx::Color fill = gfx::rgba(0xff, 0xff, 0xff, held ? 0x26 : 0x0c);
+    const gfx::Color colour = gfx::rgba(0xff, 0xff, 0xff, held ? 0xe6 : 0x80);
+    x += draw_keycap(x, y, "L2", kKey, 14, ink, fill) + 6;
+    x += draw_keycap(x, y, "R2", kKey, 14, ink, fill) + 10;
+    const int text_y = text::centered_y(y, kKey, "+", 18, Weight::regular);
+    text::draw(x, text_y, "+", 18, Weight::regular, colour);
+    x += text::measure("+", 18, Weight::regular) + 6;
+    icons::draw(icons::Icon::chevron_up, x, y + kKey / 2 - 15, 16, colour);
+    icons::draw(icons::Icon::chevron_down, x, y + kKey / 2 - 2, 16, colour);
+    x += 24;
+    text::draw(x, text_y, "Categories", 18, Weight::regular, colour);
 }
 
 /*
@@ -1675,7 +1702,7 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries, int c
             /* Place separators midway between adjacent labels. */
             const int ink_above = y - kStep + kInkBottom;
             const int ink_below = y + kGroupGap + kInkTop;
-            gfx::fill_rect(kWashX, (ink_above + ink_below) / 2, kSidebarWidth - kSafeX - 20, 1,
+            gfx::fill_rect(kWashX, (ink_above + ink_below) / 2, kSidebarWidth - kWashX - 20, 1,
                            fade(gfx::rgba(0xff, 0xff, 0xff, 0x14)));
             y += kGroupGap;
         }
@@ -1699,16 +1726,18 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries, int c
  */
 const ui::Segmented kTabs{{"Home", "Discover"}, ui::kTopBarHeight, 30, 40};
 
-void draw_shoulder_key(int x, int y, const char *name, bool held, bool usable) noexcept
+constexpr int kShoulderH = 40;
+
+/* L1/R1 beside the tabs: lit when pressing it would go somewhere, filled in
+   the tab's colour while held. */
+int draw_shoulder_key(int x, int y, const char *name, bool held, bool usable) noexcept
 {
-    constexpr int kW = 46;
-    constexpr int kH = 32;
-    const std::uint8_t ink = !usable ? 0x40 : held ? 0xff : 0xa0;
-    gfx::rounded_rect(x, y, kW, kH, 9, gfx::rgba(0xff, 0xff, 0xff, held ? 0x2a : 0x10));
-    gfx::stroke_rounded_rect(x, y, kW, kH, 9, 1, gfx::rgba(0xff, 0xff, 0xff, ink / 2));
-    text::draw(x + (kW - text::measure(name, 17, Weight::bold)) / 2,
-               text::centered_y(y, kH, name, 17, Weight::bold), name, 17, Weight::bold,
-               gfx::rgba(0xff, 0xff, 0xff, ink));
+    const ui::Theme theme = page_theme();
+    const std::uint8_t ink = !usable ? 0x48 : 0xf0;
+    const gfx::Color fill = held && usable ? gfx::with_alpha(theme.accent_from, 0xb0)
+                            : usable       ? gfx::rgba(0xff, 0xff, 0xff, 0x16)
+                                           : gfx::rgba(0xff, 0xff, 0xff, 0x06);
+    return draw_keycap(x, y, name, kShoulderH, 18, ink, fill);
 }
 
 void draw_tabs(bool discover_shown) noexcept
@@ -1719,10 +1748,11 @@ void draw_tabs(bool discover_shown) noexcept
     const int x = (gfx::kWidth - width) / 2;
     const int y = ui::kTopBarY;
     (void)ui::draw_segmented(x, y, kTabs, g_view.world.value(), page_theme(), false);
-    const int key_y = y + (ui::kTopBarHeight - 32) / 2;
+    const int key_y = y + (ui::kTopBarHeight - kShoulderH) / 2;
     const float at = g_view.world.target();
-    draw_shoulder_key(x - 46 - 18, key_y, "L1", pad::held(pad::Button::l1), at > 0.5f);
-    draw_shoulder_key(x + width + 18, key_y, "R1", pad::held(pad::Button::r1), at < 0.5f);
+    (void)draw_shoulder_key(x - keycap_width("L1", kShoulderH, 18) - 20, key_y, "L1",
+                            pad::held(pad::Button::l1), at > 0.5f);
+    (void)draw_shoulder_key(x + width + 20, key_y, "R1", pad::held(pad::Button::r1), at < 0.5f);
 }
 
 std::string card_subtitle(const jellyfin::Item &item) noexcept
@@ -3175,6 +3205,9 @@ constexpr int kDetailPosterY = kSafeY + 60;
 constexpr int kDetailPosterW = 300;
 constexpr int kDetailPosterH = 450;
 constexpr int kHeroBottom = kDetailPosterY + kDetailPosterH;
+/* An episode's still in the same place, 16:9 and no taller than a poster. */
+constexpr int kDetailStillW = 720;
+constexpr int kDetailStillH = 405;
 /* let the episode/
    season strip breathe before Cast & Crew instead of squeezing both rows into
    the first viewport. The next row is intentionally reached by scrolling. */
@@ -3336,17 +3369,39 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
     g_view.detail_page.aim(detail_page_target(layout));
     const int shift = static_cast<int>(g_view.detail_page.value() + 0.5f);
 
-    /* Poster beside the text, as the web and TV clients both do. */
+    /* Poster beside the text, as the web and TV clients both do. An episode's
+       picture is a 16:9 still, so it is shown whole rather than cut down to a
+       portrait slot. */
     const int poster_x = kSafeX;
     const int poster_y = kDetailPosterY - shift;
+    const bool still = item.type == "Episode";
+    const int poster_w = still ? kDetailStillW : kDetailPosterW;
+    const int poster_h = still ? kDetailStillH : kDetailPosterH;
     const gfx::Bitmap *poster =
         images::acquire(item.id, item.image_tag, images::Kind::primary, 560);
+    if (still)
+        gfx::drop_shadow(poster_x, poster_y, poster_w, poster_h, 16, 28, 0x70);
     if (poster != nullptr)
-        gfx::blit_cover(*poster, poster_x, poster_y, kDetailPosterW, kDetailPosterH, 14, 255);
+        gfx::blit_cover(*poster, poster_x, poster_y, poster_w, poster_h, 16, 255);
     else
-        draw_card_placeholder(poster_x, poster_y, kDetailPosterW, kDetailPosterH, item);
+        draw_card_placeholder(poster_x, poster_y, poster_w, poster_h, item);
+    if (still)
+    {
+        gfx::stroke_rounded_rect(poster_x, poster_y, poster_w, poster_h, 16, 1,
+                                 gfx::rgba(0xff, 0xff, 0xff, 0x1c));
+        if (item.played_percentage > 0.5)
+        {
+            const int track = poster_w - 40;
+            const int filled =
+                static_cast<int>(track * std::min(100.0, item.played_percentage) / 100.0);
+            gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, track, 6, 3,
+                              gfx::rgba(0xff, 0xff, 0xff, 0x40));
+            gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, filled, 6, 3,
+                              gfx::palette::accent);
+        }
+    }
 
-    const int x = poster_x + kDetailPosterW + 48;
+    const int x = poster_x + poster_w + 48;
     /* A series' Next Up takes the right of the hero; the text stops short of it. */
     const bool show_next_up = !next_up.id.empty();
     const int right = show_next_up ? kNextUpX - 64 : kContentRight;
@@ -3389,7 +3444,8 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
         text::draw(cursor, y + 3, "audience", 18, Weight::regular, gfx::palette::text_faint);
         cursor += text::measure("audience", 18, Weight::regular) + 24;
     }
-    if (item.type == "Episode" && item.parent_index_number > 0)
+    /* The line above already carries the code when the series name leads. */
+    if (item.type == "Episode" && item.parent_index_number > 0 && item.series_name.empty())
     {
         const std::string code = "S" + std::to_string(item.parent_index_number) + ":E" +
                                  std::to_string(item.index_number);
@@ -3416,7 +3472,8 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
             cursor += draw_badge(cursor, y - 3, badge);
         }
     }
-    y += 54;
+    if (cursor > x) /* nothing to say leaves no empty line */
+        y += 54;
 
     /* The facts: how long and when it would end, or for a show its years and
        size; then the genres. */
@@ -8832,7 +8889,7 @@ void frame() noexcept
             dashboard::draw();
             break;
         case Screen::discover:
-            seerr::draw();
+            seerr::draw(!g_view.sidebar_focused);
             break;
         }
         if (page_moving)

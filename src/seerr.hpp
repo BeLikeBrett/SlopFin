@@ -91,7 +91,9 @@ void close_settings() noexcept;
 #ifdef SLOPFIN_HOST
 void preview_search(const std::string &query) noexcept;
 #endif
-void draw() noexcept;
+/* content_focused is false while the app's sidebar holds the input, so no
+   card or row here shows a focus of its own. */
+void draw(bool content_focused = true) noexcept;
 /* Services a queued keyboard. Call once per frame from the render loop. */
 void poll() noexcept;
 bool take_library_changed() noexcept;
