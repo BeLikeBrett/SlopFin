@@ -10,12 +10,16 @@ An Overseerr-compatible server can use API-key or local-account authentication.
 Choose **Connect request server** in an unconfigured Discover screen, or open
 **Settings → Discover**.
 
-1. Enter the **Seerr server URL** for Seerr, Jellyseerr or Overseerr, rather than
+1. Enter the **Server address** for Seerr, Jellyseerr or Overseerr, rather than
    your Jellyfin media-server address. `request.example.com` uses verified HTTPS;
    a bare local IP uses HTTP on port 5055. Explicit protocols, ports and base
    paths are supported.
-2. Choose **Connect using**: Jellyfin account, request-server account, or API key.
+2. Choose **Sign in with** (Left/Right): Jellyfin account, Seerr account, or API key.
 3. Enter the fields shown for that method, then choose **Connect**.
+
+A status card at the top of the page shows whether SlopFin is connected, to
+which server and version, or why the last attempt failed. Once connected, the
+last row becomes **Disconnect**.
 
 API keys come from the request server's Settings → General. They act as its
 owner, so requests and the Requests list use that account. Use account sign-in when

@@ -484,7 +484,6 @@ struct View
     } prompt = Prompt::none;
     std::string pending_username;
     std::string pending_password;
-    bool credential_form = false;
     bool show_password = false;
     int ime_input_guard = 0;
 };
@@ -1132,6 +1131,48 @@ void refresh_progress_rows() noexcept
     ++g_shared.rows_epoch;
 }
 
+/*
+ * Waits for a Quick Connect code to be approved. A code that runs out is
+ * replaced by a fresh one, so a viewer who takes their time is never left
+ * reading an expired code. Returns once signed in, or as soon as the viewer
+ * leaves the sign-in screen or asks for something else.
+ */
+void wait_for_quick_connect(jellyfin::QuickConnectSession session) noexcept
+{
+    const auto still_waiting = []
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        return g_shared.request == Request::none && g_shared.screen == Screen::sign_in;
+    };
+    while (session.valid)
+    {
+        /* Jellyfin keeps a code for ten minutes. The server is asked every
+           two seconds, but a password typed meanwhile is taken at once. */
+        for (int attempt = 0; attempt < 300; ++attempt)
+        {
+            for (int slice = 0; slice < 8; ++slice)
+            {
+                (void)sceKernelUsleep(250000);
+                if (!still_waiting())
+                    return;
+            }
+            if (jellyfin::quick_connect_poll(session))
+            {
+                set_status(Screen::connecting, "Loading your library");
+                load_home();
+                return;
+            }
+        }
+        session = jellyfin::quick_connect_begin();
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        if (g_shared.request != Request::none || g_shared.screen != Screen::sign_in)
+            return;
+        g_shared.session = session;
+        g_shared.status = session.valid ? "Waiting for approval" : "Quick Connect unavailable";
+    }
+}
+
+/* Opens the sign-in screen with a Quick Connect code already on it. */
 void begin_quick_connect() noexcept
 {
     jellyfin::QuickConnectSession session = jellyfin::quick_connect_begin();
@@ -1140,29 +1181,56 @@ void begin_quick_connect() noexcept
         g_shared.session = session;
         g_shared.screen = Screen::sign_in;
         g_shared.status = session.valid ? "Waiting for approval" : "Quick Connect unavailable";
-        g_shared.detail = session.valid ? std::string{} : jellyfin::last_error();
+        g_shared.detail.clear();
     }
-    if (!session.valid)
-        return;
-
-    for (int attempt = 0; attempt < 300; ++attempt)
-    {
-        (void)sceKernelUsleep(2000000);
-        {
-            /* A different sign-in path may have taken over in the meantime. */
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            if (g_shared.request != Request::none || g_shared.screen != Screen::sign_in)
-                return;
-        }
-        if (jellyfin::quick_connect_poll(session))
-        {
-            set_status(Screen::connecting, "Loading your library");
-            load_home();
-            return;
-        }
-    }
-    set_status(Screen::sign_in, "Quick Connect code expired", "Choose Quick Connect to try again.");
+    wait_for_quick_connect(session);
 }
+
+void remember_server_name() noexcept
+{
+    std::string name;
+    const config::Settings &settings = config::current();
+    if (jellyfin::probe(settings.host, settings.port, name))
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.server_name = name;
+    }
+}
+
+/*
+ * Opens the library with the stored sign-in. A console's network can come up
+ * a few seconds after the app does, and a server can be restarting, so an
+ * unreachable server is retried before giving up, and only a server that
+ * actually rejects the token signs the viewer out.
+ */
+bool resume_stored_session() noexcept
+{
+    constexpr int kAttempts = 5;
+    for (int attempt = 0; attempt < kAttempts; ++attempt)
+    {
+        switch (jellyfin::verify_session())
+        {
+        case jellyfin::SessionCheck::valid:
+            set_status(Screen::connecting, "Loading your library");
+            remember_server_name();
+            load_home();
+            return true;
+        case jellyfin::SessionCheck::rejected:
+            return false;
+        case jellyfin::SessionCheck::unreachable:
+            if (attempt + 1 < kAttempts)
+            {
+                set_status(Screen::connecting, "Waiting for your server");
+                (void)sceKernelUsleep(static_cast<unsigned>(attempt + 1) * 1000000u);
+            }
+            break;
+        }
+    }
+    return false;
+}
+
+constexpr const char *kUnreachableDetail =
+    "Check that Jellyfin is running. For a local address, keep your PS5 on the same network.";
 
 void *worker(void *) noexcept
 {
@@ -1170,19 +1238,15 @@ void *worker(void *) noexcept
     {
         set_status(Screen::server_setup, "Choose your server");
     }
-    else if (config::current().signed_in() && jellyfin::verify_session())
+    else if (config::current().signed_in() && resume_stored_session())
     {
-        set_status(Screen::connecting, "Loading your library");
-        /* The name only arrived through the setup flow, so starting with a
-           stored sign-in left the interface with nothing to call the server. */
-        std::string name;
-        const config::Settings &settings = config::current();
-        if (jellyfin::probe(settings.host, settings.port, name))
-        {
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.server_name = name;
-        }
-        load_home();
+        /* signed in and loading */
+    }
+    else if (config::current().signed_in())
+    {
+        /* Still signed in: the server never answered. Continue retries it. */
+        set_status(Screen::server_setup, "Can't reach your server",
+                   std::string{"Your sign-in is saved. "} + kUnreachableDetail);
     }
     else
     {
@@ -1198,9 +1262,7 @@ void *worker(void *) noexcept
         }
         else
         {
-            set_status(Screen::server_setup, "Could not reach your server",
-                       "Check the address and make sure Jellyfin is running. For a local IP, use "
-                       "the same network as your PS5.");
+            set_status(Screen::server_setup, "Can't reach your server", kUnreachableDetail);
         }
     }
 
@@ -1250,13 +1312,14 @@ void *worker(void *) noexcept
                     std::lock_guard<std::mutex> guard(g_shared.mutex);
                     g_shared.server_name = name;
                 }
-                begin_quick_connect();
+                /* The same server again, after it could not be reached: the
+                   stored sign-in still stands. */
+                if (!(settings.signed_in() && resume_stored_session()))
+                    begin_quick_connect();
             }
             else
             {
-                set_status(Screen::server_setup, "Could not reach your server",
-                           "Check the address and make sure Jellyfin is running. For a local IP, "
-                           "use the same network as your PS5.");
+                set_status(Screen::server_setup, "Can't reach your server", kUnreachableDetail);
             }
             break;
         }
@@ -1266,7 +1329,6 @@ void *worker(void *) noexcept
             break;
 
         case Request::password_login:
-            set_status(Screen::sign_in, "Signing in");
             if (jellyfin::authenticate(text, secret))
             {
                 set_status(Screen::connecting, "Loading your library");
@@ -1274,7 +1336,20 @@ void *worker(void *) noexcept
             }
             else
             {
-                set_status(Screen::sign_in, "Sign in", jellyfin::last_error());
+                jellyfin::QuickConnectSession session;
+                {
+                    std::lock_guard<std::mutex> guard(g_shared.mutex);
+                    g_shared.screen = Screen::sign_in;
+                    g_shared.detail = jellyfin::last_error();
+                    session = g_shared.session;
+                    g_shared.status =
+                        session.valid ? "Waiting for approval" : "Quick Connect unavailable";
+                }
+                /* Overwrite rather than just release the buffer. */
+                std::fill(secret.begin(), secret.end(), '\0');
+                /* The code on screen still works; keep listening for it. */
+                wait_for_quick_connect(session);
+                break;
             }
             /* Overwrite rather than just release the buffer. */
             std::fill(secret.begin(), secret.end(), '\0');
@@ -1557,17 +1632,6 @@ void draw_scroll_fade(int y) noexcept
 }
 
 /* The Jellyfin silhouette: three nested rounded triangles, drawn as arcs. */
-void draw_mark(int x, int y, int size, gfx::Color color) noexcept
-{
-    gfx::rounded_rect(x, y, size, size, size / 3, color);
-    const int inset = size / 5;
-    gfx::rounded_rect(x + inset, y + inset + size / 12, size - inset * 2, size - inset * 2,
-                      (size - inset * 2) / 3, gfx::rgb(0x0d, 0x0d, 0x12));
-    const int core = size / 3;
-    gfx::rounded_rect(x + (size - core) / 2, y + (size - core) / 2 + size / 14, core, core,
-                      core / 3, color);
-}
-
 void draw_wordmark(int x, int y) noexcept
 {
     /* The project's own mark, swept purple to blue as its artwork is. */
@@ -2648,21 +2712,143 @@ void draw_grid(const std::vector<jellyfin::Item> &items, const std::string &titl
     draw_scroll_bar(g_view.grid_scroll.value(), grid_scroll_limit(items.size()));
 }
 
-/* A framed panel used by every full-screen prompt. */
 using ui::panel;
 
-void draw_option(int x, int y, int w, const std::string &label, const std::string &hint,
-                 bool focused) noexcept
+/* ---------------------------------------------------------- welcome screens */
+
+/*
+ * The first screens anyone sees: full-screen pages lit by the two tabs'
+ * colours, with one obvious thing to do on each, rather than a dialog of
+ * stacked buttons floating over an empty page.
+ */
+void soft_glow(int cx, int cy, int radius, gfx::Color colour) noexcept
 {
-    gfx::rounded_rect(x, y, w, 76, 12, gfx::palette::control);
+    /* Stacked faint discs: the centre builds up and the edge fades away. It
+       is composed once into the backdrop cache, not drawn every frame. */
+    constexpr int kSteps = 96;
+    for (int i = 0; i < kSteps; ++i)
+    {
+        const int r = radius - radius * i / kSteps;
+        gfx::rounded_rect(cx - r, cy - r, r * 2, r * 2, r, gfx::with_alpha(colour, 2));
+    }
+}
+
+/* The pages shown before the library: setup, sign-in and the first load. */
+bool welcome_screen(Screen screen) noexcept
+{
+    return screen == Screen::connecting || screen == Screen::server_setup ||
+           screen == Screen::sign_in;
+}
+
+void draw_welcome_background() noexcept
+{
+    if (wash_begin("welcome", 2))
+    {
+        soft_glow(240, 80, 780, ui::kHomeTheme.accent_from);
+        soft_glow(1760, 1060, 860, ui::kDiscoverTheme.accent_from);
+        soft_glow(1620, 40, 420, ui::kDiscoverTheme.accent_to);
+    }
+    wash_end();
+}
+
+/* A ring with a bright head chasing round it, just under a turn a second. */
+void draw_spinner(int cx, int cy, int radius, int thickness) noexcept
+{
+    const float head = static_cast<float>(g_view.frames % 54) / 54.0f;
+    gfx::arc(cx, cy, radius, thickness, 0.0f, 1.0f, gfx::rgba(0xff, 0xff, 0xff, 0x1e));
+    gfx::arc(cx, cy, radius, thickness, head, 0.3f, gfx::rgba(0xff, 0xff, 0xff, 0xe6));
+}
+
+void draw_centered(int y, const std::string &line, int size, Weight weight, gfx::Color colour,
+                   int max_width = 1500) noexcept
+{
+    const int width = std::min(max_width, text::measure(line, size, weight));
+    text::draw_ellipsized((gfx::kWidth - width) / 2, y, max_width, line, size, weight, colour);
+}
+
+int hints_width(std::initializer_list<ui::ButtonHint> hints) noexcept
+{
+    int width = 0;
+    for (const ui::ButtonHint &hint : hints)
+        width += 22 + 9 + text::measure(hint.label, 20, Weight::regular) + 30;
+    return std::max(0, width - 30);
+}
+
+/* A row of hints centred along the bottom of a welcome page. */
+void draw_welcome_hints(std::initializer_list<ui::ButtonHint> hints) noexcept
+{
+    (void)draw_button_hints((gfx::kWidth - hints_width(hints)) / 2, gfx::kHeight - 92, hints);
+}
+
+constexpr int kFieldH = 96;
+constexpr int kFieldRadius = 18;
+constexpr int kButtonH = 92;
+
+/* An input row with its name above the value, as a phone's sign-in form has. */
+void draw_field(int x, int y, int w, const char *label, const std::string &value,
+                const char *placeholder, bool focused, const char *action = nullptr) noexcept
+{
+    gfx::rounded_rect(x, y, w, kFieldH, kFieldRadius,
+                      focused ? gfx::palette::focus_surface : gfx::rgba(0xff, 0xff, 0xff, 0x0f));
+    gfx::stroke_rounded_rect(x, y, w, kFieldH, kFieldRadius, focused ? 3 : 1,
+                             focused ? gfx::palette::focus_border
+                                     : gfx::rgba(0xff, 0xff, 0xff, 0x26));
+    text::draw(x + 28, y + 14, label, 19, Weight::medium,
+               focused ? gfx::palette::focus_border : gfx::palette::text_faint);
+    /* What Triangle does here, at the end of the row while it has the focus. */
+    const int action_w =
+        action != nullptr && focused ? hints_width({{icons::Icon::ps_triangle, action}}) + 28 : 0;
+    const bool empty = value.empty();
+    text::draw_ellipsized(x + 28, y + 44, w - 56 - action_w,
+                          empty ? std::string{placeholder} : value, 28, Weight::regular,
+                          empty ? gfx::rgba(0xff, 0xff, 0xff, 0x60) : gfx::palette::text);
+    if (action_w > 0)
+        (void)draw_button_hints(x + w - action_w, y + (kFieldH - 22) / 2,
+                                {{icons::Icon::ps_triangle, action}});
+}
+
+/* The page's one main action, in the Home tab's colours. */
+void draw_primary_button(int x, int y, int w, const char *label, bool focused) noexcept
+{
+    const ui::Theme &theme = ui::kHomeTheme;
     if (focused)
-        ui::focus_pill(x, y, w, 76);
+    {
+        gfx::drop_shadow(x, y, w, kButtonH, kFieldRadius, 26, 0x90);
+        gfx::rounded_horizontal_gradient(x, y, w, kButtonH, kFieldRadius, theme.accent_from,
+                                         theme.accent_to);
+        gfx::stroke_rounded_rect(x - 6, y - 6, w + 12, kButtonH + 12, kFieldRadius + 6, 3,
+                                 gfx::palette::text);
+    }
     else
-        gfx::stroke_rounded_rect(x, y, w, 76, 12, 1, gfx::palette::control_border);
-    text::draw(x + 24, y + 12, label, 26, Weight::medium, gfx::palette::text);
-    if (!hint.empty())
-        text::draw_ellipsized(x + 24, y + 44, w - 48, hint, 19, Weight::regular,
-                              focused ? gfx::rgba(0xff, 0xff, 0xff, 0xcc) : gfx::palette::text_dim);
+        gfx::rounded_horizontal_gradient(x, y, w, kButtonH, kFieldRadius,
+                                         gfx::with_alpha(theme.accent_from, 0x5c),
+                                         gfx::with_alpha(theme.accent_to, 0x5c));
+    text::draw(x + (w - text::measure(label, 28, Weight::bold)) / 2,
+               text::centered_y(y, kButtonH, label, 28, Weight::bold), label, 28, Weight::bold,
+               focused ? gfx::palette::text : gfx::rgba(0xff, 0xff, 0xff, 0xc8));
+}
+
+void draw_welcome_footer() noexcept
+{
+    draw_wordmark(kSafeX - 8, kSafeY + 16);
+    text::draw(kSafeX, gfx::kHeight - 88,
+               "SlopFin " + update::display_version(update::status().current) +
+                   "  \xc2\xb7  unofficial Jellyfin client",
+               18, Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x4c));
+}
+
+/* Which control a welcome page opens on: the empty field, or the action that
+   follows a field already filled in. */
+void enter_welcome_page(Screen screen) noexcept
+{
+    static Screen shown = Screen::connecting;
+    if (screen == shown)
+        return;
+    shown = screen;
+    if (screen == Screen::server_setup)
+        g_view.setup_index = g_view.server_draft.empty() ? 0 : 1;
+    else if (screen == Screen::sign_in)
+        g_view.setup_index = g_view.pending_username.empty() ? 0 : 1;
 }
 
 void prepare_server_draft() noexcept
@@ -2676,117 +2862,167 @@ void prepare_server_draft() noexcept
     g_view.server_draft_initialized = true;
 }
 
-void draw_server_setup(const std::string &detail) noexcept
+constexpr int kWelcomeW = 880;
+constexpr int kWelcomeX = (gfx::kWidth - kWelcomeW) / 2;
+
+void draw_server_setup(const std::string &status, const std::string &detail) noexcept
 {
     prepare_server_draft();
-    const int x = 480, y = 230, w = 960, h = 600;
-    panel(x, y, w, h);
-    text::draw(x + 48, y + 40, "Connect your Jellyfin", 40, Weight::bold, gfx::palette::text);
-    text::draw_wrapped(
-        x + 48, y + 106, w - 96, 2, 32,
-        "Enter the address you use to open Jellyfin. We'll remember it for next time.", 23,
-        Weight::regular, gfx::palette::text_dim);
-    text::draw(x + 48, y + 186, "Server address", 23, Weight::medium, gfx::palette::text_dim);
-    const int field_y = y + 226;
-    // A text field, visually distinct from the single Continue action.
-    gfx::rounded_rect(x + 48, field_y, w - 96, 80, 10, gfx::palette::background);
-    if (g_view.setup_index == 0)
-        ui::focus_pill(x + 48, field_y, w - 96, 80);
-    text::draw_ellipsized(
-        x + 70,
-        text::centered_y(field_y, 80,
-                         g_view.server_draft.empty() ? "media.example.com or 192.168.1.20"
-                                                     : g_view.server_draft,
-                         27, Weight::regular),
-        w - 140,
-        g_view.server_draft.empty() ? "media.example.com or 192.168.1.20" : g_view.server_draft, 27,
-        Weight::regular, g_view.server_draft.empty() ? gfx::palette::text_dim : gfx::palette::text);
-    text::draw(x + 48, y + 326, "No need to type http:// or https://.", 20, Weight::regular,
-               gfx::palette::text_dim);
-    const int button_x = x + 48, button_y = y + 388;
-    gfx::rounded_rect(button_x, button_y, 240, 68, 14, gfx::palette::control);
-    if (g_view.setup_index == 1)
-        ui::focus_pill(button_x, button_y, 240, 68);
-    text::draw(button_x + (240 - text::measure("Continue", 26, Weight::medium)) / 2,
-               text::centered_y(button_y, 68, "Continue", 26, Weight::medium), "Continue", 26,
-               Weight::medium, gfx::palette::text);
-    if (!detail.empty())
-        text::draw_wrapped(x + 48, y + 490, w - 96, 3, 26, detail, 20, Weight::regular,
-                           gfx::palette::danger);
+    enter_welcome_page(Screen::server_setup);
+    draw_welcome_footer();
+
+    const bool trouble = !detail.empty();
+    draw_centered(250, trouble ? status : std::string{"Welcome to SlopFin"}, 64, Weight::bold,
+                  gfx::palette::text);
+    draw_centered(344,
+                  trouble ? std::string{"Check the address, then choose Continue to try again."}
+                          : std::string{"Connect to your Jellyfin server to start watching."},
+                  26, Weight::regular, gfx::palette::text_dim);
+
+    const int field_y = 440;
+    draw_field(kWelcomeX, field_y, kWelcomeW, "Server address", g_view.server_draft,
+               "jellyfin.example.com or 192.168.1.20", g_view.setup_index == 0);
+    if (trouble)
+        (void)text::draw_wrapped(kWelcomeX + 4, field_y + kFieldH + 18, kWelcomeW - 8, 2, 30,
+                                 detail, 21, Weight::regular, gfx::rgb(0xff, 0x8a, 0x8a));
+    else
+        text::draw(kWelcomeX + 4, field_y + kFieldH + 18,
+                   "The address you open Jellyfin with. No need to type http:// or https://.", 21,
+                   Weight::regular, gfx::palette::text_faint);
+    draw_primary_button(kWelcomeX, field_y + kFieldH + 96, kWelcomeW, "Continue",
+                        g_view.setup_index == 1);
+    draw_welcome_hints({{icons::Icon::ps_cross, "Select"}});
+}
+
+/* A Quick Connect code, one character to a tile, so it reads like the codes
+   phones ask for. */
+void draw_code_tiles(int x, int y, int w, const std::string &code) noexcept
+{
+    const int count = std::max<int>(1, static_cast<int>(code.size()));
+    constexpr int kGap = 14;
+    const int tile = std::min(80, (w - kGap * (count - 1)) / count);
+    const int tile_h = tile * 5 / 4;
+    int at = x + (w - (tile * count + kGap * (count - 1))) / 2;
+    for (char c : code)
+    {
+        gfx::rounded_rect(at, y, tile, tile_h, 14, gfx::rgba(0xff, 0xff, 0xff, 0x12));
+        gfx::stroke_rounded_rect(at, y, tile, tile_h, 14, 1, gfx::rgba(0xff, 0xff, 0xff, 0x2a));
+        const std::string glyph(1, c);
+        const int size = tile * 3 / 4;
+        text::draw(at + (tile - text::measure(glyph, size, Weight::bold)) / 2,
+                   text::centered_y(y, tile_h, glyph, size, Weight::bold), glyph, size,
+                   Weight::bold, gfx::palette::text);
+        at += tile + kGap;
+    }
+}
+
+void draw_sign_in_panel(int x, int y, int w, int h) noexcept
+{
+    gfx::rounded_rect(x, y, w, h, 28, gfx::rgba(0x0c, 0x0e, 0x16, 0xb4));
+    gfx::stroke_rounded_rect(x, y, w, h, 28, 1, gfx::rgba(0xff, 0xff, 0xff, 0x16));
 }
 
 void draw_sign_in(const std::string &code, const std::string &status, const std::string &detail,
                   const std::string &server_name) noexcept
 {
-    const int x = 520;
-    const int y = 200;
-    const int w = 880;
-    const int h = 640;
-    panel(x, y, w, h);
+    enter_welcome_page(Screen::sign_in);
+    draw_welcome_footer();
+    draw_centered(150,
+                  "Sign in to " + (server_name.empty() ? std::string{"Jellyfin"} : server_name), 56,
+                  Weight::bold, gfx::palette::text);
+    draw_centered(
+        230, server_address::Address{config::current().host, config::current().port, {}}.display(),
+        22, Weight::regular, gfx::palette::text_faint);
 
-    text::draw(x + 48, y + 40, "Sign in", 40, Weight::bold, gfx::palette::text);
-    if (!server_name.empty())
-        text::draw_ellipsized(x + 48, y + 96, w - 96, server_name, 23, Weight::regular,
-                              gfx::palette::text_dim);
+    constexpr int kPanelW = 700;
+    constexpr int kPanelH = 580;
+    constexpr int kGap = 140;
+    constexpr int kPanelY = 300;
+    constexpr int kPad = 56;
+    const int left = (gfx::kWidth - kPanelW * 2 - kGap) / 2;
+    const int right = left + kPanelW + kGap;
 
-    if (g_view.credential_form)
-    {
-        text::draw(x + 48, y + 140, "Your Jellyfin account", 28, Weight::medium,
-                   gfx::palette::text);
-        draw_option(x + 48, y + 192, w - 96, "Username",
-                    g_view.pending_username.empty() ? "Select to enter your username"
-                                                    : g_view.pending_username,
-                    g_view.setup_index == 0);
-        const std::string password = g_view.pending_password.empty()
-                                         ? "Select to enter your password"
-                                     : g_view.show_password ? g_view.pending_password
-                                                            : "Password entered";
-        draw_option(x + 48, y + 284, w - 96, "Password", password, g_view.setup_index == 1);
-        draw_option(x + 48, y + 376, w - 96,
-                    g_view.show_password ? "Hide password" : "Show password",
-                    "Control whether your password is visible", g_view.setup_index == 2);
-        draw_option(x + 48, y + 468, w - 96, "Sign in", "Connect with this account",
-                    g_view.setup_index == 3);
-        (void)draw_button_hints(x + 48, y + h - 64,
-                                {{icons::Icon::ps_circle, "Other sign-in options"}});
-        if (!detail.empty())
-            text::draw_ellipsized(x + 48, y + h - 32, w - 96, detail, 20, Weight::regular,
-                                  gfx::palette::danger);
-        return;
-    }
-
+    /* Quick Connect: nothing to press, the code is already waiting. */
+    draw_sign_in_panel(left, kPanelY, kPanelW, kPanelH);
+    text::draw(left + kPad, kPanelY + 48, "Quick Connect", 34, Weight::bold, gfx::palette::text);
     if (!code.empty())
     {
-        gfx::rounded_rect(x + 48, y + 140, w - 96, 150, 14, gfx::palette::surface_high);
-        text::draw(x + 72, y + 154, "Quick Connect code", 19, Weight::medium,
-                   gfx::palette::text_faint);
-        const int size = 68;
-        const int width = text::measure(code, size, Weight::bold);
-        text::draw(x + (w - width) / 2, y + 190, code, size, Weight::bold,
-                   gfx::palette::accent_alt);
+        (void)text::draw_wrapped(left + kPad, kPanelY + 104, kPanelW - kPad * 2, 2, 30,
+                                 "Approve this PS5 from a phone or computer that is already "
+                                 "signed in to Jellyfin.",
+                                 22, Weight::regular, gfx::palette::text_dim);
+        draw_code_tiles(left + kPad, kPanelY + 186, kPanelW - kPad * 2, code);
+        const char *const steps[] = {"Open Jellyfin on that device",
+                                     "Go to Settings, then Quick Connect",
+                                     "Enter this code and choose Authorize"};
+        for (int i = 0; i < 3; ++i)
+        {
+            const int sy = kPanelY + 320 + i * 44;
+            gfx::rounded_rect(left + kPad, sy, 30, 30, 15, gfx::rgba(0xff, 0xff, 0xff, 0x1a));
+            const std::string number = std::to_string(i + 1);
+            text::draw(left + kPad + (30 - text::measure(number, 17, Weight::bold)) / 2,
+                       text::centered_y(sy, 30, number, 17, Weight::bold), number, 17, Weight::bold,
+                       gfx::palette::text);
+            text::draw(left + kPad + 46, text::centered_y(sy, 30, steps[i], 21, Weight::regular),
+                       steps[i], 21, Weight::regular, gfx::palette::text_dim);
+        }
+        draw_spinner(left + kPad + 12, kPanelY + kPanelH - 56, 11, 3);
+        text::draw(left + kPad + 38,
+                   text::centered_y(kPanelY + kPanelH - 70, 28, status, 21, Weight::medium), status,
+                   21, Weight::medium, gfx::palette::text_dim);
     }
     else
     {
-        gfx::rounded_rect(x + 48, y + 140, w - 96, 150, 14, gfx::palette::surface_high);
-        text::draw_wrapped(x + 72, y + 176, w - 144, 2, 30,
-                           "Quick Connect is unavailable. Sign in with your username instead.", 22,
-                           Weight::regular, gfx::palette::text_dim);
+        (void)text::draw_wrapped(left + kPad, kPanelY + 112, kPanelW - kPad * 2, 4, 32,
+                                 "Quick Connect isn't available on this server. Its "
+                                 "administrator can switch it on in the Jellyfin dashboard, "
+                                 "under General.",
+                                 22, Weight::regular, gfx::palette::text_dim);
+        text::draw(left + kPad, kPanelY + 270, "Use your username and password instead.", 22,
+                   Weight::medium, gfx::palette::text);
     }
 
-    draw_option(x + 48, y + 320, w - 96, "Use Quick Connect",
-                "Approve the code above in any Jellyfin app", g_view.setup_index == 0);
-    draw_option(x + 48, y + 412, w - 96, "Sign in with a username",
-                "Enter your account using the PS5 keyboard", g_view.setup_index == 1);
-    draw_option(x + 48, y + 504, w - 96, "Change server", config::current().host,
-                g_view.setup_index == 2);
+    /* The two ways are alternatives, and say so. */
+    {
+        const int cx = left + kPanelW + kGap / 2;
+        const int mid = kPanelY + kPanelH / 2;
+        gfx::fill_rect(cx, kPanelY + 40, 1, kPanelH / 2 - 76, gfx::rgba(0xff, 0xff, 0xff, 0x1e));
+        gfx::fill_rect(cx, mid + 36, 1, kPanelH / 2 - 76, gfx::rgba(0xff, 0xff, 0xff, 0x1e));
+        const char *const word = "OR";
+        text::draw(cx - text::measure(word, 20, Weight::bold) / 2,
+                   text::centered_y(mid - 20, 40, word, 20, Weight::bold), word, 20, Weight::bold,
+                   gfx::palette::text_faint);
+    }
 
-    text::draw(x + 48, y + h - 40, status, 21, Weight::medium, gfx::palette::text_dim);
+    /* Username and password. */
+    draw_sign_in_panel(right, kPanelY, kPanelW, kPanelH);
+    text::draw(right + kPad, kPanelY + 48, "Username and password", 34, Weight::bold,
+               gfx::palette::text);
+    text::draw(right + kPad, kPanelY + 104, "Sign in with your Jellyfin account.", 22,
+               Weight::regular, gfx::palette::text_dim);
+    const int fw = kPanelW - kPad * 2;
+    draw_field(right + kPad, kPanelY + 160, fw, "Username", g_view.pending_username,
+               "Enter your username", g_view.setup_index == 0);
+    std::string shown = g_view.pending_password;
+    if (!g_view.show_password)
+    {
+        shown.clear();
+        for (std::size_t i = 0; i < std::min<std::size_t>(g_view.pending_password.size(), 24); ++i)
+            shown += "\xe2\x80\xa2";
+    }
+    draw_field(right + kPad, kPanelY + 276, fw, "Password", shown, "Enter your password",
+               g_view.setup_index == 1, g_view.show_password ? "Hide" : "Show");
+    draw_primary_button(right + kPad, kPanelY + 404, fw, "Sign in", g_view.setup_index == 2);
     if (!detail.empty())
-        text::draw_ellipsized(x + 300, y + h - 40, w - 348, detail, 20, Weight::regular,
-                              gfx::palette::danger);
+        text::draw_ellipsized(right + kPad, kPanelY + kPanelH - 60, fw, detail, 21, Weight::regular,
+                              gfx::rgb(0xff, 0x8a, 0x8a));
+
+    draw_welcome_hints({{icons::Icon::ps_cross, "Select"},
+                        {icons::Icon::ps_triangle, "Show password"},
+                        {icons::Icon::ps_circle, "Change server"}});
 }
 
-void draw_message(const std::string &status, const std::string &detail) noexcept;
+void draw_message(const std::string &status, const std::string &detail, bool busy) noexcept;
 
 /* "2026-07-15T00:00:00Z" becomes "Jul 15, 2026". */
 std::string pretty_date(const std::string &iso) noexcept
@@ -3341,7 +3577,7 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
        is drawn at once and the rest of it arrives underneath. */
     if (item.id.empty())
     {
-        draw_message(loading ? "Loading" : "Nothing to show", {});
+        draw_message(loading ? "Loading" : "Nothing to show", {}, loading);
         return;
     }
 
@@ -5932,19 +6168,30 @@ void draw_report_prompt() noexcept
     }
 }
 
-void draw_message(const std::string &status, const std::string &detail) noexcept
+/*
+ * A page with nothing to show yet: the app's mark, and either a spinner with
+ * what is happening or, when something went wrong, what to do about it.
+ */
+void draw_message(const std::string &status, const std::string &detail, bool busy) noexcept
 {
-    draw_mark(gfx::kWidth / 2 - 40, 380, 80, gfx::palette::accent);
-    const int width = text::measure(status, 34, Weight::medium);
-    text::draw((gfx::kWidth - width) / 2, 500, status, 34, Weight::medium, gfx::palette::text);
-    if (!detail.empty())
+    const int cx = gfx::kWidth / 2;
+    constexpr int kMark = 132;
+    icons::draw_gradient(icons::Icon::jellyfin, cx - kMark / 2, 300, kMark,
+                         gfx::rgb(0xaa, 0x5c, 0xc3), gfx::rgb(0x00, 0xa4, 0xdc));
+    draw_centered(456, "SlopFin", 46, Weight::bold, gfx::palette::text);
+    int y = 560;
+    if (busy)
     {
-        const int detail_width = text::measure(detail, 22, Weight::regular);
-        text::draw((gfx::kWidth - detail_width) / 2, 552, detail, 22, Weight::regular,
-                   gfx::palette::danger);
+        draw_spinner(cx, y + 18, 20, 4);
+        y += 70;
     }
-    const int phase = (g_view.frames / 3) % 60;
-    gfx::rounded_rect(gfx::kWidth / 2 - 60 + phase * 2, 610, 40, 6, 3, gfx::palette::accent);
+    if (!status.empty())
+    {
+        draw_centered(y, status, 25, Weight::regular, gfx::palette::text_dim);
+        y += 44;
+    }
+    if (!detail.empty())
+        draw_centered(y, detail, 21, Weight::regular, gfx::rgb(0xff, 0x8a, 0x8a), 1400);
 }
 
 /* ------------------------------------------------------------ navigation */
@@ -6026,6 +6273,8 @@ void ask_keyboard(View::Prompt prompt) noexcept
     }
 }
 
+void submit_password_login() noexcept;
+
 void connect_server_draft() noexcept
 {
     prepare_server_draft();
@@ -6068,15 +6317,22 @@ void handle_keyboard_result() noexcept
         g_view.server_draft = entered;
         g_view.server_draft_initialized = true;
         g_view.setup_index = 1;
-        set_status(Screen::server_setup, "Choose your server");
+        /* Done on the keyboard means "connect", as it does on a phone. */
+        if (entered.find_first_not_of(" \t") != std::string::npos)
+            connect_server_draft();
+        else
+            set_status(Screen::server_setup, "Choose your server");
         break;
     case View::Prompt::username:
         g_view.pending_username = entered;
-        g_view.setup_index = 1;
+        g_view.setup_index = entered.empty() ? 0 : 1;
         break;
     case View::Prompt::password:
         g_view.pending_password = entered;
-        g_view.setup_index = 3;
+        g_view.setup_index = 2;
+        /* With both entered, Done signs in. */
+        if (!g_view.pending_username.empty())
+            submit_password_login();
         break;
     case View::Prompt::search:
         g_view.search.draft = entered;
@@ -6838,45 +7094,38 @@ bool handle_search_input(const SearchScope &scope, const std::vector<jellyfin::I
     return true;
 }
 
+void submit_password_login() noexcept
+{
+    if (g_view.pending_username.empty())
+    {
+        g_view.setup_index = 0;
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.detail = "Enter your username first.";
+        return;
+    }
+    set_status(Screen::connecting, "Signing in");
+    submit(Request::password_login, g_view.pending_username, g_view.pending_password);
+}
+
 void handle_setup_input(Screen screen) noexcept
 {
-    const int options = (screen == Screen::server_setup) ? 2 : g_view.credential_form ? 4 : 3;
-    if (screen == Screen::sign_in && g_view.credential_form)
-    {
-        if (pad::pressed(pad::Button::circle))
-        {
-            g_view.credential_form = false;
-            g_view.pending_password.clear();
-            g_view.show_password = false;
-            g_view.setup_index = 1;
-            return;
-        }
-        if (pad::pressed(pad::Button::cross))
-        {
-            if (g_view.setup_index == 0)
-                ask_keyboard(View::Prompt::username);
-            else if (g_view.setup_index == 1)
-                ask_keyboard(View::Prompt::password);
-            else if (g_view.setup_index == 2)
-                g_view.show_password = !g_view.show_password;
-            else if (g_view.pending_username.empty())
-            {
-                g_view.setup_index = 0;
-                set_status(Screen::sign_in, "Sign in", "Enter your username first.");
-            }
-            else
-            {
-                set_status(Screen::connecting, "Signing in");
-                submit(Request::password_login, g_view.pending_username, g_view.pending_password);
-                g_view.show_password = false;
-            }
-            return;
-        }
-    }
+    /* Server setup: the address, then Continue. Sign-in: username, password,
+       then Sign in; Quick Connect needs no input at all. */
+    const int options = screen == Screen::server_setup ? 2 : 3;
     if (pad::pressed(pad::Button::down) && g_view.setup_index + 1 < options)
         ++g_view.setup_index;
     else if (pad::pressed(pad::Button::up) && g_view.setup_index > 0)
         --g_view.setup_index;
+    else if (screen == Screen::sign_in && pad::pressed(pad::Button::triangle))
+        g_view.show_password = !g_view.show_password;
+    else if (screen == Screen::sign_in &&
+             (pad::pressed(pad::Button::circle) || pad::pressed(pad::Button::square)))
+    {
+        std::fill(g_view.pending_password.begin(), g_view.pending_password.end(), '\0');
+        g_view.pending_password.clear();
+        g_view.show_password = false;
+        set_status(Screen::server_setup, "Choose your server");
+    }
     else if (pad::pressed(pad::Button::cross))
     {
         if (screen == Screen::server_setup)
@@ -6884,26 +7133,14 @@ void handle_setup_input(Screen screen) noexcept
             if (g_view.setup_index == 0)
                 ask_keyboard(View::Prompt::host);
             else
-            {
                 connect_server_draft();
-            }
         }
+        else if (g_view.setup_index == 0)
+            ask_keyboard(View::Prompt::username);
+        else if (g_view.setup_index == 1)
+            ask_keyboard(View::Prompt::password);
         else
-        {
-            if (g_view.setup_index == 0)
-            {
-                set_status(Screen::connecting, "Starting Quick Connect");
-                submit(Request::quick_connect);
-            }
-            else if (g_view.setup_index == 1)
-            {
-                g_view.credential_form = true;
-                g_view.setup_index = 0;
-                g_view.show_password = false;
-            }
-            else
-                set_status(Screen::server_setup, "Choose your server");
-        }
+            submit_password_login();
     }
 }
 
@@ -8248,12 +8485,13 @@ void frame() noexcept
     g_last_loop_us = loop_start;
 
     ++g_view.frames;
-    if (config::current().signed_in() && g_view.credential_form)
+    /* Once signed in, the typed credentials have no further use. */
+    if (config::current().signed_in() &&
+        (!g_view.pending_password.empty() || !g_view.pending_username.empty()))
     {
         std::fill(g_view.pending_password.begin(), g_view.pending_password.end(), '\0');
         g_view.pending_password.clear();
         g_view.pending_username.clear();
-        g_view.credential_form = false;
         g_view.show_password = false;
         g_view.setup_index = 0;
     }
@@ -8687,6 +8925,8 @@ void frame() noexcept
     }
     if (home_background_covers_top)
         gfx::fill_rect(0, 720, gfx::kWidth, gfx::kHeight - 720, kPageBottom);
+    else if (welcome_screen(screen))
+        draw_welcome_background();
     else if (screen != Screen::playing && !detail_background_covers_frame &&
              !(screen == Screen::discover && seerr::covers_background()))
         draw_background();
@@ -8854,17 +9094,17 @@ void frame() noexcept
         switch (screen)
         {
         case Screen::connecting:
-            draw_message(status, detail);
+            draw_message(status, detail, detail.empty());
             break;
         case Screen::server_setup:
-            draw_server_setup(detail);
+            draw_server_setup(status, detail);
             break;
         case Screen::sign_in:
             draw_sign_in(code, status, detail, server_name);
             break;
         case Screen::home:
             if (rows.empty())
-                draw_message(status, detail);
+                draw_message(status, detail, detail.empty());
             else
                 draw_home(rows);
             break;
@@ -8898,7 +9138,8 @@ void frame() noexcept
             /* The sidebar stays put: it is the one thing that does not change
                between these pages, so moving it would say the wrong thing. */
             const bool with_sidebar = screen != Screen::playing && screen != Screen::detail &&
-                                      screen != Screen::profile && screen != Screen::dashboard;
+                                      screen != Screen::profile && screen != Screen::dashboard &&
+                                      !welcome_screen(screen);
             const int from = with_sidebar ? kSidebarWidth : 0;
             gfx::fill_rect(from, 0, gfx::kWidth - from, gfx::kHeight,
                            gfx::with_alpha(gfx::palette::background,
@@ -8921,7 +9162,7 @@ void frame() noexcept
     }
 
     if (screen != Screen::playing && screen != Screen::detail && screen != Screen::profile &&
-        screen != Screen::dashboard)
+        screen != Screen::dashboard && !welcome_screen(screen))
     {
         /* Each tab's own list fades in as its page slides in. */
         const float list_alpha = g_view.world_dir != 0 ? g_view.page_in.value() : 1.0f;

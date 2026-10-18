@@ -155,8 +155,16 @@ QuickConnectSession quick_connect_begin() noexcept;
 /* Polls once. Returns true when the session has been approved and stored. */
 bool quick_connect_poll(const QuickConnectSession &session) noexcept;
 
-/* Verifies a stored token still works. */
-bool verify_session() noexcept;
+/* What the server said about a stored token. Only a rejection forgets it:
+   a server that is still starting, or a network that is not up yet, keeps
+   the sign-in for the next attempt. */
+enum class SessionCheck
+{
+    valid,
+    rejected,
+    unreachable,
+};
+SessionCheck verify_session() noexcept;
 
 /* Classic sign-in, for servers where Quick Connect is off. */
 bool authenticate(const std::string &username, const std::string &password) noexcept;

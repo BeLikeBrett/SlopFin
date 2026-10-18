@@ -36,9 +36,10 @@ Settings &current() noexcept
 {
     return settings;
 }
-void save() noexcept
+bool save() noexcept
 {
     ++saved;
+    return true;
 }
 } // namespace slopfin::config
 namespace slopfin::background
@@ -212,10 +213,19 @@ int main()
     assert(title.jellyfin_id == "0123456789abcdef0123456789abcdef");
     const auto invalid = json::parse(R"({"jellyfinMediaId":"../../outside"})");
     assert(jellyfin_id(*invalid).empty());
+    // One action ends the list: Connect until connected, then Disconnect.
+    g_view.authenticated = false;
+    g_view.signing_in = false;
     settings.seerr_auth = 2;
-    assert(settings_rows().size() == 5);
+    assert(settings_rows().size() == 4 && settings_rows().back() == Setting::connect);
     settings.seerr_auth = 0;
-    assert(settings_rows().size() == 6);
+    assert(settings_rows().size() == 5 && settings_rows().back() == Setting::connect);
+    g_view.authenticated = true;
+    assert(settings_rows().back() == Setting::disconnect);
+    g_view.signing_in = true;
+    assert(settings_rows().back() == Setting::connect);
+    g_view.authenticated = false;
+    g_view.signing_in = false;
     // Server errors keep a recovery action and reject invalid session responses.
     assert(response_error({401, {}, {}}, "Search").find("Sign in again") != std::string::npos);
     const auto doc = json::parse(

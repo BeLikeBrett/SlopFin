@@ -17,8 +17,9 @@ For an upgrade, close SlopFin before replacing files. Keep
 
 ## Enter your server
 
-First launch shows a **Server address** field and **Continue**. Select the field
-to open the PlayStation keyboard. Confirm your entry, then choose Continue.
+First launch shows a welcome page with one **Server address** field. Select it
+to open the PlayStation keyboard; confirming the address connects straight away.
+**Continue** retries the same address.
 
 | Example | Connection |
 | --- | --- |
@@ -34,12 +35,20 @@ certificates and IPv6 addresses are unsupported.
 
 ## Sign in
 
-Choose **Quick Connect** and approve the code from an already signed-in Jellyfin
-client, or use **Username and password**. Both fields are editable; **Show
-password** lets you review the entry. Select Sign in when ready.
+The sign-in page offers both ways side by side. **Quick Connect** shows a code
+straight away: approve it from a phone or computer already signed in to Jellyfin
+(Settings → Quick Connect) and SlopFin continues by itself. A code that expires
+is replaced automatically.
 
-If a connection or sign-in fails, your fields remain available to correct.
-Circle returns from password sign-in to Quick Connect and clears the password.
+Or fill in **Username and password** on the right. Confirming the password on
+the keyboard signs in; Triangle shows or hides it. A failed sign-in keeps your
+username and leaves the Quick Connect code working. Circle returns to the server
+address.
+
+SlopFin remembers the sign-in. If the server cannot be reached when the app
+starts, it keeps trying for a few seconds, then shows **Can't reach your
+server** with the sign-in still saved: choose Continue once the server is back.
+Only a server that rejects the saved sign-in asks you to sign in again.
 
 ## Start watching
 

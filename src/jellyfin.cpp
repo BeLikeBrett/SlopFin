@@ -399,15 +399,16 @@ bool quick_connect_poll(const QuickConnectSession &session) noexcept
         g_error = "sign-in reply was missing the token or user";
         return false;
     }
-    config::save();
+    if (!config::save())
+        trace::mark("config: the sign-in could not be saved");
     return true;
 }
 
-bool verify_session() noexcept
+SessionCheck verify_session() noexcept
 {
     const config::Settings &settings = config::current();
     if (!settings.signed_in())
-        return false;
+        return SessionCheck::rejected;
     const http::Response response = request_get("/Users/" + settings.user_id);
     if (response.status == 401)
     {
@@ -416,9 +417,9 @@ bool verify_session() noexcept
         mutable_settings.user_id.clear();
         config::save();
         g_error = "stored sign-in was rejected";
-        return false;
+        return SessionCheck::rejected;
     }
-    return response.ok();
+    return response.ok() ? SessionCheck::valid : SessionCheck::unreachable;
 }
 
 bool authenticate(const std::string &username, const std::string &password) noexcept
@@ -451,7 +452,8 @@ bool authenticate(const std::string &username, const std::string &password) noex
         g_error = "Sign-in reply was missing the token or user.";
         return false;
     }
-    config::save();
+    if (!config::save())
+        trace::mark("config: the sign-in could not be saved");
     return true;
 }
 
