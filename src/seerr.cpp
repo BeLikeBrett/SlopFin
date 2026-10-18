@@ -147,7 +147,8 @@ std::unordered_map<int, RateSample> g_rate;
 struct View
 {
 
-    int mode = 0; /* 0 search, 1 requests */
+    bool content_focused = true; /* false while the app's sidebar has the input */
+    int mode = 0;                /* 0 search, 1 requests */
     bool field_focused = true;
     std::string query;
     int grid_index = 0;
@@ -785,7 +786,8 @@ void job_search(Connection connection, std::string term, long generation, int me
         if (fetched && more &&
             !background::run(
                 [connection, term = std::move(term), generation, media, sort, page, batch,
-                 catalog = std::move(catalog)] {
+                 catalog = std::move(catalog)]
+                {
                     job_search(connection, term, generation, media, sort, page, batch + 1, catalog);
                 },
                 background::Lane::requests))
@@ -2449,7 +2451,7 @@ void draw_header() noexcept
     const int width = ui::segmented_width(filter);
     (void)ui::draw_segmented(ui::kContentRight - width, kFieldY - 2, filter,
                              g_view.filter_slide.value(), ui::kDiscoverTheme,
-                             g_view.field_focused && !g_view.sheet_open);
+                             g_view.field_focused && !g_view.sheet_open && g_view.content_focused);
 }
 
 void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
@@ -2549,7 +2551,7 @@ void draw_results() noexcept
         draw_result_card(
             g_view.results[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])],
             ui::kContentX + column * kCardStepX, kGridY + row * kCardStepY - scroll,
-            i == g_view.grid_index && !g_view.field_focused);
+            i == g_view.grid_index && !g_view.field_focused && g_view.content_focused);
     };
     for (int i = first * columns; i < std::min(count, last * columns); ++i)
         if (i != g_view.grid_index)
@@ -2688,7 +2690,8 @@ void draw_requests() noexcept
         const Request &request =
             g_view.requests[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])];
         draw_request_row(request, kListY + i * kRequestRow - scroll,
-                         i == g_view.request_index && !g_view.field_focused);
+                         i == g_view.request_index && !g_view.field_focused &&
+                             g_view.content_focused);
     }
     for (int i = first; i < std::min(count, first + visible_rows + 1); ++i)
     {
@@ -3159,8 +3162,9 @@ bool handle_input(float elapsed) noexcept
     return requests_input(dt);
 }
 
-void draw() noexcept
+void draw(bool content_focused) noexcept
 {
+    g_view.content_focused = content_focused;
     ++g_view.frames;
     if (std::chrono::steady_clock::now() >= g_view.refresh_at)
     {

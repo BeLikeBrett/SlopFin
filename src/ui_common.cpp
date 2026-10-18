@@ -243,7 +243,8 @@ int draw_segmented(int x, int y, const Segmented &control, float chosen, const T
     const int low = static_cast<int>(std::floor(place));
     const int high = std::min(i - 1, low + 1);
     const float t = place - static_cast<float>(low);
-    const auto lerp = [t](int a, int b) {
+    const auto lerp = [t](int a, int b)
+    {
         return static_cast<int>(std::lround(static_cast<float>(a) + static_cast<float>(b - a) * t));
     };
     if (i > 0)

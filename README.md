@@ -13,7 +13,7 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
 
-![SlopFin on PS5](docs/images/home-console.png)
+![SlopFin Home tab](docs/images/home-preview.png)
 
 ## PS5 features and controls
 
@@ -43,6 +43,8 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 | Discover | Choose seasons and quality |
 | --- | --- |
 | ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
+| **Episode pages** | **Settings** |
+| ![Episode with its full still](docs/images/episode-preview.png) | ![Settings](docs/images/settings-preview.png) |
 
 ![Request download progress on PS5](docs/images/downloads-console.png)
 
