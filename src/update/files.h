@@ -26,7 +26,10 @@ static inline int sf_update_dirs(const char *path)
 {
     char tmp[512];
     if (strlen(path) >= sizeof(tmp))
+    {
+        errno = ENAMETOOLONG;
         return -1;
+    }
     memcpy(tmp, path, strlen(path) + 1);
     for (char *p = tmp + 1; *p; ++p)
         if (*p == '/')
@@ -43,10 +46,14 @@ static inline int sf_update_dirs(const char *path)
             if (fd < 0)
                 return -1;
             struct stat s;
-            const int ok = fstat(fd, &s) == 0 && S_ISDIR(s.st_mode);
+            const int checked = fstat(fd, &s);
+            const int error = checked < 0 ? errno : !S_ISDIR(s.st_mode) ? ENOTDIR : 0;
             close(fd);
-            if (!ok)
+            if (error)
+            {
+                errno = error;
                 return -1;
+            }
             *p = '/';
         }
     return 0;

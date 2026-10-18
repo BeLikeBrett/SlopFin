@@ -11,6 +11,21 @@ does not require a development computer. If the helper cannot start, the app
 stays open and reports the problem. Localhost-only loaders work; port 9021
 does not need to be accessible from another device.
 
+If update storage is unavailable, check whether the running app can access
+`/data`. A successful FTP connection does not establish application access.
+Missing paths, permission failures and full storage are reported separately.
+
+Build **1.12** includes an update-storage helper. If preparing the download
+fails because the launcher restricts app data, SlopFin asks elfldr to restore
+access and retries. This recovery runs from **Download update**, after the
+interface and account have loaded. It verifies the running executable and
+metadata against the folder install before changing the process root, then
+uses the verified folder path for installer files. It creates no extra mount.
+
+An older installed updater cannot use this helper until 1.12 is installed.
+If 1.10 or 1.11 still reports a storage error, install the complete 1.12 folder
+once using the instructions below. Keep `/data/slopfin/config.json`.
+
 Build **1.08** fixes GitHub downloads and installer file permissions. **1.09** also
 replaces stale staging and handoff files left by older installers or FTP tools. Versions **1.07 and earlier**
 need a one-time manual folder upgrade. Extract the complete folder download, close SlopFin,

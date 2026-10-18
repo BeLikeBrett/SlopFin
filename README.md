@@ -29,7 +29,8 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   movies or missing TV seasons, browse episode guides and follow download
   progress. Requests made here refresh Home when Seerr reports new media available.
   Available titles open in Jellyfin when the request server supplies
-  their library ID.
+  their library ID. Press R3 to cycle All, Movies and Shows; the key beside
+  the filter lights up when pressed.
   [Connect your request server](docs/DISCOVER.md).
 - **Two tabs, Home and Discover:** L1/R1 switch between your Jellyfin library
   and the request server. Each tab has its own sidebar and colour, and keeps
@@ -43,8 +44,8 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 | Discover | Choose seasons and quality |
 | --- | --- |
 | ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
-| **Episode pages** | **Settings** |
-| ![Episode with its full still](docs/images/episode-preview.png) | ![Settings](docs/images/settings-preview.png) |
+| **Updates** | **Settings** |
+| ![Updates on PS5](docs/images/updates-console.png) | ![Settings](docs/images/settings-preview.png) |
 
 ![Request download progress on PS5](docs/images/downloads-console.png)
 

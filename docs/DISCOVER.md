@@ -34,7 +34,7 @@ opens each one straight away.
 | Triangle | Search using the PlayStation keyboard (Refresh on Requests) |
 | D-pad | Browse titles; Up from the first row reaches the media filter |
 | Cross | Open a title, then choose its action |
-| L3 | Cycle All / Movies / Series |
+| R3 | Cycle All / Movies / Shows; the R3 key beside the filter lights on a press |
 | Hold L2 or R2 + Up/Down | Next or previous Discover category |
 | L1 | Back to the Home tab |
 | Square | Your profile menu |

@@ -622,23 +622,30 @@ int main()
     g_view.ime_guard = 0;
     g_view.mode = 0;
     g_view.media_filter = g_view.sort = 0;
-    // L3 cycles the media filter from the grid or the filter itself, leaving
-    // the focus where it was. The category belongs to the sidebar now, so R3
-    // no longer changes it.
+    // R3 cycles the media filter from the grid or filter, preserving focus.
+    // L3 leaves the filter and the sidebar's category unchanged.
     for (bool filter_focus : {false, true})
     {
         g_view.media_filter = g_view.sort = 0;
         g_view.field_focused = filter_focus;
-        pressed_button = pad::Button::l3;
+        pressed_button = pad::Button::r3;
         handle_input();
         assert(g_view.media_filter == 1 && g_view.sort == 0);
         drain();
         snapshot();
         assert(g_view.field_focused == filter_focus);
         g_view.media_filter = 0;
-        pressed_button = pad::Button::r3;
+        pressed_button = pad::Button::l3;
         handle_input();
         assert(g_view.sort == 0 && g_view.media_filter == 0);
+        drain();
+    }
+    pressed_button = pad::Button::count;
+    for (int expected : {1, 2, 0})
+    {
+        pressed_button = pad::Button::r3;
+        handle_input();
+        assert(g_view.media_filter == expected);
         drain();
     }
     pressed_button = pad::Button::count;

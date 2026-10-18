@@ -239,19 +239,25 @@ $(UPDATE_ELF): payloads/updater/main.c $(wildcard src/update/*.h)
 	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/updater slopfin-update.elf
 	@cp payloads/updater/slopfin-update.elf $@
 
-app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
+STORAGE_ELF := assets/slopfin-storage.bin
+$(STORAGE_ELF): payloads/storage/main.c $(wildcard src/update/*.h)
+	@printf '%s\n' '==> [payload] Building the update storage helper'
+	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/storage slopfin-storage.elf
+	@cp payloads/storage/slopfin-storage.elf $@
+
+app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
-ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
+ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
 	@bash tools/build.sh Ffpkg
 
-ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
+ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [ffpfsc] Building the app folder and compressed image'
 	@bash tools/build.sh Ffpfsc
 
-packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF)
+packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [packages] Building the app folder and both package formats'
 	@bash tools/build.sh All
 
@@ -336,6 +342,8 @@ fpkg: app
 .PHONY: test-services
 test-services:
 	@mkdir -p build/tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_storage.cpp -o build/tests/update_storage_tests
+	@build/tests/update_storage_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_background.cpp src/background.cpp -o build/tests/background_tests
 	@build/tests/background_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_download.cpp -o build/tests/update_download_tests
