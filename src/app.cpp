@@ -143,7 +143,7 @@ constexpr int kGridFade = 34;
 constexpr int kGridViewHeight = gfx::kHeight - kGridTop - 40;
 /* Search stays in its originating category; the PS5 owns text entry. */
 constexpr int kSearchBarX = kContentX;
-constexpr int kSearchBarY = kSafeY + 78;
+constexpr int kSearchBarY = ui::kPageTitleY - 6;
 constexpr int kSearchBarH = 72;
 constexpr int kSearchBarW = 832;
 
@@ -294,9 +294,17 @@ std::condition_variable g_request_wake;
 /* Cursor, animation and everything else only the render thread touches. */
 struct View
 {
-    int sidebar_index = 1;  /* where the cursor is while browsing the list */
-    int active_section = 1; /* which section is actually open */
+    int sidebar_index = 0;  /* where the cursor is while browsing the list */
+    int active_section = 0; /* which section is actually open */
     bool sidebar_focused = false;
+    /* The Discover tab's sidebar cursor is simply the section it has open,
+       seerr::section(). */
+    /* 0 on the Home tab, 1 on Discover, and in between while one becomes the
+       other: the tab pill, the page's colour and the accent all follow it. */
+    motion::Spring world{0.0f};
+    /* Which way the page slides in after L1 or R1: -1 from the left, 1 from
+       the right, 0 for an ordinary page change. */
+    int world_dir = 0;
 
     int row_index = 0;
     std::vector<int> column;
@@ -492,13 +500,15 @@ struct SidebarEntry
         search,
         library,
         settings,
-        discover, /* the request server (seerr.cpp) */
+        discover,         /* the request server (seerr.cpp): now the Discover tab */
+        discover_section, /* one of the Discover tab's own categories */
     };
 
     std::string label;
     Kind kind = Kind::home;
     std::string library_id;
     bool gap_before = false; /* a little air between the groups */
+    int section = 0;         /* discover_section: which one */
 };
 
 std::uint64_t g_navigation_revision = 0;
@@ -511,6 +521,8 @@ std::string category_key(const SidebarEntry &entry)
         return "home";
     case SidebarEntry::Kind::discover:
         return "discover";
+    case SidebarEntry::Kind::discover_section:
+        return "discover:" + std::to_string(entry.section);
     case SidebarEntry::Kind::library:
         return "library:" + entry.library_id;
     case SidebarEntry::Kind::settings:
@@ -527,11 +539,12 @@ bool category_hidden(const std::string &key)
     return key != "settings" && std::find(hidden.begin(), hidden.end(), key) != hidden.end();
 }
 
+/* The Home tab's sidebar: its overview, the libraries, then Settings. Discover
+   is a tab of its own now, with a sidebar of its own (discover_sidebar). */
 std::vector<SidebarEntry> build_sidebar(const std::vector<jellyfin::Library> &libraries,
                                         bool include_hidden = false) noexcept
 {
-    std::vector<SidebarEntry> entries{{"Discover", SidebarEntry::Kind::discover, {}, false},
-                                      {"Home", SidebarEntry::Kind::home, {}, false}};
+    std::vector<SidebarEntry> entries{{"Overview", SidebarEntry::Kind::home, {}, false}};
     for (const auto &library : libraries)
     {
         if (library.collection_type == "music" || library.collection_type == "books" ||
@@ -556,11 +569,46 @@ std::vector<SidebarEntry> build_sidebar(const std::vector<jellyfin::Library> &li
     return entries;
 }
 
+/* Settings > Navigation: the Discover tab can be hidden like any category. */
 std::vector<SidebarEntry> navigation_entries()
 {
     std::lock_guard<std::mutex> guard(g_shared.mutex);
     auto entries = build_sidebar(g_shared.libraries, true);
     entries.pop_back();
+    entries.insert(entries.begin(), {"Discover tab", SidebarEntry::Kind::discover, {}, false});
+    /* In the saved order, so the row moved is the row the next press acts on. */
+    const auto &order = config::current().navigation_order;
+    std::stable_sort(entries.begin(), entries.end(),
+                     [&](const auto &a, const auto &b)
+                     {
+                         return std::find(order.begin(), order.end(), category_key(a)) <
+                                std::find(order.begin(), order.end(), category_key(b));
+                     });
+    return entries;
+}
+
+bool discover_tab_shown()
+{
+    return !category_hidden("discover");
+}
+
+/* The Discover tab's sidebar: the catalogue's categories, then requests. */
+const std::vector<SidebarEntry> &discover_sidebar()
+{
+    static const std::vector<SidebarEntry> entries = []
+    {
+        std::vector<SidebarEntry> out;
+        for (int i = 0; i < seerr::kSectionCount; ++i)
+        {
+            SidebarEntry entry{seerr::section_label(i),
+                               SidebarEntry::Kind::discover_section,
+                               {},
+                               i == seerr::kRequestsSection};
+            entry.section = i;
+            out.push_back(std::move(entry));
+        }
+        return out;
+    }();
     return entries;
 }
 
@@ -707,6 +755,7 @@ void advance_motion() noexcept
     g_view.sidebar_dim.aim(g_view.sidebar_focused ? 1.0f : 0.0f);
     g_view.sidebar_dim.step(motion::kFade, dt);
     g_view.sidebar_scroll.step(motion::kSlide, dt);
+    g_view.world.step(motion::kSlide, dt);
     g_view.shortcut_left.aim(pad::held(pad::Button::l2) ? 1.0f : 0.0f);
     g_view.shortcut_right.aim(pad::held(pad::Button::r2) ? 1.0f : 0.0f);
     g_view.shortcut_left.step(motion::kControlFocus, dt);
@@ -1462,33 +1511,42 @@ void submit_search(const std::string &term, const std::string &scope,
 
 /* --------------------------------------------------------------- drawing */
 
-/* The page's own colours, in one place, because three things now have to
+/* The page's own colours live in ui_common, because three things have to
    agree about them: the background, the band redrawn over a scrolling list,
-   and the fade that softens its edge. */
-constexpr gfx::Color kPageBottom = gfx::rgb(0x0d, 0x0d, 0x12);
-constexpr gfx::Color kPageTop = gfx::rgb(0x24, 0x16, 0x34);
-constexpr int kPageRamp = 460;
+   and the fade that softens its edge, on either tab. */
+using ui::kPageBottom;
+using ui::kPageRamp;
+
+/* The two tabs glow in their own colours, and cross over while switching. */
+ui::Theme page_theme() noexcept
+{
+    return ui::theme_at(g_view.world.value());
+}
 
 void draw_background() noexcept
 {
+    const ui::Theme theme = page_theme();
     gfx::clear(kPageBottom);
-    gfx::vertical_gradient(0, 0, gfx::kWidth, kPageRamp, kPageTop, kPageBottom);
+    gfx::vertical_gradient(0, 0, gfx::kWidth, kPageRamp, theme.page_top, kPageBottom);
+    /* A faint wash of the tab's accent from the top right, so the page has a
+       light source rather than a flat ramp. It is gone above the first row a
+       list can scroll under, so background_at stays exact where it is used. */
+    constexpr int kBands = 8;
+    constexpr int kBand = 26;
+    for (int band = 0; band < kBands; ++band)
+    {
+        const auto alpha = static_cast<std::uint8_t>(0x16 * (kBands - band) / kBands);
+        gfx::horizontal_gradient(gfx::kWidth / 3, band * kBand, gfx::kWidth * 2 / 3, kBand,
+                                 gfx::with_alpha(theme.accent_to, 0),
+                                 gfx::with_alpha(theme.accent_to, alpha));
+    }
 }
 
 /* What the background is at one row, so something drawn over a list can match
    it exactly rather than approximately. */
 gfx::Color background_at(int y) noexcept
 {
-    if (y >= kPageRamp)
-        return kPageBottom;
-    const int t = (std::max(0, y) * 255) / kPageRamp;
-    const auto channel = [t](unsigned shift)
-    {
-        const int from = static_cast<int>((kPageTop >> shift) & 0xffu);
-        const int to = static_cast<int>((kPageBottom >> shift) & 0xffu);
-        return static_cast<std::uint8_t>(from + (to - from) * t / 255);
-    };
-    return gfx::rgb(channel(16), channel(8), channel(0));
+    return ui::page_at(page_theme(), y);
 }
 
 /* Fade the clipped edge of a scrolling region. */
@@ -1530,47 +1588,58 @@ void draw_category_shortcut() noexcept
     text::draw(x + 143, y, "Categories", 18, Weight::regular, colour);
 }
 
-void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,
-                  const std::string &server_name) noexcept
+/*
+ * The sidebar belongs to whichever tab is open: the Home tab lists its
+ * libraries, Discover its categories. It has no panel of its own, only a
+ * shade along the left edge, so the page reads as one surface.
+ */
+void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries, int cursor,
+                  const std::string &footer_label, const std::string &footer_value,
+                  float alpha = 1.0f) noexcept
 {
-    /* Dim the inactive side of the interface. */
     const bool lit = g_view.sidebar_focused;
-    /* Keep the sidebar opaque over bright backdrops. */
-    gfx::fill_rect(0, 0, kSidebarWidth, gfx::kHeight,
-                   gfx::rgba(0x08, 0x08, 0x0c, lit ? 0xdc : 0xf0));
+    gfx::horizontal_gradient(0, 0, kSidebarWidth + 220, gfx::kHeight,
+                             gfx::rgba(0x05, 0x06, 0x0a, lit ? 0xe6 : 0xc8),
+                             gfx::rgba(0x05, 0x06, 0x0a, 0x00));
     draw_wordmark(kSafeX - 8, kSafeY + 16);
 
     const bool navigable = screen == Screen::home || screen == Screen::grid ||
                            screen == Screen::settings || screen == Screen::discover;
     if (!navigable)
         return;
+    const auto fade = [alpha](gfx::Color c)
+    {
+        return gfx::with_alpha(c, static_cast<std::uint8_t>(static_cast<float>((c >> 24) & 0xffu) *
+                                                            std::clamp(alpha, 0.0f, 1.0f)));
+    };
     draw_category_shortcut();
 
-    if (!server_name.empty())
+    if (!footer_value.empty())
     {
-        text::draw(kSafeX, gfx::kHeight - 108, "Connected to", 18, Weight::regular,
+        text::draw(kSafeX, gfx::kHeight - 108, footer_label, 18, Weight::regular,
                    gfx::rgb(0x6c, 0x6c, 0x78));
-        text::draw_ellipsized(kSafeX, gfx::kHeight - 82, kSidebarWidth - kSafeX - 20, server_name,
+        text::draw_ellipsized(kSafeX, gfx::kHeight - 82, kSidebarWidth - kSafeX - 20, footer_value,
                               22, Weight::medium, gfx::rgb(0x9a, 0x9a, 0xa6));
     }
 
     constexpr int kWashX = kSafeX - 26;
-    constexpr int kStep = 92;
+    constexpr int kStep = 78;
+    constexpr int kFirst = 222;
     /* The extra air a rule gets, on top of the row it already occupies. */
-    constexpr int kGroupGap = 34;
+    constexpr int kGroupGap = 30;
     /* Visible label bounds used to space sidebar separators. */
     constexpr int kInkTop = 10;
     constexpr int kInkBottom = 18;
 
-    constexpr int kListTop = 208;
+    constexpr int kListTop = 196;
     const int list_bottom = gfx::kHeight - 148;
-    int selected_y = 232;
-    int last_y = 232;
+    int selected_y = kFirst;
+    int last_y = kFirst;
     for (std::size_t i = 0; i < entries.size(); ++i)
     {
         if (entries[i].gap_before)
             last_y += kGroupGap;
-        if (static_cast<int>(i) == g_view.sidebar_index)
+        if (static_cast<int>(i) == cursor)
             selected_y = last_y;
         if (i + 1 < entries.size())
             last_y += kStep;
@@ -1586,18 +1655,19 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,
     gfx::push_clip(0, kListTop, kSidebarWidth, list_bottom - kListTop);
     if (lit)
     {
-        int focus_y = 232 - scroll;
+        int focus_y = kFirst - scroll;
         for (std::size_t i = 0; i < entries.size(); ++i)
         {
             if (entries[i].gap_before)
                 focus_y += kGroupGap;
-            if (static_cast<int>(i) == g_view.sidebar_index)
+            if (static_cast<int>(i) == cursor)
                 ui::focus_pill(kWashX, focus_y - 12, kSidebarWidth - kWashX - 20, 56,
                                ui::FocusGroup::sidebar);
             focus_y += kStep;
         }
     }
-    int y = 232 - scroll;
+    const ui::Theme theme = page_theme();
+    int y = kFirst - scroll;
     for (std::size_t i = 0; i < entries.size(); ++i)
     {
         if (entries[i].gap_before)
@@ -1606,25 +1676,53 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries,
             const int ink_above = y - kStep + kInkBottom;
             const int ink_below = y + kGroupGap + kInkTop;
             gfx::fill_rect(kWashX, (ink_above + ink_below) / 2, kSidebarWidth - kSafeX - 20, 1,
-                           gfx::rgba(0xff, 0xff, 0xff, 0x14));
+                           fade(gfx::rgba(0xff, 0xff, 0xff, 0x14)));
             y += kGroupGap;
         }
-        const bool active = static_cast<int>(i) == g_view.sidebar_index;
-
-        /* Brightness carries the state; nothing is drawn behind the words. */
-
-        if (active)
-        {
-            if (!lit)
-                gfx::rounded_rect(kWashX + 8, y + 4, 3, 24, 1, gfx::palette::accent_alt);
-        }
-        const gfx::Color label = active ? gfx::rgba(0xff, 0xff, 0xff, lit ? 0xff : 0xbe)
-                                        : gfx::rgba(0xff, 0xff, 0xff, lit ? 0xb8 : 0x92);
-        ui::control_label(kSafeX + 4, y - 12, kSidebarWidth - kSafeX - 20, 56, entries[i].label, 28,
-                          Weight::medium, label);
+        const bool active = static_cast<int>(i) == cursor;
+        /* The open section carries the tab's colour in a short bar. */
+        if (active && !lit)
+            gfx::rounded_rect(kWashX + 6, y + 2, 4, 28, 2, fade(theme.accent_to));
+        const gfx::Color label = active ? gfx::rgba(0xff, 0xff, 0xff, 0xff)
+                                        : gfx::rgba(0xff, 0xff, 0xff, lit ? 0xb8 : 0x86);
+        ui::control_label(kSafeX + 4, y - 12, kSidebarWidth - kSafeX - 20, 56, entries[i].label, 26,
+                          active ? Weight::bold : Weight::medium, fade(label));
         y += kStep;
     }
     gfx::pop_clip();
+}
+
+/*
+ * Home and Discover, the two places in the app, as one switch in the middle
+ * of the top bar. L1 and R1 sit either side of it, because that is how they
+ * are pressed.
+ */
+const ui::Segmented kTabs{{"Home", "Discover"}, ui::kTopBarHeight, 30, 40};
+
+void draw_shoulder_key(int x, int y, const char *name, bool held, bool usable) noexcept
+{
+    constexpr int kW = 46;
+    constexpr int kH = 32;
+    const std::uint8_t ink = !usable ? 0x40 : held ? 0xff : 0xa0;
+    gfx::rounded_rect(x, y, kW, kH, 9, gfx::rgba(0xff, 0xff, 0xff, held ? 0x2a : 0x10));
+    gfx::stroke_rounded_rect(x, y, kW, kH, 9, 1, gfx::rgba(0xff, 0xff, 0xff, ink / 2));
+    text::draw(x + (kW - text::measure(name, 17, Weight::bold)) / 2,
+               text::centered_y(y, kH, name, 17, Weight::bold), name, 17, Weight::bold,
+               gfx::rgba(0xff, 0xff, 0xff, ink));
+}
+
+void draw_tabs(bool discover_shown) noexcept
+{
+    if (!discover_shown)
+        return;
+    const int width = ui::segmented_width(kTabs);
+    const int x = (gfx::kWidth - width) / 2;
+    const int y = ui::kTopBarY;
+    (void)ui::draw_segmented(x, y, kTabs, g_view.world.value(), page_theme(), false);
+    const int key_y = y + (ui::kTopBarHeight - 32) / 2;
+    const float at = g_view.world.target();
+    draw_shoulder_key(x - 46 - 18, key_y, "L1", pad::held(pad::Button::l1), at > 0.5f);
+    draw_shoulder_key(x + width + 18, key_y, "R1", pad::held(pad::Button::r1), at < 0.5f);
 }
 
 std::string card_subtitle(const jellyfin::Item &item) noexcept
@@ -1830,6 +1928,10 @@ struct Wash
     int shape = -1;  /* which layout composed it */
     bool ready = false;
     bool hdr = false;
+    /* The page's slide offset, set aside while composing: the cache holds the
+       picture where it belongs, not wherever a transition happened to be. */
+    int origin_x = 0;
+    int origin_y = 0;
 };
 Wash g_wash;
 /* Counts compositions, so the trace can say whether the cache is being hit. */
@@ -1851,6 +1953,8 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
     if (g_wash.pixels == nullptr)
         return true; /* no cache: draw straight to the frame, as before */
 
+    gfx::origin(g_wash.origin_x, g_wash.origin_y);
+    gfx::set_origin(0, 0);
     if (g_wash.ready && g_wash.shape == shape && g_wash.key == key &&
         g_wash.hdr == gfx::hdr_output())
     {
@@ -1858,6 +1962,7 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
             gfx::blit_surface_height(g_wash.pixels, 720);
         else
             gfx::blit_surface(g_wash.pixels);
+        gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
         return false;
     }
     g_wash.key = key;
@@ -1885,6 +1990,7 @@ void wash_end() noexcept
         gfx::blit_surface_height(g_wash.pixels, 720);
     else
         gfx::blit_surface(g_wash.pixels);
+    gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
 }
 
 /* Render the backdrop and metadata of the focused Home item. */
@@ -1931,7 +2037,8 @@ void draw_hero(const jellyfin::Item &item, float reveal = 1.0f) noexcept
             c, static_cast<std::uint8_t>(static_cast<float>((c >> 24) & 0xffu) * opacity));
     };
     const int x = kContentX - static_cast<int>(std::lround((1.0f - ease_out(reveal)) * 32.0f));
-    int y = kSafeY + 96;
+    /* Under the tab bar, which owns the top of the screen. */
+    int y = ui::kPageTitleY + 6;
     if (item.type == "Episode" && !item.series_name.empty())
     {
         text::draw_ellipsized(x, y, 1000, item.series_name, 25, Weight::medium,
@@ -1954,7 +2061,7 @@ void draw_hero(const jellyfin::Item &item, float reveal = 1.0f) noexcept
 
 void draw_search_affordance() noexcept;
 /* The top of the profile badge and the search chip, centred on a page title. */
-constexpr int kTopBarY = kSafeY + 90;
+constexpr int kTopBarY = ui::kTopBarY;
 
 /* Accumulate variable row heights to locate the selected row. */
 /* The rule for a resume row: episodes are wide, everything else a poster. */
@@ -2086,8 +2193,6 @@ void draw_home(const std::vector<Row> &rows) noexcept
         draw_hero(focused_row.items[static_cast<std::size_t>(
                       g_view.column[static_cast<std::size_t>(g_view.row_index)])],
                   card_reveal(0, 0));
-
-    draw_search_affordance();
 
     /* Start the clip at the row titles: any row scrolled above this is gone,
        labels included, rather than leaving orphaned text behind. */
@@ -2396,16 +2501,19 @@ void draw_search_results(const std::vector<jellyfin::Item> &items,
                    gfx::palette::danger);
 }
 
-/* Triangle opens search from the page header. */
+/* Triangle's chip in the tab bar, beside the profile badge, at its size. */
+void draw_top_action(const std::string &label) noexcept
+{
+    const int width = ui::top_chip_width(label);
+    (void)ui::draw_top_chip(kContentRight - account::badge_width() - 18 - width, kTopBarY,
+                            icons::Icon::ps_triangle, label);
+}
+
 void draw_search_affordance() noexcept
 {
     if (g_view.search.open)
         return;
-    /* Beside the profile badge, which holds the corner, at its size and on the
-       line of the page title. */
-    const int width = ui::top_chip_width("Search");
-    (void)ui::draw_top_chip(kContentRight - account::badge_width() - 18 - width, kTopBarY,
-                            icons::Icon::ps_triangle, "Search");
+    draw_top_action("Search");
 }
 
 /* Fade outgoing cards beneath the new page for twelve frames. */
@@ -2443,7 +2551,7 @@ void draw_leaving_cards() noexcept
 void draw_grid(const std::vector<jellyfin::Item> &items, const std::string &title, bool loading,
                int total) noexcept
 {
-    text::draw(kContentX, kSafeY + 96, title, 38, Weight::bold, gfx::palette::text);
+    text::draw(kContentX, ui::kPageTitleY, title, 44, Weight::bold, gfx::palette::text);
     /*
      * How much is in here, beside the name and set well below it in weight and
      * brightness. A count is worth knowing and is never the reason anyone came
@@ -2451,9 +2559,8 @@ void draw_grid(const std::vector<jellyfin::Item> &items, const std::string &titl
      * line of its own.
      */
     if (total > 0)
-        text::draw(kContentX + text::measure(title, 38, Weight::bold) + 18, kSafeY + 106,
+        text::draw(kContentX + text::measure(title, 44, Weight::bold) + 18, ui::kPageTitleY + 16,
                    std::to_string(total), 22, Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x66));
-    draw_search_affordance();
     draw_leaving_cards();
     /*
      * On a LAN the answer comes back in a fraction of a second, and flashing
@@ -6271,6 +6378,10 @@ void open_section(const std::vector<SidebarEntry> &entries, int index, bool keep
         g_shared.screen = Screen::discover;
         break;
     }
+    case SidebarEntry::Kind::discover_section:
+        /* Discover's own sidebar opens these; see handle_discover_sidebar_input. */
+        seerr::set_section(entry.section);
+        return;
     }
     seerr::close_settings();
     g_view.active_section = index;
@@ -6301,6 +6412,84 @@ void handle_sidebar_input(const std::vector<SidebarEntry> &entries) noexcept
 
     if (g_view.sidebar_index != before)
         open_section(entries, g_view.sidebar_index, true);
+}
+
+/* The Discover tab's sidebar: moving opens the category, as on Home. */
+void handle_discover_sidebar_input() noexcept
+{
+    const auto &entries = discover_sidebar();
+    const int count = static_cast<int>(entries.size());
+    const int before = seerr::section();
+    int cursor = before;
+    if (pad::pressed(pad::Button::down) && cursor + 1 < count)
+        ++cursor;
+    else if (pad::pressed(pad::Button::up) && cursor > 0)
+        --cursor;
+    else if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::right) ||
+             pad::pressed(pad::Button::circle))
+    {
+        g_view.sidebar_focused = false;
+        restart_focus();
+    }
+    if (cursor != before)
+        seerr::set_section(entries[static_cast<std::size_t>(cursor)].section);
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+/* R1: over to Discover, which keeps its own category and place. */
+void switch_to_discover() noexcept
+{
+    /* Leaving a library: keep its place, for L1 to come back to. */
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        if (g_shared.screen == Screen::grid && !g_shared.grid_library_id.empty())
+            g_grid_positions[g_shared.grid_library_id] =
+                GridPosition{g_view.grid_index, g_view.grid_scroll.value()};
+    }
+    seerr::enter();
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.screen = Screen::discover;
+    }
+    g_back.clear();
+    g_view.world_dir = 1;
+    g_view.sidebar_scroll.jump(0.0f);
+    restart_focus();
+}
+
+/* L1: back to the Home tab's section as it was left, without reloading it. */
+void switch_to_home(const std::vector<SidebarEntry> &entries) noexcept
+{
+    if (entries.empty())
+        return;
+    const int index = std::clamp(g_view.active_section, 0, static_cast<int>(entries.size()) - 1);
+    const SidebarEntry &entry = entries[static_cast<std::size_t>(index)];
+    switch (entry.kind)
+    {
+    case SidebarEntry::Kind::library:
+        open_grid(entry.library_id, entry.label, false, -1);
+        break;
+    case SidebarEntry::Kind::settings:
+    {
+        g_view.settings_page = 0;
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.screen = Screen::settings;
+        break;
+    }
+    default:
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.screen = Screen::home;
+        break;
+    }
+    }
+    g_view.active_section = index;
+    g_view.sidebar_index = index;
+    g_back.clear();
+    g_view.world_dir = -1;
+    g_view.sidebar_scroll.jump(0.0f);
+    restart_focus();
 }
 
 void handle_home_input(const std::vector<Row> &rows) noexcept
@@ -8222,18 +8411,51 @@ void frame() noexcept
     g_view.search.result_index = std::clamp(g_view.search.result_index, 0,
                                             std::max(0, static_cast<int>(search_items.size()) - 1));
 
-    /* Trigger plus vertical direction switches categories. */
-    const bool section_shortcut = !g_view.search.open && !ime::busy() &&
-                                  g_view.ime_input_guard == 0 && !account::menu_visible() &&
-                                  !seerr::modal_open() &&
-                                  (pad::held(pad::Button::l2) || pad::held(pad::Button::r2)) &&
-                                  (screen == Screen::home || screen == Screen::grid ||
-                                   screen == Screen::settings || screen == Screen::discover);
-    bool shortcut_used = false;
-    if (section_shortcut && !sidebar.empty())
+    /* The screens that sit under the tab bar, and which of the two tabs. */
+    const auto tabbed_screen = [](Screen s)
     {
-        const int count = static_cast<int>(sidebar.size());
-        int wanted = g_view.sidebar_index;
+        return s == Screen::home || s == Screen::grid || s == Screen::settings ||
+               s == Screen::discover;
+    };
+    /* L1 and R1 move between the Home and Discover tabs. Not while something
+       else holds the input, and not inside Settings' pages, where the
+       shoulders reorder the navigation list. */
+    const bool tab_switch =
+        tabbed_screen(screen) && discover_tab_shown() && !g_view.search.open && !ime::busy() &&
+        g_view.ime_input_guard == 0 && !account::menu_visible() && !seerr::modal_open() &&
+        !report_prompt_open() && (screen != Screen::settings || g_view.settings_page == 0);
+    bool tab_switched = false;
+    if (tab_switch)
+    {
+        if (pad::pressed(pad::Button::r1) && screen != Screen::discover)
+        {
+            switch_to_discover();
+            tab_switched = true;
+        }
+        else if (pad::pressed(pad::Button::l1) && screen == Screen::discover)
+        {
+            switch_to_home(sidebar);
+            tab_switched = true;
+        }
+        if (tab_switched)
+            snapshot_shared();
+    }
+    const bool in_discover = screen == Screen::discover;
+    if (tabbed_screen(screen))
+        g_view.world.aim(in_discover ? 1.0f : 0.0f);
+
+    /* Trigger plus vertical direction switches categories, in this tab. */
+    const bool section_shortcut =
+        !g_view.search.open && !ime::busy() && g_view.ime_input_guard == 0 &&
+        !account::menu_visible() && !seerr::modal_open() && !tab_switched &&
+        (pad::held(pad::Button::l2) || pad::held(pad::Button::r2)) && tabbed_screen(screen);
+    const std::vector<SidebarEntry> &tab_entries = in_discover ? discover_sidebar() : sidebar;
+    bool shortcut_used = false;
+    if (section_shortcut && !tab_entries.empty())
+    {
+        const int count = static_cast<int>(tab_entries.size());
+        const int current = in_discover ? seerr::section() : g_view.sidebar_index;
+        int wanted = current;
         shortcut_used = pad::pressed(pad::Button::down) || pad::pressed(pad::Button::up);
         if (shortcut_used)
             g_view.shortcut_until = slopfin::app::now_us() + 1400000;
@@ -8241,18 +8463,25 @@ void frame() noexcept
             ++wanted;
         else if (pad::pressed(pad::Button::up) && wanted > 0)
             --wanted;
-        if (wanted != g_view.sidebar_index)
+        if (wanted != current)
         {
-            g_view.sidebar_index = wanted;
-            open_section(sidebar, wanted, g_view.sidebar_focused);
+            if (in_discover)
+                seerr::set_section(tab_entries[static_cast<std::size_t>(wanted)].section);
+            else
+            {
+                g_view.sidebar_index = wanted;
+                open_section(sidebar, wanted, g_view.sidebar_focused);
+            }
             shortcut_used = true;
         }
-        g_view.shortcut_name = sidebar[static_cast<std::size_t>(wanted)].label;
+        g_view.shortcut_name = tab_entries[static_cast<std::size_t>(wanted)].label;
     }
+    shortcut_used = shortcut_used || tab_switched;
 
     /* Browsing screens only: Settings reaches the same places through Account. */
-    const bool has_badge =
-        (screen == Screen::home || screen == Screen::grid) && config::current().signed_in();
+    const bool has_badge = (screen == Screen::home || screen == Screen::grid ||
+                            (screen == Screen::discover && !seerr::modal_open())) &&
+                           config::current().signed_in();
     if (has_badge)
         account::ensure_user();
 
@@ -8278,9 +8507,12 @@ void frame() noexcept
         {
             /* the search has the frame */
         }
+        else if (g_view.sidebar_focused && screen == Screen::discover)
+        {
+            handle_discover_sidebar_input();
+        }
         else if (g_view.sidebar_focused &&
-                 (screen == Screen::home || screen == Screen::grid || screen == Screen::settings ||
-                  screen == Screen::discover))
+                 (screen == Screen::home || screen == Screen::grid || screen == Screen::settings))
         {
             handle_sidebar_input(sidebar);
         }
@@ -8555,8 +8787,12 @@ void frame() noexcept
         }
         const float page_in = g_view.page_in.value();
         const bool page_moving = page_in < 0.995f && screen != Screen::playing;
+        if (!page_moving)
+            g_view.world_dir = 0;
+        /* A page rises into place; a tab slides in from its own side. */
         if (page_moving)
-            gfx::set_origin(0, static_cast<int>((1.0f - page_in) * 30.0f));
+            gfx::set_origin(static_cast<int>((1.0f - page_in) * 90.0f * g_view.world_dir),
+                            g_view.world_dir != 0 ? 0 : static_cast<int>((1.0f - page_in) * 30.0f));
 
         switch (screen)
         {
@@ -8618,6 +8854,10 @@ void frame() noexcept
          screen == Screen::discover))
     {
         const float t = g_view.sidebar_dim.value();
+        /* From the very edge: the sidebar has no panel to hide a seam behind,
+           and its own words are drawn after this, at full strength. */
+        gfx::fill_rect(0, 0, kSidebarWidth, gfx::kHeight,
+                       gfx::rgba(0x00, 0x00, 0x00, static_cast<std::uint8_t>(t * 0xa8)));
         gfx::horizontal_gradient(kSidebarWidth, 0, gfx::kWidth - kSidebarWidth, gfx::kHeight,
                                  gfx::rgba(0x00, 0x00, 0x00, static_cast<std::uint8_t>(t * 0xa8)),
                                  gfx::rgba(0x00, 0x00, 0x00, static_cast<std::uint8_t>(t * 0x40)));
@@ -8625,7 +8865,25 @@ void frame() noexcept
 
     if (screen != Screen::playing && screen != Screen::detail && screen != Screen::profile &&
         screen != Screen::dashboard)
-        draw_sidebar(screen, sidebar, server_name);
+    {
+        /* Each tab's own list fades in as its page slides in. */
+        const float list_alpha = g_view.world_dir != 0 ? g_view.page_in.value() : 1.0f;
+        if (screen == Screen::discover)
+            draw_sidebar(screen, discover_sidebar(), seerr::section(), "Requests through",
+                         seerr::server_label(), list_alpha);
+        else
+            draw_sidebar(screen, sidebar, g_view.sidebar_index, "Connected to", server_name,
+                         list_alpha);
+    }
+    /* The tab bar, over every browsing screen but a request's own sheet. */
+    if (tabbed_screen(screen) && !(screen == Screen::discover && seerr::covers_background()))
+    {
+        draw_tabs(discover_tab_shown());
+        if ((screen == Screen::home || screen == Screen::grid) && !g_view.search.open)
+            draw_search_affordance();
+        else if (screen == Screen::discover && !config::current().seerr_host.empty())
+            draw_top_action(seerr::section() == seerr::kRequestsSection ? "Refresh" : "Search");
+    }
 
     /* The profile badge holds the top right of every browsing screen, and its
        menu goes over everything, the sidebar included. */

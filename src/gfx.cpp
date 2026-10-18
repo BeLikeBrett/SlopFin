@@ -837,6 +837,12 @@ void set_origin(int dx, int dy) noexcept
     g_origin_y = dy;
 }
 
+void origin(int &dx, int &dy) noexcept
+{
+    dx = g_origin_x;
+    dy = g_origin_y;
+}
+
 int to_physical_size(int v) noexcept
 {
     return (v * g_phys_h) / kHeight;

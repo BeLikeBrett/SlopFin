@@ -1,6 +1,7 @@
 # Discover and requests
 
-Discover appears in the sidebar; its visibility and position can be changed in Settings → Navigation. Connect Seerr or Jellyseerr to browse
+Discover is the second tab in the top bar: press R1 to open it and L1 to return to
+Home. It can be hidden in Settings → Navigation. Connect Seerr or Jellyseerr to browse
 trending titles, search for a movie or series, request it and follow its download.
 An Overseerr-compatible server can use API-key or local-account authentication.
 
@@ -17,38 +18,40 @@ Choose **Connect request server** in an unconfigured Discover screen, or open
 3. Enter the fields shown for that method, then choose **Connect**.
 
 API keys come from the request server's Settings → General. They act as its
-owner, so requests and My requests use that account. Use account sign-in when
+owner, so requests and the Requests list use that account. Use account sign-in when
 you want requests credited to your own user. Keys can be revoked or rotated
 on the server. Disconnect removes saved request credentials and keeps your
 Jellyfin sign-in.
 
 ## Browse and request
 
+Discover's sidebar picks what you are looking at: **Trending**, **Popular**,
+**Top rated**, **New releases**, **Upcoming**, or **Requests**. Moving through it
+opens each one straight away.
+
 | Control | Action |
 | --- | --- |
-| Triangle | Search using the PlayStation keyboard |
-| D-pad | Browse titles |
+| Triangle | Search using the PlayStation keyboard (Refresh on Requests) |
+| D-pad | Browse titles; Up from the first row reaches the media filter |
 | Cross | Open a title, then choose its action |
-| Square | Switch Browse / My requests; fixed hint beside the tabs |
-| L1 / R1 | Previous / next catalog page |
-| L3 | Cycle Movies & series / Movies / Series |
-| R3 | Cycle Trending / Popular / Top rated / Newest / Upcoming |
-| Circle | Close the title or return to the sidebar |
+| L3 | Cycle All / Movies / Series |
+| Hold L2 or R2 + Up/Down | Next or previous Discover category |
+| L1 | Back to the Home tab |
+| Square | Your profile menu |
+| Circle | Close the title, clear a search, or return to the sidebar |
 
 Availability badges come from the request server. Approved or queued titles
-show **Requested** in the catalog. My requests shows actual download progress
+show **Requested** in the catalog. Requests shows actual download progress
 when the server provides it.
-Choose Movies & series, Movies or Series beside the search field. The adjacent
-sort control cycles Trending, Popular, Top rated, Newest and Upcoming. Changes
-apply immediately. These catalogs use the server's discovery endpoints and
-support page navigation with L1/R1; search uses the server's relevance order.
-Choosing a catalog control clears the search. Top rated requires at least 200
-votes; Newest excludes future dates and requires 10 votes to reduce empty entries.
-Each page combines up to five upstream pages and fills progressively. Movies or
-series have up to 100 titles; combined catalogs can have up to 200. A scrollbar
-shows your position. The selected title stays focused as more results arrive.
-L3/R3 keep focus in the results. The right stick scrolls the catalog and
-My requests continuously. My requests has no filters.
+The All / Movies / Series filter sits beside the category's name; Left/Right
+choose while it is focused, and changes apply immediately. These catalogs use
+the server's discovery endpoints; search uses the server's relevance order, and
+choosing a category clears the search. Top rated requires at least 200 votes;
+New releases excludes future dates and requires 10 votes to reduce empty entries.
+Titles load a few upstream pages at a time and more arrive as you scroll toward
+the end, up to 600 titles. A scrollbar shows your position. The selected title
+stays focused as more results arrive. The right stick scrolls the catalog and
+Requests continuously. Requests has no filters.
 
 ## Seasons and quality
 
@@ -93,7 +96,7 @@ screen or scroll position. Additional refreshes for two minutes allow Jellyfin's
 library scan to catch up. Availability depends on Seerr and Jellyfin reporting
 the import; SlopFin cannot show a file before Jellyfin indexes it.
 
-My requests loads the signed-in account's requests, newest first (up to 2,000
+Requests loads the signed-in account's requests, newest first (up to 2,000
 entries). Up/Down selects a request; Triangle refreshes immediately.
 Season counts, 4K and quality-profile names appear when supplied by the server.
 

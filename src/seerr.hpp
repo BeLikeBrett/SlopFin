@@ -68,6 +68,19 @@ struct Request
 
 /* Opens the screen from the sidebar; kicks a refresh if needed. */
 void open() noexcept;
+/* Arrives on the Discover tab: opens it the first time, and afterwards keeps
+   the category and position that were left, refreshing what may be stale. */
+void enter() noexcept;
+
+/* What Discover's sidebar lists: the catalogue's categories, then requests. */
+inline constexpr int kSectionCount = 6;
+inline constexpr int kRequestsSection = kSectionCount - 1;
+const char *section_label(int section) noexcept;
+/* Which section is open, 0 .. kSectionCount - 1. */
+int section() noexcept;
+void set_section(int section) noexcept;
+/* The request server's own name, for the sidebar's footer. */
+std::string server_label() noexcept;
 /* False when the viewer leaves; the caller returns to the sidebar. */
 bool handle_input(float elapsed = 1.0f / 60.0f) noexcept;
 bool modal_open() noexcept;

@@ -132,6 +132,8 @@ int to_physical_size(int v) noexcept;
  * to zero. Used for page transitions; it does not affect sizes.
  */
 void set_origin(int dx, int dy) noexcept;
+/* The offset set_origin last applied. */
+void origin(int &dx, int &dy) noexcept;
 int to_logical_size(int v) noexcept;
 
 /* The frame currently being drawn into. */

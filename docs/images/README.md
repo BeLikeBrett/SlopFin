@@ -14,8 +14,9 @@ button. Both were captured on the PS5 on 2026-10-03.
 `home-preview.png` shows the Linux renderer with a fictional account/library
 and original project-authored geometric artwork covered by the project license.
 
-`settings-preview.png`, `navigation-preview.png`, `discover-preview.png` and
-`request-preview.png` show the 1.10 Linux renderer on 2026-10-16. Connection and
+`settings-preview.png` and `request-preview.png` show the 1.10 Linux renderer on
+2026-10-16. `discover-preview.png` and `navigation-preview.png` show the Home /
+Discover tab layout in the Linux renderer on 2026-10-18. Connection and
 request data are fictional; Discover uses public TMDB catalog metadata and
 artwork displayed through the client. Media artwork belongs to its respective
 owners and is not bundled as app assets. No credentials are visible. `request-preview.png` shows an unrequested series
