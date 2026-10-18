@@ -22,7 +22,7 @@ respective owners and is not bundled as app assets. No credentials are visible.
 request was submitted for the capture.
 
 `discover-preview.png` was refreshed for 1.12 using the same fictional fixture.
-It shows the R3 key and All/Movies/Shows filter. The R3 control cycles all three
+It shows the right-stick prompt and All/Movies/Shows filter. The R3 control cycles all three
 states without moving the catalog focus.
 
 `downloads-console.png` and `updates-console.png` are direct full-resolution PS5

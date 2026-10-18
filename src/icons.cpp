@@ -217,6 +217,14 @@ float field(Icon icon, Vec p) noexcept
         return std::min(capsule(q, {0.62f, 0.20f}, {0.34f, 0.50f}, 0.065f),
                         capsule(q, {0.34f, 0.50f}, {0.62f, 0.80f}, 0.065f));
     }
+    case Icon::r3:
+    {
+        const float cap = circle(p, {0.5f, 0.38f}, 0.30f);
+        const float base = arc(p, {0.5f, 0.50f}, 0.36f, 0.026f, 3.28f, 6.14f);
+        const float stem = std::min(capsule(p, {0.32f, 0.62f}, {0.32f, 0.80f}, 0.025f),
+                                    capsule(p, {0.68f, 0.62f}, {0.68f, 0.80f}, 0.025f));
+        return std::min({cap, base, stem});
+    }
     case Icon::count:
         break;
     }

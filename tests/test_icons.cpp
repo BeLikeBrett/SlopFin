@@ -52,6 +52,11 @@ int main(int argc, char **argv)
     // Info: hollow ring, so the area between ring and stem is empty.
     assert(at(Icon::info, kSize, 0.3f, 0.5f) == 0);
     assert(at(Icon::info, kSize, 0.5f, 0.6f) == 255);
+    // The stick prompt has a solid thumb cap and a separate curved base.
+    assert(at(Icon::r3, kSize, 0.5f, 0.38f) == 255);
+    assert(at(Icon::r3, kSize, 0.5f, 0.74f) == 0);
+    assert(at(Icon::r3, kSize, 0.5f, 0.86f) > 200);
+    assert(at(Icon::r3, kSize, 0.05f, 0.05f) == 0);
     // Edges are anti-aliased: some pixels are neither empty nor full.
     const unsigned char *m = slopfin::icons::mask(Icon::subtitles, kSize);
     int partial = 0;

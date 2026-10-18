@@ -29,8 +29,8 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   movies or missing TV seasons, browse episode guides and follow download
   progress. Requests made here refresh Home when Seerr reports new media available.
   Available titles open in Jellyfin when the request server supplies
-  their library ID. Press R3 to cycle All, Movies and Shows; the key beside
-  the filter lights up when pressed.
+  their library ID. Press R3 to cycle All, Movies and Shows; the right-stick
+  prompt beside the filter depresses when pressed.
   [Connect your request server](docs/DISCOVER.md).
 - **Two tabs, Home and Discover:** L1/R1 switch between your Jellyfin library
   and the request server. Each tab has its own sidebar and colour, and keeps
