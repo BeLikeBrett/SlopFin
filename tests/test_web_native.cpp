@@ -2,13 +2,25 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 /* Exercise the real PS5 request adapter against ABI stubs, without a console. */
 #include "web_transport.hpp"
+#include "tls_certificates.hpp"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+struct HttpsCertificate
+{
+    const char *data;
+    std::size_t size;
+};
 namespace
 {
 int created = 0, deleted = 0, closed = 0, aborted = 0, pools = 0, response_code = 200;
-bool fail_send = false, fail_limit = false;
+bool fail_send = false, fail_limit = false, fail_certificates = false;
+int certificate_loads = 0, connections = 0;
+unsigned verify_errors = 0;
+std::size_t ca_offset = 0;
+const std::string ca_bundle = "# public roots\n-----BEGIN CERTIFICATE-----\nroot one\n"
+                              "-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nroot two\n"
+                              "-----END CERTIFICATE-----\n";
 std::size_t header_limit = 0;
 const std::string response_headers =
     "HTTP/1.1 302 Found\r\nContent-Security-Policy: " + std::string(6000, 'x') +
@@ -23,6 +35,24 @@ void mark(std::string_view) noexcept
 } // namespace slopfin::trace
 extern "C"
 {
+    int open(const char *, int, ...)
+    {
+        ca_offset = 0;
+        return 123;
+    }
+    long read(int fd, void *buffer, std::size_t size)
+    {
+        assert(fd == 123);
+        const auto count = std::min(size, ca_bundle.size() - ca_offset);
+        std::memcpy(buffer, ca_bundle.data() + ca_offset, count);
+        ca_offset += count;
+        return static_cast<long>(count);
+    }
+    int close(int fd)
+    {
+        assert(fd == 123);
+        return 0;
+    }
     int sceNetPoolCreate(const char *, int, int)
     {
         ++pools;
@@ -37,6 +67,22 @@ extern "C"
         assert(pool == 1 && ssl == 2);
         return 3;
     }
+    int sceHttpsLoadCert(int ctx, int count, const HttpsCertificate **list, const void *cert,
+                         const void *key)
+    {
+        assert(ctx == 3 && count == 2 && !cert && !key);
+        const auto expected = slopfin::http::pem_certificates(ca_bundle);
+        for (int i = 0; i < count; ++i)
+            assert(std::string_view(list[i]->data, list[i]->size) == expected[i]);
+        ++certificate_loads;
+        return fail_certificates ? -1 : 0;
+    }
+    int sceHttpsGetSslError(int, int *error, unsigned *detail)
+    {
+        *error = -1;
+        *detail = verify_errors;
+        return 0;
+    }
     int sceHttpCreateTemplate(int ctx, const char *, int version, int)
     {
         assert(ctx == 3 && version == 2);
@@ -45,6 +91,7 @@ extern "C"
     int sceHttpCreateConnectionWithURL(int tmpl, const char *url, int)
     {
         assert(tmpl == 4);
+        ++connections;
         address = url;
         return 5;
     }
@@ -125,9 +172,20 @@ extern "C"
         return 0;
     }
 }
-int main()
+int main(int argc, char **)
 {
     using slopfin::http::WebRequest;
+    assert(slopfin::http::pem_certificates("-----BEGIN CERTIFICATE-----").empty());
+    assert(slopfin::http::pem_certificates("no certificates").empty());
+    if (argc > 1)
+    {
+        fail_certificates = true;
+        WebRequest request;
+        assert(!request.open("https://example.test/", "GET", {}, {}, {}));
+        assert(certificate_loads == 1 && connections == 0);
+        std::puts("Native HTTPS refuses requests when its public CAs cannot load");
+        return 0;
+    }
     {
         WebRequest request;
         assert(request.open("https://media.example.com/System/Info/Public", "GET", {}, {}, {}));
@@ -158,10 +216,13 @@ int main()
     }
     fail_limit = false;
     fail_send = true;
+    verify_errors = 0x04;
     {
         WebRequest request;
         assert(!request.open("https://example.test/", "GET", {}, {}, {}));
+        assert(request.certificate_errors() == 0x04);
     }
     assert(pools == 1 && created == 5 && deleted == 5 && closed == 5);
+    assert(certificate_loads == 1);
     std::puts("Native HTTPS request, upload, cancellation and cleanup tests passed");
 }

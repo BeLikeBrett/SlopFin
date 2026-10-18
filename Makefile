@@ -152,6 +152,7 @@ test-playback: test-updates test-services
 	@build/tests/search_sections_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_web_native.cpp src/web_transport.cpp -o build/tests/web_native_tests
 	@build/tests/web_native_tests
+	@build/tests/web_native_tests fail-certificates
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_seek.cpp -o build/tests/seek_tests
 	@build/tests/seek_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_home_rows.cpp -o build/tests/home_rows_tests

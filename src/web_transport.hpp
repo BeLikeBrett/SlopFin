@@ -31,8 +31,13 @@ class WebRequest
     {
         return status_;
     }
+    unsigned certificate_errors() const noexcept
+    {
+        return certificate_errors_;
+    }
 
   private:
+    unsigned certificate_errors_ = 0;
     int status_ = 0;
     std::string location_;
     std::vector<std::string> response_headers_;

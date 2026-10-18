@@ -335,7 +335,8 @@ void save() noexcept
             break;
         offset += static_cast<std::size_t>(bytes);
     }
-    const bool complete = ::close(file) == 0 && offset == text.size();
+    const bool synced = offset == text.size() && ::fsync(file) == 0;
+    const bool complete = ::close(file) == 0 && synced;
 #ifdef SLOPFIN_HOST
     const bool replaced = complete && std::rename(temporary.c_str(), config_path().c_str()) == 0;
 #else

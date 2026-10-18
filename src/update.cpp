@@ -118,6 +118,27 @@ std::string storage_error(int code)
         return "Could not prepare update storage (error " + std::to_string(code) + ").";
     }
 }
+[[maybe_unused]] bool shared_storage_ready(const std::string &directory)
+{
+    const std::string probe = directory + "/.access-" + std::to_string(getpid());
+    if (sf_update_dirs(probe.c_str()) < 0 || (unlink(probe.c_str()) < 0 && errno != ENOENT))
+        return false;
+    const int fd = open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0)
+        return false;
+    const bool saved = fsync(fd) == 0;
+    const int closed = close(fd);
+    unlink(probe.c_str());
+    if (!saved || closed < 0)
+        return false;
+    const int config = open((directory + "/config.json").c_str(), O_RDONLY | O_NOFOLLOW);
+    if (config < 0)
+        return errno == ENOENT;
+    struct stat metadata = {};
+    const bool readable = fstat(config, &metadata) == 0 && S_ISREG(metadata.st_mode);
+    close(config);
+    return readable;
+}
 bool recover_storage()
 {
 #ifdef SLOPFIN_HOST
@@ -181,6 +202,16 @@ std::unique_ptr<http::WebRequest> open_download(std::string url)
     return {};
 }
 } // namespace
+bool prepare_storage() noexcept
+{
+#ifdef SLOPFIN_HOST
+    return true;
+#else
+    if (shared_storage_ready("/data/slopfin"))
+        return true;
+    return recover_storage() && shared_storage_ready("/data/slopfin");
+#endif
+}
 Status status() noexcept
 {
     initialize();
@@ -215,7 +246,10 @@ void check() noexcept
                     {"Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"}, {},
                     {}))
             {
-                failure("Could not reach GitHub. Check your connection and try again.");
+                failure(request.certificate_errors()
+                            ? "GitHub's certificate could not be verified. Install the latest "
+                              "complete SlopFin folder."
+                            : "Could not reach GitHub. Check your connection and try again.");
                 return;
             }
             if (request.status() != 200)

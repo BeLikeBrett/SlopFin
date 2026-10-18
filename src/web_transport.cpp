@@ -160,11 +160,21 @@ WebRequest::~WebRequest()
 }
 } // namespace slopfin::http
 #else
+#include "tls_certificates.hpp"
+#include <fcntl.h>
+#include <unistd.h>
+struct HttpsCertificate
+{
+    const char *data;
+    std::size_t size;
+};
 extern "C"
 {
     int sceNetPoolCreate(const char *, int, int);
     int sceSslInit(std::size_t);
     int sceHttpInit(int, int, std::size_t);
+    int sceHttpsLoadCert(int, int, const HttpsCertificate **, const void *, const void *);
+    int sceHttpsGetSslError(int, int *, unsigned *);
     int sceHttpCreateTemplate(int, const char *, int, int);
     int sceHttpCreateConnectionWithURL(int, const char *, int);
     int sceHttpCreateRequestWithURL2(int, const char *, const char *, std::uint64_t);
@@ -200,7 +210,7 @@ bool initialize()
         slopfin::trace::mark("https: net pool failed " + std::to_string(pool));
         return false;
     }
-    int ssl = sceSslInit(512 * 1024);
+    int ssl = sceSslInit(2 * 1024 * 1024);
     if (ssl < 0)
     {
         slopfin::trace::mark("https: SSL initialization failed " + std::to_string(ssl));
@@ -210,6 +220,38 @@ bool initialize()
     if (http < 0)
     {
         slopfin::trace::mark("https: HTTP initialization failed " + std::to_string(http));
+        return false;
+    }
+    /* Keep CA verification usable after shared-data recovery changes the process root. */
+    int ca_file = open("/app0/assets/ca-certificates.pem", O_RDONLY | O_NOFOLLOW);
+    if (ca_file < 0)
+        ca_file =
+            open("/data/homebrew/PPSA99001/assets/ca-certificates.pem", O_RDONLY | O_NOFOLLOW);
+    if (ca_file < 0)
+    {
+        slopfin::trace::mark("https: packaged CA certificates missing");
+        return false;
+    }
+    static std::string bundle;
+    char bytes[4096];
+    long count;
+    while ((count = read(ca_file, bytes, sizeof(bytes))) > 0 && bundle.size() <= 512 * 1024)
+        bundle.append(bytes, static_cast<std::size_t>(count));
+    close(ca_file);
+    const auto certificates = slopfin::http::pem_certificates(bundle);
+    if (count < 0 || bundle.size() > 512 * 1024 || certificates.empty())
+        return false;
+    std::vector<HttpsCertificate> items;
+    std::vector<const HttpsCertificate *> list;
+    for (auto pem : certificates)
+        items.push_back({pem.data(), pem.size()});
+    for (const auto &item : items)
+        list.push_back(&item);
+    const int loaded =
+        sceHttpsLoadCert(http, static_cast<int>(list.size()), list.data(), nullptr, nullptr);
+    if (loaded < 0)
+    {
+        slopfin::trace::mark("https: public CA certificates failed " + std::to_string(loaded));
         return false;
     }
     network_template = sceHttpCreateTemplate(http, "SlopFin/0.1 (PlayStation 5)", 2, 0);
@@ -265,6 +307,11 @@ bool WebRequest::open(const std::string &url, const std::string &method,
     if (sent < 0)
     {
         trace::mark("https: send failed " + std::to_string(sent));
+        int ssl_error = 0;
+        if (sceHttpsGetSslError(request, &ssl_error, &certificate_errors_) >= 0 &&
+            certificate_errors_)
+            trace::mark("https: certificate verification failed " +
+                        std::to_string(certificate_errors_));
         return false;
     }
     if (sceHttpGetStatusCode(request, &status_) < 0)

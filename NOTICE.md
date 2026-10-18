@@ -142,3 +142,14 @@ engine (https://github.com/phantomptr/ps5upload), pinned in
 checkout. The project-authored verification helper is GPL-3.0-or-later. The
 packaging tool is a host build dependency and is not linked into SlopFin.
 No proprietary `right.sprx` or publishing SDK is redistributed.
+
+## Public HTTPS trust anchors
+
+`assets/ca-certificates.pem` contains curl's 2026-09-25 extraction of Mozilla's
+public CA roots ([source](https://curl.se/docs/caextract.html)), retained under
+MPL-2.0; the license is packaged in `assets/licenses/Mozilla-MPL-2.0.txt`.
+The appended ISRG Root YR and Root YE certificates come from their publisher,
+[Let's Encrypt](https://letsencrypt.org/certificates/); their cross-signed
+identities were checked against Mozilla-trusted ISRG X1/X2. Certificate
+provenance and console evidence are in
+[UPDATE_TLS.md](docs/development/UPDATE_TLS.md). No private keys are included.

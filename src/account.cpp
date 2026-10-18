@@ -309,7 +309,9 @@ bool open_sandbox(std::string &why) noexcept
     struct stat st = {};
     if (stat("/user/av_contents", &st) == 0)
         return true;
-    const int payload = open("/app0/assets/slopfin-sandbox.bin", O_RDONLY);
+    int payload = open("/app0/assets/slopfin-sandbox.bin", O_RDONLY);
+    if (payload < 0)
+        payload = open("/data/homebrew/PPSA99001/assets/slopfin-sandbox.bin", O_RDONLY);
     if (payload < 0 || fstat(payload, &st) != 0 || st.st_size <= 0 || st.st_size > 1024 * 1024)
     {
         if (payload >= 0)
