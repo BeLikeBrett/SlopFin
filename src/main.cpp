@@ -7,12 +7,14 @@
 #include "app.hpp"
 #include "crash.hpp"
 #include "gfx.hpp"
+#include "icons.hpp"
 #include "pad.hpp"
 #include "ime.hpp"
 #include "player.hpp"
 #include "telemetry.hpp"
 #include "text.hpp"
 #include "trace.hpp"
+#include "ui_common.hpp"
 #include "update.hpp"
 
 #include <cstdint>
@@ -28,6 +30,36 @@ namespace
 {
     for (;;)
         (void)sceKernelUsleep(1000000);
+}
+
+void draw_centered(int y, const char *line, int size, slopfin::text::Weight weight,
+                   slopfin::gfx::Color colour) noexcept
+{
+    using namespace slopfin;
+    text::draw((gfx::kWidth - text::measure(line, size, weight)) / 2, y, line, size, weight,
+               colour);
+}
+
+/* Shown, before anything else, while the app's saved data cannot be opened:
+   the same calm page as the first launch, saying what to do. */
+void draw_storage_help() noexcept
+{
+    using namespace slopfin;
+    using text::Weight;
+    gfx::clear(ui::kPageBottom);
+    gfx::vertical_gradient(0, 0, gfx::kWidth, ui::kPageRamp, ui::kHomeTheme.page_top,
+                           ui::kPageBottom);
+    constexpr int kMark = 120;
+    icons::draw_gradient(icons::Icon::jellyfin, (gfx::kWidth - kMark) / 2, 250, kMark,
+                         gfx::rgb(0xaa, 0x5c, 0xc3), gfx::rgb(0x00, 0xa4, 0xdc));
+    draw_centered(420, "SlopFin can't open its saved data", 48, Weight::bold, gfx::palette::text);
+    draw_centered(500, "Your sign-in and settings are safe and have not been changed.", 26,
+                  Weight::regular, gfx::palette::text_dim);
+    draw_centered(546, "Start your ELF loader, then try again.", 26, Weight::regular,
+                  gfx::palette::text_dim);
+    const char *const label = "Try again";
+    const int chip = ui::button_chip_width(label);
+    (void)ui::draw_button_chip((gfx::kWidth - chip) / 2, 640, icons::Icon::ps_cross, label, true);
 }
 } // namespace
 
@@ -58,16 +90,9 @@ int main()
     {
         do
         {
-            using namespace slopfin;
-            pad::poll();
-            gfx::clear(gfx::palette::background);
-            text::draw(160, 330, "Can't open saved app data", 42, text::Weight::bold,
-                       gfx::palette::text);
-            text::draw(160, 410, "Your saved sign-in and settings have not been changed.", 26,
-                       text::Weight::regular, gfx::palette::text_dim);
-            text::draw(160, 465, "Start ELF Loader, then press X to retry.", 26,
-                       text::Weight::regular, gfx::palette::text);
-            gfx::present();
+            slopfin::pad::poll();
+            draw_storage_help();
+            slopfin::gfx::present();
         } while (!slopfin::pad::pressed(slopfin::pad::Button::cross));
     }
     slopfin::trace::begin();

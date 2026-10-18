@@ -237,13 +237,13 @@ void load() noexcept
         save();
 }
 
-void save() noexcept
+bool save() noexcept
 {
 #ifdef SLOPFIN_HOST
     std::error_code error;
     std::filesystem::create_directories(directory(), error);
     if (error)
-        return;
+        return false;
 #else
     (void)mkdir(directory(), 0700);
 #endif
@@ -322,29 +322,37 @@ void save() noexcept
     const std::string temporary = config_path() + ".tmp";
     // Removing a stale temporary file also restores restrictive permissions.
     (void)::unlink(temporary.c_str());
-    const int file = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (file < 0)
-        return;
-    std::size_t offset = 0;
-    while (offset < text.size())
+    const auto write_to = [&text](const std::string &path)
     {
-        const auto bytes = ::write(file, text.data() + offset, text.size() - offset);
-        if (bytes < 0 && errno == EINTR)
-            continue;
-        if (bytes <= 0)
-            break;
-        offset += static_cast<std::size_t>(bytes);
-    }
-    const bool synced = offset == text.size() && ::fsync(file) == 0;
-    const bool complete = ::close(file) == 0 && synced;
+        const int file = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (file < 0)
+            return false;
+        std::size_t offset = 0;
+        while (offset < text.size())
+        {
+            const auto bytes = ::write(file, text.data() + offset, text.size() - offset);
+            if (bytes < 0 && errno == EINTR)
+                continue;
+            if (bytes <= 0)
+                break;
+            offset += static_cast<std::size_t>(bytes);
+        }
+        const bool synced = offset == text.size() && ::fsync(file) == 0;
+        return ::close(file) == 0 && synced;
+    };
+    const bool complete = write_to(temporary);
 #ifdef SLOPFIN_HOST
     const bool replaced = complete && std::rename(temporary.c_str(), config_path().c_str()) == 0;
 #else
     const bool replaced =
         complete && sceKernelRename(temporary.c_str(), config_path().c_str()) == 0;
 #endif
-    if (!replaced)
-        (void)::unlink(temporary.c_str());
+    if (replaced)
+        return true;
+    (void)::unlink(temporary.c_str());
+    /* Written in place as a last resort: a sign-in that is never stored is
+       lost on the next launch, which is worse than a write that is not atomic. */
+    return complete && write_to(config_path());
 }
 
 double subtitle_offset(const std::string &item_id) noexcept

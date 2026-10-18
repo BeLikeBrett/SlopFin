@@ -65,7 +65,9 @@ Settings &current() noexcept;
 
 /* Reads the stored settings, inventing a device id on first run. */
 void load() noexcept;
-void save() noexcept;
+/* Writes the settings. False when they could not be stored, which leaves
+   whatever was saved before in place. */
+bool save() noexcept;
 
 /* A title's subtitle offset, 0 when it has none. */
 double subtitle_offset(const std::string &item_id) noexcept;

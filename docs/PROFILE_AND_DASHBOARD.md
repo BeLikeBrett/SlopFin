@@ -34,6 +34,10 @@ Administrator accounts can inspect the server from the PS5: current sessions,
 recent activity, devices, libraries, users, scheduled tasks, playback settings,
 general settings, logs and plugins.
 
+**Activity** opens with a **Show activity from** row: Left and Right narrow the
+log to one person, or back to everyone. Only accounts that appear in the recent
+log are offered; server events without an account show under everyone.
+
 Available actions include pausing/stopping sessions, scanning libraries,
 running tasks, managing devices/users/plugins, saving settings, and restarting
 or shutting down the server. Actions that change server state require

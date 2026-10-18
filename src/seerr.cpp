@@ -3274,14 +3274,22 @@ enum class Setting
     disconnect
 };
 
+/* One action at the foot of the list: Connect until connected, then
+   Disconnect. Showing both, with "Connected" beside Connect, said the same
+   thing twice. */
 std::span<const Setting> settings_rows() noexcept
 {
     static constexpr Setting key[] = {Setting::server, Setting::method, Setting::key,
-                                      Setting::connect, Setting::disconnect};
-    static constexpr Setting account[] = {Setting::server,   Setting::method,  Setting::account,
-                                          Setting::password, Setting::connect, Setting::disconnect};
-    return config::current().seerr_auth == 2 ? std::span<const Setting>(key)
-                                             : std::span<const Setting>(account);
+                                      Setting::connect};
+    static constexpr Setting key_on[] = {Setting::server, Setting::method, Setting::key,
+                                         Setting::disconnect};
+    static constexpr Setting account[] = {Setting::server, Setting::method, Setting::account,
+                                          Setting::password, Setting::connect};
+    static constexpr Setting account_on[] = {Setting::server, Setting::method, Setting::account,
+                                             Setting::password, Setting::disconnect};
+    const bool on = g_view.authenticated && !g_view.signing_in;
+    return config::current().seerr_auth == 2 ? std::span<const Setting>(on ? key_on : key)
+                                             : std::span<const Setting>(on ? account_on : account);
 }
 
 const char *settings_row_label(Setting row) noexcept
@@ -3289,9 +3297,9 @@ const char *settings_row_label(Setting row) noexcept
     switch (row)
     {
     case Setting::server:
-        return "Seerr server URL";
+        return "Server address";
     case Setting::method:
-        return "Connect using";
+        return "Sign in with";
     case Setting::key:
         return "API key";
     case Setting::account:
@@ -3299,7 +3307,7 @@ const char *settings_row_label(Setting row) noexcept
     case Setting::password:
         return "Password";
     case Setting::connect:
-        return "Connect";
+        return g_view.signing_in || g_view.refreshing ? "Connecting\xe2\x80\xa6" : "Connect";
     case Setting::disconnect:
         return "Disconnect";
     }
@@ -3313,22 +3321,21 @@ std::string settings_row_value(Setting row) noexcept
     {
     case Setting::server:
         return settings.seerr_host.empty()
-                   ? "requests.example.com or 192.168.1.10:5055"
+                   ? "Not set"
                    : server_address::origin(settings.seerr_host, settings.seerr_port);
     case Setting::method:
         return settings.seerr_auth == 2   ? "API key"
                : settings.seerr_auth == 0 ? "Jellyfin account"
-                                          : "Request-server account";
+                                          : "Seerr account";
     case Setting::key:
         return settings.seerr_api_key.empty() ? "Not set" : "Saved";
     case Setting::account:
-        return g_view.account.empty() ? "Enter…" : g_view.account;
+        return g_view.account.empty() ? "Not set" : g_view.account;
     case Setting::password:
-        return g_view.password.empty() ? "Enter…" : "••••••";
+        return g_view.password.empty()
+                   ? "Not set"
+                   : "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2";
     case Setting::connect:
-        return g_view.signing_in || g_view.refreshing ? "Connecting…"
-               : g_view.authenticated                 ? "Connected"
-                                                      : "";
     case Setting::disconnect:
         return "";
     }
@@ -3340,10 +3347,10 @@ const char *settings_row_hint(Setting row) noexcept
     switch (row)
     {
     case Setting::server:
-        return "Enter your Seerr, Jellyseerr or Overseerr URL, including any port or base path. "
-               "Use the request service address, rather than your Jellyfin media server.";
+        return "The address you open Seerr, Jellyseerr or Overseerr with, including any port or "
+               "base path. This is your request server, not your Jellyfin server.";
     case Setting::method:
-        return "Use your Jellyfin account, a request-server account, or an API key.";
+        return "Left and Right choose your Jellyfin account, a Seerr account, or an API key.";
     case Setting::key:
         return "From Settings > General on your request server. Requests use the server owner's "
                "account.";
@@ -3369,57 +3376,100 @@ void draw_settings() noexcept
 {
     snapshot();
     text::draw(ui::kContentX, kHeaderY, "Discover", 38, Weight::bold, gfx::palette::text);
-    text::draw(ui::kContentX, kHeaderY + 60, "Connect Seerr, Jellyseerr or Overseerr", 25,
-               Weight::medium, gfx::palette::text_dim);
+    text::draw(ui::kContentX, kHeaderY + 58,
+               "Browse and request movies and shows through Seerr, Jellyseerr or Overseerr.", 22,
+               Weight::regular, gfx::palette::text_dim);
+
+    /* Where things stand, in a card of its own above the rows that change it. */
     const auto &settings = config::current();
     std::string state;
-    gfx::Color colour = gfx::palette::text_dim;
+    std::string detail;
+    gfx::Color dot = gfx::rgb(0x6c, 0x70, 0x7a);
+    const std::string address =
+        settings.seerr_host.empty()
+            ? std::string{}
+            : server_address::origin(settings.seerr_host, settings.seerr_port);
     if (settings.seerr_host.empty())
-        state = "Not connected";
+    {
+        state = "Not set up";
+        detail = "Enter your request server's address, then connect.";
+    }
     else if (g_view.signing_in || g_view.refreshing)
-        state = "Connecting…";
+    {
+        state = "Connecting\xe2\x80\xa6";
+        detail = address;
+        dot = gfx::rgb(0xe0, 0xb0, 0x40);
+    }
     else if (g_view.authenticated)
     {
         state = "Connected to " + (g_view.server_title.empty() ? std::string{"your request server"}
                                                                : g_view.server_title);
         if (!g_view.server_version.empty())
             state += " " + g_view.server_version;
-        colour = gfx::palette::success;
+        detail = address;
+        dot = gfx::palette::success;
     }
     else if (!g_view.connection_error.empty() &&
              (!settings.seerr_api_key.empty() || !settings.seerr_cookie.empty()))
     {
-        state = "Connection failed — " + g_view.connection_error;
-        colour = gfx::palette::danger;
+        state = "Couldn't connect";
+        detail = g_view.connection_error;
+        dot = gfx::palette::danger;
     }
     else
-        state = "Not connected — enter your server URL and sign in below.";
-    text::draw_ellipsized(ui::kContentX, kGridY - 46, ui::kContentWidth, state, 24, Weight::regular,
-                          colour);
+    {
+        state = "Not connected";
+        detail = "Sign in below, then choose Connect.";
+    }
+    constexpr int kCardY = kHeaderY + 108;
+    constexpr int kCardH = 96;
+    constexpr int kWidth = 1120;
+    gfx::rounded_rect(ui::kContentX - 16, kCardY, kWidth, kCardH, 18,
+                      gfx::rgba(0xff, 0xff, 0xff, 0x0a));
+    gfx::stroke_rounded_rect(ui::kContentX - 16, kCardY, kWidth, kCardH, 18, 1,
+                             gfx::rgba(0xff, 0xff, 0xff, 0x18));
+    gfx::rounded_rect(ui::kContentX + 10, kCardY + 26, 14, 14, 7, dot);
+    text::draw_ellipsized(ui::kContentX + 42, kCardY + 14, kWidth - 80, state, 26, Weight::medium,
+                          gfx::palette::text);
+    text::draw_ellipsized(ui::kContentX + 42, kCardY + 54, kWidth - 80, detail, 20, Weight::regular,
+                          dot == gfx::palette::danger ? gfx::rgb(0xff, 0x8a, 0x8a)
+                                                      : gfx::palette::text_faint);
+
     const auto rows = settings_rows();
     g_view.settings_row = std::clamp(g_view.settings_row, 0, static_cast<int>(rows.size()) - 1);
+    constexpr int kRowsY = kCardY + kCardH + 30;
+    constexpr int kPitch = 76;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
-        const int y = kGridY + i * 76;
+        const int y = kRowsY + i * kPitch;
         const bool focused = i == g_view.settings_row;
+        const Setting row = rows[static_cast<std::size_t>(i)];
         if (focused)
-            ui::focus_pill(ui::kContentX - 16, y, 1120, 62, ui::FocusGroup::settings,
+            ui::focus_pill(ui::kContentX - 16, y, kWidth, 62, ui::FocusGroup::settings,
                            90 + static_cast<int>(rows.size()));
-        const auto ink = focused ? gfx::palette::text : gfx::palette::text_dim;
-        ui::control_label(ui::kContentX + 8, y, 560, 62, settings_row_label(rows[i]), 28,
+        const bool action = row == Setting::connect || row == Setting::disconnect;
+        /* The action sits a little apart from the details it uses. */
+        if (action && i > 0)
+            gfx::fill_rect(ui::kContentX, y - 8, kWidth - 32, 1, gfx::rgba(0xff, 0xff, 0xff, 0x14));
+        const gfx::Color ink = !focused                     ? gfx::palette::text_dim
+                               : row == Setting::disconnect ? gfx::rgb(0xff, 0x8a, 0x8a)
+                                                            : gfx::palette::text;
+        ui::control_label(ui::kContentX + 8, y, 560, 62, settings_row_label(row), 28,
                           Weight::medium, ink);
-        const auto value = settings_row_value(rows[i]);
+        std::string value = settings_row_value(row);
+        if (focused && row == Setting::method)
+            value = "\xe2\x80\xb9  " + value + "  \xe2\x80\xba";
         text::draw_ellipsized(ui::kContentX + 620,
-                              text::centered_y(y, 62, value, 24, Weight::regular), 480, value, 24,
+                              text::centered_y(y, 62, value, 24, Weight::regular), 460, value, 24,
                               Weight::regular, ink);
     }
-    text::draw_wrapped(ui::kContentX, kGridY + static_cast<int>(rows.size()) * 76 + 20, 1100, 2, 30,
-                       settings_row_hint(rows[static_cast<std::size_t>(g_view.settings_row)]), 22,
-                       Weight::regular, gfx::palette::text_faint);
+    const int hint_y = kRowsY + static_cast<int>(rows.size()) * kPitch + 14;
+    (void)text::draw_wrapped(ui::kContentX, hint_y, kWidth - 32, 2, 30,
+                             settings_row_hint(rows[static_cast<std::size_t>(g_view.settings_row)]),
+                             21, Weight::regular, gfx::palette::text_faint);
     if (!g_view.settings_notice.empty())
-        text::draw_ellipsized(ui::kContentX, kGridY + static_cast<int>(rows.size()) * 76 + 102,
-                              1100, g_view.settings_notice, 24, Weight::medium,
-                              gfx::palette::accent_alt);
+        text::draw_ellipsized(ui::kContentX, hint_y + 74, kWidth - 32, g_view.settings_notice, 22,
+                              Weight::medium, gfx::palette::accent_alt);
 }
 
 void handle_settings_input() noexcept

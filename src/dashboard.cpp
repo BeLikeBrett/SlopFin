@@ -31,6 +31,7 @@
 #include "ui_common.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +40,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace slopfin::dashboard
@@ -162,6 +164,8 @@ struct Row
     bool warning = false;
     std::vector<Action> actions;
     int field = -1; /* index into the page's fields */
+    /* Activity's "who" chooser: Left and Right step through the people. */
+    bool filter = false;
 };
 
 struct PageData
@@ -171,6 +175,16 @@ struct PageData
     /* Settings pages: the document the server sent, and where it goes back. */
     std::unique_ptr<json::Value> config;
     std::string config_key;
+    /* Activity: every entry with the account it concerns, and the people who
+       appear in it, by name, so the list can be narrowed without asking the
+       server again. Jellyfin's log cannot be filtered by user itself. */
+    struct Entry
+    {
+        Row row;
+        std::string user_id;
+    };
+    std::vector<Entry> activity;
+    std::vector<std::pair<std::string, std::string>> people; /* id, name */
 };
 
 const std::vector<Field> &playback_fields() noexcept
@@ -588,17 +602,77 @@ void build_overview(PageData &page, std::string &error) noexcept
     }
 }
 
+/* Jellyfin writes the same account ID with and without dashes, and the
+   server's own events carry an ID of zeros. */
+std::string account_key(std::string id) noexcept
+{
+    std::erase(id, '-');
+    for (char &c : id)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return id.find_first_not_of('0') == std::string::npos ? std::string{} : id;
+}
+
+/* Rebuilds Activity's rows for one person, or for everyone when `who` is
+   empty or no longer in the log. Returns whose rows are shown. */
+std::string show_activity(PageData &page, std::string who) noexcept
+{
+    page.rows.clear();
+    std::string name = "Everyone";
+    bool found = false;
+    for (const auto &person : page.people)
+        if (person.first == who)
+        {
+            name = person.second;
+            found = true;
+        }
+    if (!found)
+        who.clear();
+    if (!page.people.empty())
+    {
+        Row chooser;
+        chooser.kind = Row::Kind::field;
+        chooser.filter = true;
+        chooser.title = "Show activity from";
+        chooser.right = name;
+        page.rows.push_back(std::move(chooser));
+    }
+    for (const auto &entry : page.activity)
+        if (who.empty() || entry.user_id == who)
+            page.rows.push_back(entry.row);
+    if (page.rows.size() == (page.people.empty() ? 0u : 1u))
+        page.rows.push_back(note(who.empty() ? std::string{"Nothing has been recorded yet."}
+                                             : "Nothing recorded for " + name + " recently."));
+    return who;
+}
+
 void build_activity(PageData &page, std::string &error) noexcept
 {
-    json::ValuePtr log = fetch("/System/ActivityLog/Entries?startIndex=0&limit=80", error);
+    json::ValuePtr log = fetch("/System/ActivityLog/Entries?startIndex=0&limit=200", error);
     if (!log)
         return;
     if (const json::Value *items = log->find("Items"))
         for (const json::ValuePtr &entry : items->elements)
             if (entry)
-                page.rows.push_back(activity_row(*entry));
-    if (page.rows.empty())
-        page.rows.push_back(note("Nothing has been recorded yet."));
+                page.activity.push_back(
+                    {activity_row(*entry), account_key(text_of(entry.get(), "UserId"))});
+
+    /* Only the accounts the log mentions are worth offering. */
+    std::string ignored;
+    if (json::ValuePtr users = fetch("/Users", ignored))
+        for (const json::ValuePtr &user : users->elements)
+        {
+            if (!user)
+                continue;
+            const std::string id = account_key(text_of(user.get(), "Id"));
+            const bool mentioned =
+                std::any_of(page.activity.begin(), page.activity.end(),
+                            [&id](const PageData::Entry &entry) { return entry.user_id == id; });
+            if (!id.empty() && mentioned)
+                page.people.emplace_back(id, text_of(user.get(), "Name"));
+        }
+    std::sort(page.people.begin(), page.people.end(),
+              [](const auto &a, const auto &b) { return a.second < b.second; });
+    (void)show_activity(page, {});
 }
 
 void build_devices(PageData &page, std::string &error) noexcept
@@ -993,8 +1067,28 @@ struct View
     std::string prompt_path;
     int prompt_field = -1;
     int log_scroll = 0;
+    /* Whose activity is shown; empty for everyone. Kept across refreshes. */
+    std::string activity_who;
 };
 View g_view;
+
+/* Left or Right on Activity's chooser: the next person, wrapping through
+   Everyone. */
+void step_activity(int direction) noexcept
+{
+    PageData &page = g_view.data;
+    const int count = static_cast<int>(page.people.size()) + 1; /* Everyone first */
+    int at = 0;
+    for (int i = 0; i < static_cast<int>(page.people.size()); ++i)
+        if (page.people[static_cast<std::size_t>(i)].first == g_view.activity_who)
+            at = i + 1;
+    at = (at + direction + count) % count;
+    g_view.activity_who =
+        at == 0 ? std::string{} : page.people[static_cast<std::size_t>(at - 1)].first;
+    g_view.activity_who = show_activity(page, g_view.activity_who);
+    g_view.row = 0;
+    g_view.scroll = 0;
+}
 
 void load_page(PageId id) noexcept
 {
@@ -1411,6 +1505,8 @@ bool handle_input() noexcept
             g_view.data = std::move(*g_shared.arrived);
             g_shared.arrived.reset();
             g_view.data_for = g_shared.arrived_for;
+            if (g_view.data_for == PageId::activity && !g_view.activity_who.empty())
+                g_view.activity_who = show_activity(g_view.data, g_view.activity_who);
             g_view.have_data = true;
             g_view.frames_since_load = 0;
             if (!same)
@@ -1586,6 +1682,9 @@ bool handle_input() noexcept
         move_row(-1);
     else if (pad::pressed(pad::Button::triangle))
         load_page(current_page());
+    else if (row.filter && (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right) ||
+                            pad::pressed(pad::Button::cross)))
+        step_activity(pad::pressed(pad::Button::left) ? -1 : 1);
     else if (field != nullptr &&
              (field->type == FieldType::boolean || field->type == FieldType::choice) &&
              (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right) ||
@@ -1770,6 +1869,8 @@ void draw() noexcept
                     if (field.type == FieldType::boolean || field.type == FieldType::choice)
                         value_text = "\xe2\x80\xb9  " + value_text + "  \xe2\x80\xba";
                 }
+                else if (row.filter)
+                    value_text = "\xe2\x80\xb9  " + value_text + "  \xe2\x80\xba";
                 const int value_w =
                     value_text.empty() ? 0 : text::measure(value_text, 22, Weight::medium);
                 const bool single_line = row.subtitle.empty() && row.progress < 0.0f;
