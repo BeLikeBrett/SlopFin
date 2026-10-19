@@ -2927,12 +2927,13 @@ void draw_sign_in(const std::string &code, const std::string &status, const std:
 {
     enter_welcome_page(Screen::sign_in);
     draw_welcome_footer();
-    draw_centered(150,
-                  "Sign in to " + (server_name.empty() ? std::string{"Jellyfin"} : server_name), 56,
-                  Weight::bold, gfx::palette::text);
-    draw_centered(
-        230, server_address::Address{config::current().host, config::current().port, {}}.display(),
-        22, Weight::regular, gfx::palette::text_faint);
+    /* A server's own name is often a machine name, so it goes on the smaller
+       line beside its address rather than in the heading. */
+    draw_centered(150, "Sign in", 56, Weight::bold, gfx::palette::text);
+    const std::string address =
+        server_address::Address{config::current().host, config::current().port, {}}.display();
+    draw_centered(230, server_name.empty() ? address : server_name + "  \xc2\xb7  " + address, 22,
+                  Weight::regular, gfx::palette::text_faint);
 
     constexpr int kPanelW = 700;
     constexpr int kPanelH = 580;
