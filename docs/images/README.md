@@ -25,10 +25,9 @@ request was submitted for the capture.
 It shows the right-stick prompt and All/Movies/Shows filter. The R3 control cycles all three
 states without moving the catalog focus.
 
-`downloads-console.png` and `updates-console.png` are direct full-resolution PS5
-captures of SlopFin 1.10, showing an active request download and the installed
-version/update check. The owner authorized publishing the displayed
-account/library names. No credentials are visible.
+`updates-console.png` is a direct full-resolution PS5 capture of SlopFin 1.10,
+showing the installed version/update check. The owner authorized publishing the
+displayed account/library names. No credentials are visible.
 
 The Linux preview does not play video or implement the PlayStation system
 keyboard. System keyboard overlays are also absent from SlopFin's own console
