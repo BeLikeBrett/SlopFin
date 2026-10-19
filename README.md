@@ -47,8 +47,6 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 | **Updates** | **Settings** |
 | ![Updates on PS5](docs/images/updates-console.png) | ![Settings](docs/images/settings-preview.png) |
 
-![Request download progress on PS5](docs/images/downloads-console.png)
-
 
 ## What plays, and where it is decoded
 
