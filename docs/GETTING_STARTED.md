@@ -21,6 +21,8 @@ First launch shows a welcome page with one **Server address** field. Select it
 to open the PlayStation keyboard; confirming the address connects straight away.
 **Continue** retries the same address.
 
+![The welcome page on PS5](images/welcome-console.png)
+
 | Example | Connection |
 | --- | --- |
 | `media.example.com` | HTTPS on port 443 |
@@ -49,6 +51,8 @@ SlopFin remembers the sign-in. If the server cannot be reached when the app
 starts, it keeps trying for a few seconds, then shows **Can't reach your
 server** with the sign-in still saved: choose Continue once the server is back.
 Only a server that rejects the saved sign-in asks you to sign in again.
+
+![Quick Connect and password sign-in on PS5](images/signin-console.png)
 
 ## Start watching
 

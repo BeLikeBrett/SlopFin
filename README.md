@@ -13,7 +13,7 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
 
-![SlopFin Home tab](docs/images/home-preview.png)
+![SlopFin Home on PS5](docs/images/home-console.png)
 
 ## PS5 features and controls
 
@@ -41,11 +41,13 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   Administrators can manage sessions, libraries and tasks from the controller.
   [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
 
-| Discover | Choose seasons and quality |
+| First launch | Sign in |
 | --- | --- |
+| ![Welcome page on PS5](docs/images/welcome-console.png) | ![Sign-in page on PS5](docs/images/signin-console.png) |
+| **Discover** | **Choose seasons and quality** |
 | ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
-| **Updates** | **Settings** |
-| ![Updates on PS5](docs/images/updates-console.png) | ![Settings](docs/images/settings-preview.png) |
+| **Your requests** | **Updates** |
+| ![Requests on PS5](docs/images/requests-console.png) | ![Updates on PS5](docs/images/updates-console.png) |
 
 
 ## What plays, and where it is decoded
