@@ -482,12 +482,15 @@ bool probe(const std::string &host, int port, std::string &server_name) noexcept
     return true;
 }
 
-bool mark_played(const std::string &item_id) noexcept
+bool mark_played(const std::string &item_id, bool played) noexcept
 {
-    /* Marking an item played is what removes it from Continue Watching. */
+    /* Marking an item played is what removes it from Continue Watching;
+       unmarking is the same address deleted. */
     const config::Settings &settings = config::current();
+    const std::string path = "/Users/" + settings.user_id + "/PlayedItems/" + item_id;
     const http::Response response =
-        request_post("/Users/" + settings.user_id + "/PlayedItems/" + item_id, "");
+        played ? request_post(path, "")
+               : http::send("DELETE", settings.host, settings.port, path, auth_headers(), {}, {});
     if (!response.ok())
     {
         g_error = "Could not update that item (status " + std::to_string(response.status) + ").";
