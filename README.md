@@ -29,7 +29,8 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
   movies or missing TV seasons, browse episode guides and follow download
   progress. Requests made here refresh Home when Seerr reports new media available.
   Available titles open in Jellyfin when the request server supplies
-  their library ID. Press R3 to cycle All, Movies and Shows; the right-stick
+  their library ID. Triangle searches with the same field as Home, scoped to
+  the media filter. Press R3 to cycle All, Movies and Shows; the right-stick
   prompt beside the filter depresses when pressed.
   [Connect your request server](docs/DISCOVER.md).
 - **Two tabs, Home and Discover:** L1/R1 switch between your Jellyfin library
@@ -49,6 +50,17 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 | **Your requests** | **Updates** |
 | ![Requests on PS5](docs/images/requests-console.png) | ![Updates on PS5](docs/images/updates-console.png) |
 
+
+## How a file reaches the PS5
+
+**MKV and MP4 files play directly** (since 1.15): SlopFin reads them straight
+from your library over HTTP ranges, so the server runs no FFmpeg job, seeks
+use the file's own index and land on the exact frame. Everything else is
+**repackaged or converted by Jellyfin** first: other containers such as AVI,
+image subtitles that must be drawn into the picture, audio the PS5 cannot
+decode as stored, a chosen audio conversion or a quality limit below the
+source. A file that cannot be read directly falls back to the server
+automatically. [Direct play details](docs/development/DIRECT_PLAY.md).
 
 ## What plays, and where it is decoded
 
