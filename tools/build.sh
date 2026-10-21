@@ -113,6 +113,12 @@ pacbrew_packages=()
 pacbrew_includes=()
 pacbrew_archives=()
 [[ -z ${APP_DEFINITIONS:-} ]] || read -r -a definitions <<< "$APP_DEFINITIONS"
+# The version is compiled in as well: an installed package cannot read its own
+# sce_sys/param.json. Digits only, as compile definitions must be; the app puts
+# the dots back.
+content_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["contentVersion"].replace(".", ""))' "$param")
+[[ $content_version =~ ^[0-9]{8}$ ]] || { echo "param.json contentVersion must use NN.NNN.NNN" >&2; exit 2; }
+definitions+=("SLOPFIN_CONTENT_VERSION=$content_version")
 [[ -z ${APP_INCLUDE_PATHS:-} ]] || read -r -a includes <<< "$APP_INCLUDE_PATHS"
 [[ -z ${APP_STATIC_ARCHIVES:-} ]] || read -r -a archives <<< "$APP_STATIC_ARCHIVES"
 [[ -z ${PACBREW_PACKAGES:-} ]] || read -r -a pacbrew_packages <<< "$PACBREW_PACKAGES"

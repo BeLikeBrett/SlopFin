@@ -18,7 +18,10 @@ std::uint64_t version_number(std::string_view text) noexcept;
 std::string display_version(std::string_view text) noexcept;
 bool trusted_download(std::string_view url) noexcept;
 std::string release_notes(std::string_view markdown) noexcept;
-Release select_release(std::string_view feed, std::string_view current) noexcept;
+/* The newest release newer than `current` with an asset for this install:
+   the folder ZIP, or for an installed package the package itself. */
+Release select_release(std::string_view feed, std::string_view current,
+                       bool package = false) noexcept;
 bool stage_archive(const std::string &archive, const std::string &stage, const Release &release,
                    std::string &error) noexcept;
 } // namespace slopfin::update

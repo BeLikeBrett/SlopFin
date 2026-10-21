@@ -160,6 +160,29 @@ FileRegion find_version_records(std::span<const std::uint8_t> elf, std::size_t p
     return {};
 }
 
+bool valid_version_records(std::span<const std::uint8_t> records)
+{
+    if (records.empty())
+        return false;
+    while (!records.empty())
+    {
+        if (records.size() < 5 || records[0] != 0 || records[1] != 0 || records[4] != 8)
+            return false;
+        const std::size_t payload = read_u16(records, 2);
+        if (payload < 18 || payload + 4 > records.size())
+            return false;
+        const auto name = records.subspan(5, payload - 17);
+        if (name.back() != ':' ||
+            std::any_of(name.begin(), name.end(), [](auto c) { return c < 0x20 || c > 0x7e; }))
+            return false;
+        const auto versions = records.subspan(5 + name.size(), 16);
+        if (!std::equal(versions.begin(), versions.begin() + 8, versions.begin() + 8))
+            return false;
+        records = records.subspan(payload + 4);
+    }
+    return true;
+}
+
 Bytes inflate_segment(std::span<const std::uint8_t> input, std::size_t expected, int window_bits)
 {
     Bytes output(expected);
@@ -365,6 +388,13 @@ Bytes extract(std::span<const std::uint8_t> data)
             if (range_in_bounds(segment.file_offset, segment.file_size, data.size()))
                 tail = std::max(tail, segment.file_offset + segment.file_size);
         }
+        // Publishers align the trailer to the declared file size; older folder
+        // builds append it immediately after the last segment. Admit both forms.
+        if (image.file_size >= tail && image.file_size - tail < 0x10 &&
+            range_in_bounds(image.file_size, version.size, data.size()) &&
+            valid_version_records(
+                data.subspan(static_cast<std::size_t>(image.file_size), version.size)))
+            tail = image.file_size;
         if (range_in_bounds(tail, version.size, data.size()) &&
             range_in_bounds(version.offset, version.size, output.size()))
             copy_bytes(output, version.offset,

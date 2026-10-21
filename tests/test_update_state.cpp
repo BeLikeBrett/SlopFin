@@ -27,10 +27,6 @@ int main()
     assert(!shared_storage_ready(folder));
     assert(rmdir(config.c_str()) == 0);
     assert(rmdir(folder) == 0);
-    assert(application_file("eboot.bin") == "/app0/eboot.bin");
-    recovered_storage = true;
-    assert(application_file("eboot.bin") == "/data/homebrew/PPSA99001/eboot.bin");
-    recovered_storage = false;
     assert(storage_error(ENOENT).find("unavailable") != std::string::npos);
     assert(storage_error(EACCES).find("permissions") != std::string::npos);
     assert(storage_error(ENOSPC).find("free space") != std::string::npos);

@@ -1,127 +1,142 @@
 # Native PS5 package
 
-Public releases currently provide the folder download. Native `.pkg` builds
-are available from source for testing; no launch-verified PKG is published.
-Both formats contain the same application. Packaging does not improve playback quality
-or performance. Native packages use Sony's package installer and appear as
-installed applications; the folder uses a homebrew mount service.
+Native packages are on hold: releases ship the folder download only, and
+this route is kept for when console package support matures. What follows is
+the state reached on 2026-10-19, for building and testing from source.
+
+A native `.pkg` carries the same application as the folder. A package installs through Sony's package
+installer and appears under **Media** on the home screen. The folder needs a
+homebrew mount service such as ShadowMount instead. Packaging does not change
+playback quality; native packages also need the A53 selector described below.
+
+The working route was established on 2026-10-19, on firmware 8.20, under the
+separate test identity PPSA99004. The investigation behind it is in the
+[2026-10-19 notes](PKG_INVESTIGATION_2026-10-19.md).
 
 ## Validation status
 
 | Check | Result |
 | --- | --- |
-| 1.10 stored package: container, digests and layout | Passed offline, 2026-10-16 |
-| Stored package: all blocks and inner filesystem walk | Passed; every block read, zero compressed |
-| Byte comparison with source, including executable/metadata normalization | Passed; every source file compared |
-| Earlier compressed package: installer registration | Passed on firmware 8.20, isolated test title PPSA99002 |
-| Earlier compressed package: launch | Blocked at PPR mount; no app startup |
-| 1.10 stored package: console install | Passed on firmware 8.20; installed image matches source through the SI boundary |
-| 1.10 stored package: launch | Not working; media category rejected, game-category comparison stalls before app startup |
-| 1.10 encrypted outer-image comparison | Installed and byte-verified on 8.20; launch returns `0x80020060` before app startup |
+| LibProspero plaintext/no-auth package, media category: install | Passed on 8.20 (PPSA99004); installed image matches the package |
+| Launch with kstuff-lite 1.11 and the ppr-patch A53 selector | Passed on 8.20 |
+| Shared settings recovery, saved server and sign-in | Passed |
+| HTTPS (bundled CA), Home, Discover and Jellyseerr requests | Passed |
+| Version display | Passed (compiled in; the package cannot read its own `param.json`) |
+| Playback: HEVC hardware decode, E-AC-3 bitstream | Passed; ~24 fps, 0 dropped frames, no audio underruns |
+| Launch without the A53 selector | Not tested; expected to stall in PPR mount (see below) |
+| In-app package update | Not yet validated on a console; see [updates](#in-app-updates) |
+| Avatar picker, subtitles, USB paths | Not yet checked in a package |
+| Firmware other than 8.20 | Not tested |
 
-The earlier compressed package stalled inside PPR mounting before the app process started.
-Header validation and `verifyImage` emulation pass; two G6 key-index hooks
-apply, but the mount does not return. Tests used official kstuff-lite 1.11
-and ppr-patch revision `fd4c8224563130e9698d3b2b2f44712826ceb525`
-with the exact retail 8.20 profile. This does not establish compatibility
-with other firmware or identify the cause of the stalled mount.
+Earlier routes did not launch and are kept for reference only. PS5Upload's
+engine, both stored and compressed, installed on 8.20 but stalled in PPR mount
+or returned `0x80a40020`/`0x80020060`. That was on 2026-10-16/17, under
+PPSA99002/PPSA99003. Changing to the game category did not help.
 
-The current build defaults to **stored blocks**, following PS5Upload's
-[uncompressed-package fallback](https://github.com/phantomptr/ps5upload/commit/ab8cbcdd44922df2f11a1df42e5a67bbb7c0f34d)
-for consoles that install compressed packages but cannot launch them. Offline
-validation does not establish that this resolves SlopFin's 8.20 mount stall.
+## What a package needs on the console
 
-The stored 1.10 candidate was also installed under PPSA99002 on 2026-10-16.
-The complete installed image and title metadata were checked against the package;
-the installer then exited before launch testing. With the folder build's media
-category, launch returned `0x80a40020`. Changing only the category to `0` removed
-that immediate error, but the launch call did not return and no new SlopFin
-startup trace appeared. Stored blocks therefore do not resolve the launch
-blocker in this tested setup. No package from these tests is a working release.
+1. **A kernel with plaintext package support.** Official
+   [kstuff-lite](https://github.com/EchoStretch/kstuff-lite/releases) 1.11 was
+   tested. kstuff hands plaintext packages to the kernel with sentinel key
+   indices that only a patched A53 understands.
+2. **The A53 selector**, from drakmor's
+   [ppr-patch](https://github.com/drakmor/ppr-patch), loaded once per boot
+   before any native package starts. Without it, a package is expected to hang
+   while mounting.
 
-On 2026-10-17, the same game-category source was packaged with encrypted outer
-blocks (`PS5UPLOAD_FPKG_IMAGE_MODE=native`), without loading an A53 selector in
-that session. Offline payload comparison and installed-image comparison passed. Both
-launch APIs returned `0x80020060`; SlopFin never started. The normal folder app
-reopened afterward without a restart. This comparison does not establish a fix
-or identify the failing kernel operation.
+   Upstream publishes source only. `tools/build-a53-selector.sh` builds
+   `slopfin-a53-selector.elf` from the pinned ppr-patch revision, with that
+   revision's source alongside it. The payload runs upstream's
+   `--install --idle`. Upstream does the rest:
+   - it refuses any firmware without an exact verified profile (55 layouts);
+   - it leaves an already-installed selector alone;
+   - it reports the result as a console notification.
 
-A subsequent stored-package test used the complete game metadata tuple
-(`applicationCategoryType=0`, `contentBadgeType=1`, and a `launchActivity`
-intent) under PPSA99003. Official kstuff-lite 1.11 and the exact 8.20 A53
-selector ran in a clean session without ShadowMount or etaHEN. Installed bytes
-and metadata matched the candidate, but launch again stalled before app startup
-and later file reads returned I/O errors. Correct game metadata is now staged
-by the native build script; it does not resolve the mount blocker.
+   Send it to your payload loader (elfldr, port 9021) from the home screen, or
+   add it to Payload Manager's autoload after kstuff. Do not load it while a
+   native package is starting or running.
+3. **An installer for finalized PS5 packages**, such as
+   [PS5Upload](https://github.com/phantomptr/ps5upload). An accepted install
+   request alone does not prove that content landed; check that the title
+   appears.
 
-Use the folder build for normal use. A stalled package mount can require a
-console restart; do not change selectors while package I/O is outstanding.
-[Compatibility](../COMPATIBILITY.md) covers the separate folder playback results.
+The folder and the release package share PPSA99001. Choose one install method
+and remove the other copy first. Settings live in `/data/slopfin/config.json`
+and are kept by both.
 
-## Installation requirements (experimental)
+## Sandbox differences
 
-Until the mount blocker above is resolved, use the folder ZIP for normal use.
-Native testing requires a compatible jailbroken console with current FPKG
-support. Firmware
-8.20 is the current SlopFin test target. Support ranges claimed by payloads do
-not constitute SlopFin hardware validation on other firmware.
+These are why some code paths differ between a package and the folder build:
 
-1. Check the [kstuff release notes](https://github.com/EchoStretch/kstuff-lite/releases)
-   and the [A53/PPR selector documentation](https://github.com/drakmor/ppr-patch).
-   Native plaintext packages need both matching kernel mount logic and the A53
-   selector. A53 installation requires the console's package I/O to be idle.
-   Follow those projects' firmware and setup instructions.
-2. Use [PS5Upload](https://github.com/phantomptr/ps5upload) or another installer
-   explicitly supporting finalized PS5 FIH packages. Its stream-install path
-   installed the SlopFin test package successfully. An accepted install request
-   alone does not prove that content landed; check for the installed title.
-3. Install the SlopFin `.pkg`, then launch its home-screen entry. On first use,
-   enter your Jellyfin server, then sign in. Settings are stored independently
-   at `/data/slopfin/config.json`.
+- A package starts without `/data`. The storage helper
+  (`assets/slopfin-storage.bin`) changes the process root before settings load.
+- `_openat` returns `EPERM`, and `dup` fails after the root change.
+  `/mnt/sandbox` and `app0/sce_sys` are root-only. `src/app_files.hpp` reads
+  the app's own files (CA bundle, helper payloads) into memory at startup,
+  before any of that applies.
+- The package cannot read `sce_sys/param.json`. The version shown in Settings
+  is compiled in from it by `tools/build.sh`. An unreadable `param.json` is
+  also how the app detects that it runs as a package.
+- Never call `fstatfs`: the console's structure is larger than the SDK's, and
+  the call smashed the stack.
 
-The folder and release package share PPSA99001. Choose one installation method;
-do not register both copies of that title simultaneously. Back up account
-settings before changing methods. The automated folder deploy command does not
-install native packages or change your jailbreak.
+## In-app updates
 
-`.ffpkg` and `.ffpfsc` are filesystem images for a mount service. They are not
-native packages and must not be submitted to Sony's package installer.
+An installed package updates from the release's `SlopFin-<version>.pkg`.
+The steps are:
+
+1. The app downloads the package to `/data/slopfin/update/` and checks its
+   SHA-256 against GitHub's digest.
+2. It hands `assets/slopfin-pkg-update.bin` a request naming its process,
+   title, package size and digest, and the new version.
+3. The helper verifies the package and that its content ID matches the
+   running title, then reports "ready". The app closes.
+4. The helper uninstalls the old copy and waits until the title is gone.
+   Installing over the copy that had just closed took the whole console
+   offline in testing. It then installs the new package from a local-only
+   HTTP server.
+5. It confirms that the installed version and bytes match, deletes the
+   download, and relaunches SlopFin.
+
+This flow has host tests but has not yet completed on a console.
 
 ## Build from source
 
-Install Rust/Cargo (tested with 1.99.0) alongside the normal native build tools.
-Run from the repository root:
+Requirements are the normal native build, plus the .NET 10 SDK. Run from the
+repository root:
 
 ```sh
-make fpkg PS5_CLANG=/usr/bin/clang
+make fpkg PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
+bash tools/build-a53-selector.sh
 ```
 
-For the optional software-audio build, first follow the dependency preparation
-in the [build guide](BUILD.md), then build with `SOFTWARE_AUDIO=1`.
-Output is `dist/native-pkg/UP9000-PPSA99001_00-SLOPFIN000000000.pkg`, plus its
-checksum, input manifest, build log and verification report.
+`tools/build-native-pkg.sh` fetches UltraPack's wrapper at a pinned revision
+into ignored `.deps/`. It verifies the shipped LibProsperoPkg checksum, then
+applies `tools/native-pkg/homebrew-patcher`. The patcher stops the library
+inserting Sony's `right.sprx`, which must not be redistributed, and removes
+its embedded copy. The patched library's checksum is checked too.
 
-The build fetches public GPL tooling from PS5Upload revision
-`c16e5ab26463c238cc1265d0c2d5e2c32b349d59` (v7.0.31) into ignored `.deps/`. It uses
-plaintext/no-auth package markers, native block layout with stored blocks and license-free
-homebrew data; no proprietary publishing SDK or `right.sprx` is bundled.
-The engine adjusts executable signatures/version padding and installed-package
-metadata only in the packaged copy. The folder build remains byte-for-byte
-unchanged. Native staging selects the game category, matching badge and launch
-intent; the folder retains its media category. The additional verifier reads
-every block, rejects compressed blocks in stored mode, walks inner file paths,
-checks all source files and verifies container artwork.
+The package is built deterministically, so the same input gives the same
+bytes. `tools/native-pkg/package-check` then reads back every block, chunk and
+file. `compare_libprospero.py` compares each extracted file with the source.
 
-For an isolated install test that preserves the normal title registration:
+Output goes to `dist/native-pkg/`:
+
+- `SlopFin-<version>.pkg`
+- its checksum, verification report and comparison report
+- `slopfin-a53-selector.elf`, with the ppr-patch source tarball
+
+CI does not build or publish these while native packages are on hold.
+
+For an isolated console test that leaves the normal title alone:
 
 ```sh
-NATIVE_PKG_TITLE_ID=PPSA99002 make fpkg PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
+NATIVE_PKG_TITLE_ID=PPSA99004 bash tools/build-native-pkg.sh
 ```
 
-This stages a separate identity named SlopFin Package Test. Use an unused title
-ID and close SlopFin before testing; both identities use the same saved settings.
+That gives a separate entry named SlopFin Package Test. It shares the saved
+settings, so close SlopFin before testing. `NATIVE_PKG_VERSION=01.000.015`
+overrides the package version, for update tests.
 
-For a compression comparison, set `NATIVE_PKG_COMPRESSION=balanced` (also accepts
-`fast` or `smallest`). `stored` is the default. Compression only changes package
-size; it does not improve playback. Keep these comparisons local until the
-corresponding package has been installed and launched on the target firmware.
+`.ffpkg` and `.ffpfsc` are filesystem images for a mount service. They are not
+native packages and must not be submitted to Sony's package installer.

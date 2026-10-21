@@ -99,6 +99,21 @@ int main(int argc, char **argv)
     auto feed = "[{\"tag_name\":\"01.000.001\",\"draft\":false,\"prerelease\":true,\"assets\":[" +
                 asset + "]}]";
     assert(select_release(feed, "01.000.000").version == "01.000.001");
+    // An installed package takes the release's package, never its folder ZIP.
+    assert(select_release(feed, "01.000.000", true).version.empty());
+    {
+        const std::string pkg =
+            "{\"name\":\"SlopFin-01.000.001.pkg\",\"state\":\"uploaded\",\"size\":25053222,"
+            "\"browser_download_url\":\"https://github.com/BeLikeBrett/SlopFin/releases/download/"
+            "01.000.001/SlopFin-01.000.001.pkg\",\"digest\":\"sha256:" +
+            std::string(64, 'b') + "\"}";
+        const auto both = "[{\"tag_name\":\"01.000.001\",\"draft\":false,\"assets\":[" + asset +
+                          "," + pkg + "]}]";
+        const auto chosen = select_release(both, "01.000.000", true);
+        assert(chosen.version == "01.000.001" && chosen.digest == std::string(64, 'b') &&
+               chosen.url.ends_with("/SlopFin-01.000.001.pkg") && chosen.size == 25053222);
+        assert(select_release(both, "01.000.000").url.ends_with("-folder.zip"));
+    }
     assert(select_release(feed, "01.000.001").version.empty());
     auto short_feed = feed;
     for (auto at = short_feed.find("01.000.001"); at != std::string::npos;

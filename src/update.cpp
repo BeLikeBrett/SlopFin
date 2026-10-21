@@ -5,10 +5,15 @@
 #include "update_download.hpp"
 #include "trace.hpp"
 #include "update/files.h"
+#include "update/storage_request.h"
+#include "update/pkg_request.h"
+#include "app_files.hpp"
 #include "background.hpp"
 #include "http.hpp"
 #include "json.hpp"
 #include <atomic>
+#include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <memory>
 #include <cstdlib>
@@ -21,12 +26,6 @@ std::mutex mutex;
 Status state;
 Release release;
 std::atomic<bool> restart{false};
-std::atomic<bool> recovered_storage{false};
-[[maybe_unused]] std::string application_file(std::string_view path)
-{
-    return std::string(recovered_storage ? "/data/homebrew/PPSA99001/" : "/app0/") +
-           std::string(path);
-}
 std::string base()
 {
 #ifdef SLOPFIN_HOST
@@ -37,10 +36,9 @@ std::string base()
     return "/data/slopfin/update";
 #endif
 }
-std::string small_file(const std::string &path, std::size_t max = 65536)
+std::string small_descriptor(int fd, std::size_t max)
 {
     struct stat st = {};
-    int fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0)
         return {};
     if (fstat(fd, &st) < 0 || st.st_size < 0 || static_cast<std::size_t>(st.st_size) > max)
@@ -62,6 +60,49 @@ std::string small_file(const std::string &path, std::size_t max = 65536)
         return {};
     return text;
 }
+std::string small_file(const std::string &path, std::size_t max = 65536)
+{
+    return small_descriptor(open(path.c_str(), O_RDONLY | O_NOFOLLOW), max);
+}
+[[maybe_unused]] std::string small_application_file(std::string_view path, std::size_t max = 65536)
+{
+    return app_files::contents(path, max);
+}
+[[maybe_unused]] int application_hash(std::string_view path, char hex[65])
+{
+    return app_files::hash(path, hex) ? 0 : -1;
+}
+#ifndef SLOPFIN_HOST
+extern "C" int sceKernelGetAppInfo(int pid, void *info);
+#endif
+/* This process's title ID, as the system registered it (PPSA plus five digits). */
+[[maybe_unused]] bool running_title(char out[10])
+{
+#ifdef SLOPFIN_HOST
+    (void)out;
+    return false;
+#else
+    /* 0x60 bytes; the title ID starts at offset 16, as measured on hardware. */
+    alignas(8) unsigned char info[0x60] = {};
+    if (sceKernelGetAppInfo(getpid(), info) != 0)
+        return false;
+    std::memcpy(out, info + 16, 9);
+    out[9] = 0;
+    return sf_pkg_title_valid(out);
+#endif
+}
+/* The version this build was made as, from param.json at build time. */
+std::string compiled_version()
+{
+#ifdef SLOPFIN_CONTENT_VERSION
+#define SLOPFIN_TEXT_(x) #x
+#define SLOPFIN_TEXT(x) SLOPFIN_TEXT_(x)
+    const std::string digits = SLOPFIN_TEXT(SLOPFIN_CONTENT_VERSION);
+    if (digits.size() == 8)
+        return digits.substr(0, 2) + "." + digits.substr(2, 3) + "." + digits.substr(5, 3);
+#endif
+    return {};
+}
 void initialize()
 {
     static std::once_flag once;
@@ -71,15 +112,21 @@ void initialize()
 #ifdef SLOPFIN_HOST
                        const auto param = json::parse(small_file("sce_sys/param.json"));
 #else
-            const auto param = json::parse(small_file(application_file("sce_sys/param.json")));
+            const auto param = json::parse(small_application_file("sce_sys/param.json"));
 #endif
                        std::lock_guard<std::mutex> lock(mutex);
-                       state.current =
-                           param ? std::string(param->str("contentVersion")) : "Unknown";
+                       const std::string compiled = compiled_version();
+                       state.current = param && !param->str("contentVersion").empty()
+                                           ? std::string(param->str("contentVersion"))
+                                       : !compiled.empty() ? compiled
+                                                           : "Unknown";
                        state.message = small_file(base() + "/result", 512);
                        if (state.message == "ready")
                            state.message =
                                "The previous update did not finish. Check again to retry.";
+                       /* Said once, on the launch after the update, not forever. */
+                       if (!state.message.empty())
+                           (void)unlink((base() + "/result").c_str());
                    });
 }
 bool busy(Phase p)
@@ -144,26 +191,44 @@ bool recover_storage()
 #ifdef SLOPFIN_HOST
     return false;
 #else
-    const auto payload = small_file(application_file("assets/slopfin-storage.bin"), 256 * 1024);
-    if (payload.empty() || (unlink("/download0/slopfin-storage-result") < 0 && errno != ENOENT) ||
-        (unlink("/download0/slopfin-storage-pid") < 0 && errno != ENOENT))
+    /* Each early return says why: without shared data this goes to the
+       kernel log, the only diagnostics an installed package has here. */
+    const auto fail = [](const char *step)
+    {
+        trace::mark(std::string("storage: recovery stopped at ") + step + ", errno " +
+                    std::to_string(errno));
         return false;
+    };
+    const auto payload = small_application_file("assets/slopfin-storage.bin", 256 * 1024);
+    if (payload.empty())
+        return fail("reading the helper");
+    if ((unlink("/download0/slopfin-storage-result") < 0 && errno != ENOENT) ||
+        (unlink("/download0/slopfin-storage-request") < 0 && errno != ENOENT))
+        return fail("clearing download0");
     /* The descriptor remains readable when the helper changes this process's root. */
     const int result =
         open("/download0/slopfin-storage-result", O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
     if (result < 0)
-        return false;
+        return fail("creating the result in download0");
     const int request =
-        open("/download0/slopfin-storage-pid", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
-    const std::string pid = std::to_string(getpid());
+        open("/download0/slopfin-storage-request", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    const std::string identity = std::string(SF_STORAGE_REQUEST_PREFIX) + std::to_string(getpid()) +
+                                 "\n" + std::to_string(app_files::application.descriptor()) + "\n" +
+                                 std::to_string(result) + "\n";
+    sf_storage_request parsed = {};
     const bool prepared =
         fchmod(result, 0666) == 0 && request >= 0 &&
-        write(request, pid.data(), pid.size()) == static_cast<ssize_t>(pid.size()) &&
+        sf_storage_parse_request(identity.data(), identity.size(), &parsed) == 0 &&
+        write(request, identity.data(), identity.size()) == static_cast<ssize_t>(identity.size()) &&
         fchmod(request, 0644) == 0;
     if (request >= 0)
         close(request);
     bool ready = false;
-    if (prepared && http::send_bytes("127.0.0.1", 9021, payload))
+    if (!prepared)
+        (void)fail("writing the request");
+    else if (!http::send_bytes("127.0.0.1", 9021, payload))
+        (void)fail("sending the helper to the ELF loader");
+    else
         for (unsigned i = 0; i < 50; ++i)
         {
             char response[16] = {0};
@@ -178,8 +243,8 @@ bool recover_storage()
             nanosleep(&wait, nullptr);
         }
     close(result);
-    if (ready)
-        recovered_storage = true;
+    trace::mark(ready ? "storage: recovery helper reported ready"
+                      : "storage: recovery helper did not report ready");
     return ready;
 #endif
 }
@@ -207,8 +272,11 @@ bool prepare_storage() noexcept
 #ifdef SLOPFIN_HOST
     return true;
 #else
+    if (!app_files::capture())
+        return false;
     if (shared_storage_ready("/data/slopfin"))
         return true;
+    trace::mark("storage: /data/slopfin is not reachable, errno " + std::to_string(errno));
     return recover_storage() && shared_storage_ready("/data/slopfin");
 #endif
 }
@@ -276,7 +344,7 @@ void check() noexcept
                 failure("The release check was interrupted. Try again.");
                 return;
             }
-            const auto found = select_release(feed, current);
+            const auto found = select_release(feed, current, app_files::installed_package());
             std::lock_guard<std::mutex> lock(mutex);
             release = found;
             state.version = found.version;
@@ -304,7 +372,9 @@ void download() noexcept
     run_update(
         [selected]
         {
-            const std::string folder = base(), path = folder + "/release.zip";
+            const bool package = app_files::installed_package();
+            const std::string folder = base(),
+                              path = folder + (package ? "/release.pkg" : "/release.zip");
             unlink((folder + "/staged/manifest").c_str());
             if (sf_update_dirs(path.c_str()) < 0)
             {
@@ -382,7 +452,20 @@ void download() noexcept
                 state.message = "Verifying and preparing the update...";
             }
             std::string error;
-            if (!stage_archive(path, folder + "/staged", selected, error))
+            if (package)
+            {
+                /* The system installer takes the package whole; it only has
+                   to be exactly the file GitHub published. */
+                char digest[65];
+                if (sf_update_hash_file(path.c_str(), digest) < 0 || selected.digest != digest)
+                {
+                    unlink(path.c_str());
+                    failure("The downloaded package did not match GitHub's checksum. Your app "
+                            "is unchanged. Try again.");
+                    return;
+                }
+            }
+            else if (!stage_archive(path, folder + "/staged", selected, error))
             {
                 failure(error);
                 return;
@@ -411,21 +494,54 @@ void install() noexcept
         []
         {
             const std::string folder = base();
-            /* Require the running folder to match before replacing anything. */
-            char executable[65], param[65];
-            if (sf_update_hash_file(application_file("eboot.bin").c_str(), executable) < 0 ||
-                sf_update_hash_file(application_file("sce_sys/param.json").c_str(), param) < 0 ||
-                !save(folder + "/source", std::string(executable) + "\n" + param + "\n") ||
-                !save(folder + "/pid", std::to_string(getpid())))
+            std::string payload;
+            if (app_files::installed_package())
             {
-                failure("Could not identify this app folder. Your app was not changed.");
-                return;
+                /* The helper installs this title's package over itself. It
+                   needs the running title and the download it must match. */
+                Release selected;
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    selected = release;
+                }
+                sf_pkg_request request{};
+                request.pid = getpid();
+                if (!running_title(request.title))
+                {
+                    failure("Could not identify this installed app. Your app was not changed.");
+                    return;
+                }
+                std::snprintf(request.sha256, sizeof(request.sha256), "%s",
+                              selected.digest.c_str());
+                std::snprintf(request.version, sizeof(request.version), "%s",
+                              selected.version.c_str());
+                request.size = selected.size;
+                char text[SF_PKG_REQUEST_MAX];
+                const int length = sf_pkg_request_format(&request, text, sizeof(text));
+                if (length < 0 || !save(folder + "/pkg-request", std::string(text, length)))
+                {
+                    failure("Could not prepare the update request. Your app was not changed.");
+                    return;
+                }
+                payload = small_application_file("assets/slopfin-pkg-update.bin", 1024 * 1024);
             }
-            const auto payload =
-                small_file(application_file("assets/slopfin-update.bin"), 1024 * 1024);
+            else
+            {
+                /* Require the running folder to match before replacing anything. */
+                char executable[65], param[65];
+                if (application_hash("eboot.bin", executable) < 0 ||
+                    application_hash("sce_sys/param.json", param) < 0 ||
+                    !save(folder + "/source", std::string(executable) + "\n" + param + "\n") ||
+                    !save(folder + "/pid", std::to_string(getpid())))
+                {
+                    failure("Could not identify this app folder. Your app was not changed.");
+                    return;
+                }
+                payload = small_application_file("assets/slopfin-update.bin", 1024 * 1024);
+            }
             if (payload.empty())
             {
-                failure("The update helper is missing. Install the full release folder.");
+                failure("The update helper is missing. Install the full release.");
                 return;
             }
             /* A helper writes 'ready' only after validating files and saving a backup. */
@@ -437,7 +553,7 @@ void install() noexcept
                     "jailbreak tools, then retry Install. The verified download is saved.");
                 return;
             }
-            for (unsigned i = 0; i < 150; ++i)
+            for (unsigned i = 0; i < 300; ++i)
             {
                 const auto result = small_file(folder + "/result", 512);
                 if (result == "ready")

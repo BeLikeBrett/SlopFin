@@ -6,6 +6,9 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
 struct HttpsCertificate
 {
     const char *data;
@@ -35,10 +38,44 @@ void mark(std::string_view) noexcept
 } // namespace slopfin::trace
 extern "C"
 {
-    int open(const char *, int, ...)
+    /* A packaged /app0 holding only the CA bundle; every other file is absent. */
+    int open(const char *path, int flags, ...)
     {
+        if (std::string_view(path) != "/app0")
+        {
+            errno = ENOENT;
+            return -1;
+        }
+        assert((flags & (O_DIRECTORY | O_NOFOLLOW)) == (O_DIRECTORY | O_NOFOLLOW));
+        return 121;
+    }
+    int _openat(int parent, const char *path, int flags, ...)
+    {
+        assert(flags & O_NOFOLLOW);
+        if (parent == 121 && std::string_view(path) == "assets" && (flags & O_DIRECTORY))
+            return 122;
+        if (parent == 122 && std::string_view(path) == "ca-certificates.pem")
+        {
+            ca_offset = 0;
+            return 123;
+        }
+        errno = ENOENT;
+        return -1;
+    }
+    int fstat(int fd, struct stat *st)
+    {
+        assert(fd >= 121 && fd <= 123);
+        *st = {};
+        st->st_mode = fd == 123 ? S_IFREG : S_IFDIR;
+        st->st_size = fd == 123 ? static_cast<off_t>(ca_bundle.size()) : 0;
+        st->st_ino = static_cast<ino_t>(fd);
+        return 0;
+    }
+    off_t lseek(int fd, off_t offset, int whence)
+    {
+        assert(fd == 123 && whence == SEEK_SET && offset == 0);
         ca_offset = 0;
-        return 123;
+        return 0;
     }
     long read(int fd, void *buffer, std::size_t size)
     {
@@ -50,7 +87,7 @@ extern "C"
     }
     int close(int fd)
     {
-        assert(fd == 123);
+        assert(fd >= 121 && fd <= 123);
         return 0;
     }
     int sceNetPoolCreate(const char *, int, int)

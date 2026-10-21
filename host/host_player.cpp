@@ -9,6 +9,7 @@
 
 #include "../src/player.hpp"
 #include "../src/playback_options.hpp"
+#include "../src/stream_failure.hpp"
 
 #include "../src/audio.hpp"
 #include "../src/audiocaps.hpp"
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <pthread.h>
@@ -174,6 +176,13 @@ bool start(const jellyfin::PlaybackRequest &request, const std::string &title,
     g_status.delivery_info = "host preview, no decode";
     g_status.video_decode_info = "Simulated on Linux; no video decode";
     g_status.audio_decode_info = "Simulated on Linux; no audio decode";
+    /* Shows the console's refused-stream screen for an HTTP status (0: none). */
+    if (const char *refused = std::getenv("SLOPFIN_PREVIEW_STREAM_STATUS"))
+    {
+        g_status.state = State::failed;
+        g_status.message = stream_failure_message(std::atoi(refused));
+        return true;
+    }
     restart_clock(request.start_seconds);
 
     if (!g_fetching.exchange(true))

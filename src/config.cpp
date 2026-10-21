@@ -71,6 +71,7 @@ const std::string &config_path() noexcept
 
 slopfin::config::Settings g_settings;
 bool g_loaded = false;
+int g_load_error = 0;
 
 extern "C" int mkdir(const char *path, unsigned int mode);
 
@@ -104,6 +105,7 @@ void load() noexcept
     g_loaded = true;
     g_settings = Settings{};
     const int file = ::open(config_path().c_str(), O_RDONLY);
+    g_load_error = file < 0 ? errno : 0;
     const bool missing = file < 0 && errno == ENOENT;
     bool parsed = false;
     bool migrated = false;
@@ -131,6 +133,8 @@ void load() noexcept
         }
         (void)::close(file);
         const json::ValuePtr root = complete ? json::parse(text) : nullptr;
+        if (root == nullptr || root->type != json::Type::object)
+            g_load_error = -1;
         if (root != nullptr && root->type == json::Type::object)
         {
             parsed = true;
@@ -353,6 +357,16 @@ bool save() noexcept
     /* Written in place as a last resort: a sign-in that is never stored is
        lost on the next launch, which is worse than a write that is not atomic. */
     return complete && write_to(config_path());
+}
+
+int load_error() noexcept
+{
+    return g_load_error;
+}
+
+std::string data_directory() noexcept
+{
+    return directory();
 }
 
 double subtitle_offset(const std::string &item_id) noexcept

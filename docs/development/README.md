@@ -11,7 +11,7 @@ All commands run from the repository root.
 | Validate a change | [Testing](TESTING.md) |
 | Work on hardware video | [Video decode](VIDEO_DECODE.md) and [HDR](HDR.md) |
 | Work on audio | [Audio paths](AUDIO.md) and [software decoder](SOFTWARE_AUDIO.md) |
-| Build the experimental native package | [Native FPKG](NATIVE_FPKG.md) |
+| Build the native package and A53 selector | [Native FPKG](NATIVE_FPKG.md) |
 | Investigate a crash | [Diagnostic internals](DIAGNOSTICS.md) |
 
 ## Tooling references

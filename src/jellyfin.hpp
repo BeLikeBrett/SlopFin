@@ -244,6 +244,9 @@ struct PlaybackRequest
     bool allow_software_audio = false; /* opt-in CPU streaming trial */
     bool allow_bitstream = false;      /* E-AC-3 and DTS may be copied for the TV to decode */
     bool allow_dv_hdr10_base = false;  /* opt-in, metadata-validated base-layer trial */
+    /* Leave MKV and MP4 to the server's remux, as before direct play: the
+       fallback when a file cannot be read here. */
+    bool server_remux = false;
 };
 
 struct PlaybackPlan
@@ -255,7 +258,10 @@ struct PlaybackPlan
     std::string audio_profile;
     int audio_channels = 2;
     int audio_sample_rate = 0; /* selected source track; sink requires 48000 */
-    bool direct = false;       /* static TS direct play; false can still copy video */
+    bool direct = false;       /* the file itself is read; false can still copy video */
+    std::string container;     /* direct play only: "ts", "mkv" or "mp4" */
+    long long size = 0;        /* direct play only: the file's bytes, 0 when unknown */
+    int audio_ordinal = -1;    /* selected audio among the file's own audio tracks */
     bool hdr = false;          /* source is BT.2020 PQ and needs tone mapping */
     bool dv_hdr10_base = false;
     std::string source_video_range;

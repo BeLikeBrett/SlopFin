@@ -8,7 +8,9 @@
 
 #include "bigalloc.hpp"
 #include "gfx.hpp"
+#include "config.hpp"
 #include "http.hpp"
+#include "image_cache.hpp"
 #include "jellyfin.hpp"
 #include "trace.hpp"
 
@@ -155,6 +157,7 @@ std::chrono::steady_clock::time_point g_warm_began{};
 bool g_warm_reported = true;
 long g_warm_loaded = 0;
 long g_warm_failed = 0;
+long g_warm_disk = 0; /* of those loaded, how many came from the SSD */
 /* Microseconds: a poster decodes in well under a millisecond, so summing
    whole milliseconds per job summed to zero. */
 std::uint64_t g_warm_fetch_us = 0;
@@ -420,7 +423,8 @@ void evict_locked(long free_mib) noexcept
  * of a run, for the caller to trace outside the lock; empty otherwise.
  */
 std::string complete_job(const Job &job, const slopfin::gfx::Bitmap &bitmap, int status,
-                         std::uint64_t fetch_us = 0, std::uint64_t decode_us = 0)
+                         std::uint64_t fetch_us = 0, std::uint64_t decode_us = 0,
+                         bool from_disk = false)
 {
     std::lock_guard<std::mutex> guard(g_mutex);
     Entry &entry = g_entries[job.key];
@@ -453,6 +457,7 @@ std::string complete_job(const Job &job, const slopfin::gfx::Bitmap &bitmap, int
     if (bitmap.valid())
     {
         ++g_warm_loaded;
+        g_warm_disk += from_disk ? 1 : 0;
         g_warm_fetch_us += fetch_us;
         g_warm_decode_us += decode_us;
     }
@@ -470,8 +475,9 @@ std::string complete_job(const Job &job, const slopfin::gfx::Bitmap &bitmap, int
         const auto loaded = static_cast<std::uint64_t>(std::max(1L, g_warm_loaded));
         const std::uint64_t decode_us = g_warm_decode_us / loaded;
         summary =
-            ("images: warm done, " + std::to_string(g_warm_loaded) + " loaded, " +
-             std::to_string(g_warm_failed) + " failed, in " + std::to_string(took / 1000) + "." +
+            ("images: warm done, " + std::to_string(g_warm_loaded) + " loaded (" +
+             std::to_string(g_warm_disk) + " from disk), " + std::to_string(g_warm_failed) +
+             " failed, in " + std::to_string(took / 1000) + "." +
              std::to_string((took % 1000) / 100) + " s; fetch avg " +
              std::to_string(g_warm_fetch_us / loaded / 1000u) + " ms, decode avg " +
              std::to_string(decode_us / 1000u) + "." + std::to_string(decode_us % 1000u / 100u) +
@@ -543,7 +549,18 @@ void *worker(void *) noexcept
         std::vector<unsigned char> encoded;
         std::size_t local_size = 0;
         unsigned char *local_bytes = nullptr;
-        if (local)
+        /* Server artwork is named by its tag, so a kept copy is always current;
+           a picture from the gallery is already on the console. */
+        const std::string cache_key =
+            local                                  ? std::string{}
+            : std::strcmp(job.kind, "Remote") == 0 ? "remote|" + job.item_id
+            : job.tag.empty()                      ? std::string{}
+                              : std::string(job.kind) + "|" + job.item_id + "|" + job.tag + "|" +
+                                    std::to_string(job.height);
+        const bool cached = !cache_key.empty() && slopfin::image_cache::load(cache_key, encoded);
+        if (cached)
+            status = 200;
+        else if (local)
         {
             local_bytes = read_local_file(job.item_id, local_size);
             status = local_bytes != nullptr ? 200 : 404;
@@ -564,6 +581,7 @@ void *worker(void *) noexcept
         }
         const unsigned char *source = local_bytes != nullptr ? local_bytes : encoded.data();
         const std::size_t source_size = local_bytes != nullptr ? local_size : encoded.size();
+        bool keep = !cached && !cache_key.empty() && status == 200 && source_size > 0;
         const auto decode_began = std::chrono::steady_clock::now();
 
         slopfin::gfx::Bitmap bitmap;
@@ -581,6 +599,10 @@ void *worker(void *) noexcept
                 valid ? stbi_load_from_memory(source, static_cast<int>(source_size), &width,
                                               &height, &channels, 4)
                       : nullptr;
+            /* Only what decoded is worth keeping. */
+            if (keep && pixels != nullptr)
+                slopfin::image_cache::store(cache_key, source, source_size);
+            keep = false;
             if (local_bytes != nullptr)
             {
                 slopfin::bigalloc::release(local_bytes);
@@ -626,7 +648,7 @@ void *worker(void *) noexcept
         };
         const auto ms = [&us](auto from, auto to) { return us(from, to) / 1000u; };
         const std::string summary = complete_job(job, bitmap, status, us(fetch_began, decode_began),
-                                                 us(decode_began, finished));
+                                                 us(decode_began, finished), cached);
         if (!summary.empty())
             slopfin::trace::mark(summary);
         g_free_mib.store(available_memory_mib());
@@ -667,6 +689,18 @@ bool start() noexcept
     if (g_running)
         return true;
     g_free_mib.store(available_memory_mib());
+    /* The server's own JPEGs, kept byte for byte: already compressed, so
+       nothing smaller is possible without re-encoding them worse. A poster is
+       ~50 KiB and a backdrop ~80 KiB, so this holds thousands of titles; past
+       it the oldest pictures go first. */
+    constexpr std::uint64_t kDiskCacheMiB = 1024;
+    if (!slopfin::image_cache::configure(config::data_directory() + "/cache/images",
+                                         kDiskCacheMiB << 20))
+        trace::mark("images: disk cache unavailable");
+    else
+        trace::mark("images: disk cache holds " +
+                    std::to_string(slopfin::image_cache::held_bytes() / (1024u * 1024u)) +
+                    " MiB of " + std::to_string(kDiskCacheMiB));
 
     /*
      * The default thread stack is far too small to decode a JPEG on. Ask for a
@@ -817,6 +851,7 @@ void warm(const std::string &item_id, const std::string &tag, int target_height,
         g_warm_began = std::chrono::steady_clock::now();
         g_warm_loaded = 0;
         g_warm_failed = 0;
+        g_warm_disk = 0;
         g_warm_fetch_us = 0;
         g_warm_decode_us = 0;
     }

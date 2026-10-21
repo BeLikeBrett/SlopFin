@@ -5,6 +5,7 @@
  */
 
 #include "jellyfin.hpp"
+#include "direct_play.hpp"
 #include "playback_url.hpp"
 #include "hevc_base_layer.hpp"
 #include "intro_metadata.hpp"
@@ -43,6 +44,12 @@ slopfin::http::Response request_post(const std::string &path, const std::string 
     const slopfin::config::Settings &settings = slopfin::config::current();
     return slopfin::http::post(settings.host, settings.port, path, auth_headers(), body,
                                "application/json");
+}
+
+slopfin::http::Response request_post_profile(const std::string &path,
+                                             const std::string &body) noexcept
+{
+    return request_post(path, body);
 }
 
 /* Pulls the fields the UI needs out of one BaseItemDto. */
@@ -754,7 +761,7 @@ std::string device_profile(const std::string &codec_order, const std::string &au
 "MaxStreamingBitrate":@BITRATE@,
 "MaxStaticBitrate":@BITRATE@,
 "DirectPlayProfiles":[
- {"Container":"ts,mpegts","Type":"Video","VideoCodec":"h264,hevc","AudioCodec":"@DIRECTAUDIO@@EXTRAAUDIO@"}],
+ {"Container":"ts,mpegts,mkv,matroska,webm,mp4,m4v,mov","Type":"Video","VideoCodec":"h264,hevc","AudioCodec":"@DIRECTAUDIO@@EXTRAAUDIO@"}],
 "TranscodingProfiles":[
  {"Container":"ts","Type":"Video","VideoCodec":"@CODECS@","AudioCodec":"@AUDIOCODECS@",
   "Protocol":"http","Context":"Streaming","MaxAudioChannels":"@CHANNELS@",
@@ -827,6 +834,7 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
     const int selected_audio = request.audio_index >= 0
                                    ? request.audio_index
                                    : static_cast<int>(source->num("DefaultAudioStreamIndex", -1));
+    int internal_audio = 0; /* audio tracks inside the file so far, in file order */
     if (const json::Value *streams = source->find("MediaStreams"); streams != nullptr)
     {
         for (std::size_t i = 0; i < streams->size(); ++i)
@@ -836,6 +844,8 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
                 continue;
             const std::string kind{stream->str("Type")};
             const int index = static_cast<int>(stream->num("Index", -1.0));
+            if (kind == "Audio" && !stream->flag("IsExternal"))
+                ++internal_audio;
             if (kind == "Video" && plan.video_codec.empty())
             {
                 plan.video_codec = std::string{stream->str("Codec")};
@@ -861,6 +871,7 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
                      (selected_audio >= 0 ? index == selected_audio : plan.audio_codec.empty()))
             {
                 plan.audio_codec = std::string{stream->str("Codec")};
+                plan.audio_ordinal = stream->flag("IsExternal") ? -1 : internal_audio - 1;
                 plan.audio_profile = std::string{stream->str("Profile")};
                 plan.audio_channels = static_cast<int>(stream->num("Channels", 2));
                 plan.audio_sample_rate = static_cast<int>(stream->num("SampleRate", 0));
@@ -874,6 +885,42 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
                     plan.subtitle_burned = true;
             }
         }
+    }
+
+    /* The file itself, read with ranges: MKV and MP4 demultiplexed here. */
+    std::string container{source->str("Container")};
+    for (char &c : container)
+        c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    const auto has = [&container](const char *name)
+    {
+        std::size_t from = 0;
+        for (;;)
+        {
+            const std::size_t comma = container.find(',', from);
+            if (container.compare(
+                    from, comma == std::string::npos ? std::string::npos : comma - from, name) == 0)
+                return true;
+            if (comma == std::string::npos)
+                return false;
+            from = comma + 1;
+        }
+    };
+    const char *readable = has("mkv") || has("matroska") || has("webm") ? "mkv"
+                           : has("mp4") || has("m4v") || has("mov")     ? "mp4"
+                                                                        : nullptr;
+    if (readable != nullptr && source->flag("SupportsDirectPlay") && !request.server_remux &&
+        std::string{source->str("Protocol")} != "Http" && !source->flag("IsRemote"))
+    {
+        const config::Settings &settings = config::current();
+        plan.container = readable;
+        plan.size = static_cast<long long>(source->num("Size", 0.0));
+        plan.path = "/Videos/" + request.item_id +
+                    "/stream?static=true&mediaSourceId=" + plan.media_source_id +
+                    "&ApiKey=" + http::url_encode(settings.token);
+        plan.direct = true;
+        plan.absolute_timestamps = true;
+        plan.valid = true;
+        return true;
     }
 
     const std::string transcode{source->str("TranscodingUrl")};
@@ -907,6 +954,7 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
         {
             plan.path = "/Videos/" + request.item_id +
                         "/stream.ts?static=true&mediaSourceId=" + plan.media_source_id;
+            plan.container = "ts";
             plan.direct = true;
             plan.valid = true;
             return true;
@@ -920,8 +968,12 @@ std::string playback_delivery(PlaybackPlan &plan) noexcept
     if (plan.direct)
     {
         plan.video_delivery_known = true;
-        return "Video " + plan.video_codec + " copy | Audio " + plan.audio_codec +
-               " copy | Direct play: source already fits client";
+        std::string from = plan.container;
+        for (char &c : from)
+            c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
+        return "Video " + plan.video_codec + " copy | Audio " +
+               (plan.audio_codec.empty() ? std::string{"none"} : plan.audio_codec + " copy") +
+               " | Direct play: read from the " + from + " file, no server conversion";
     }
     const auto &settings = config::current();
     const http::Response response =
@@ -1005,9 +1057,41 @@ std::string playback_delivery(PlaybackPlan &plan) noexcept
     return "Video/audio delivery unconfirmed: server live session status unavailable";
 }
 
+namespace
+{
+PlaybackPlan negotiate(const PlaybackRequest &request) noexcept;
+}
+
 PlaybackPlan playback_plan(const PlaybackRequest &request) noexcept
 {
+    PlaybackPlan plan = negotiate(request);
+    if (plan.valid && plan.direct && plan.container != "ts" &&
+        !direct_audio_supported(plan, request))
+    {
+        PlaybackRequest remux = request;
+        remux.server_remux = true;
+        plan = negotiate(remux);
+    }
+    return plan;
+}
+
+namespace
+{
+PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
+{
     PlaybackPlan plan;
+    /* The remux fallback offers the server nothing to play directly but TS. */
+    const auto request_post = [&request](const std::string &at, std::string profile)
+    {
+        if (request.server_remux)
+        {
+            const std::string all = "ts,mpegts,mkv,matroska,webm,mp4,m4v,mov";
+            const std::size_t found = profile.find(all);
+            if (found != std::string::npos)
+                profile.replace(found, all.size(), "ts,mpegts");
+        }
+        return request_post_profile(at, profile);
+    };
     const config::Settings &settings = config::current();
     const auto ticks = static_cast<long long>(request.start_seconds * 10000000.0);
     const long long bitrate = request.max_bitrate > 0 ? request.max_bitrate : 120000000LL;
@@ -1146,6 +1230,7 @@ PlaybackPlan playback_plan(const PlaybackRequest &request) noexcept
        Keep those choices authoritative and let the caller report the failure. */
     return PlaybackPlan{};
 }
+} // namespace
 
 std::string fetch_text(const std::string &path) noexcept
 {

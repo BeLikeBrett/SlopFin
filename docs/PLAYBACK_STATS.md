@@ -8,6 +8,7 @@ reports the actual audio output path; receiver audibility still needs listening.
 
 | Word | Meaning | Where SlopFin does it |
 | --- | --- | --- |
+| Direct play | Read the file exactly as stored; nothing is converted | SlopFin reads MKV/MP4 itself |
 | Copy / remux | Keep the compressed picture/sound; change only the streaming container | Jellyfin server |
 | Transcode / convert | Decode and re-encode to a different codec, resolution, rate or channel layout | Jellyfin server; its CPU/GPU depends on server settings |
 | Video decode | Turn compressed video into picture frames | PS5 hardware for H.264 / HEVC |
