@@ -693,7 +693,7 @@ void *worker(void *) noexcept
         const std::string cache_key =
             local                                  ? std::string{}
             : std::strcmp(job.kind, "Remote") == 0 ? "remote|" + job.item_id
-            : job.tag.empty() ? std::string{}
+            : job.tag.empty()                      ? std::string{}
                               : std::string(job.kind) + "|" + job.item_id + "|" + job.tag + "|" +
                                     std::to_string(job.height);
         const bool cached = !cache_key.empty() && slopfin::image_cache::load(cache_key, encoded);
