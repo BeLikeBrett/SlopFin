@@ -10,6 +10,7 @@
 
 #include <cstddef>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <string>
@@ -120,6 +121,9 @@ std::array<bool, kCount> g_injected{};
 /* Frames an injected button is still to be held down for. */
 std::array<int, kCount> g_injected_hold{};
 float g_scroll_axis = 0.0f;
+/* An injected right-stick push and how many more frames it lasts. */
+float g_injected_scroll = 0.0f;
+int g_injected_scroll_frames = 0;
 float g_trigger_l = 0.0f;
 float g_trigger_r = 0.0f;
 
@@ -436,6 +440,17 @@ void poll() noexcept
             g_now[i] = true;
         }
     }
+    if (g_injected_scroll_frames > 0)
+    {
+        --g_injected_scroll_frames;
+        g_scroll_axis = g_injected_scroll;
+    }
+}
+
+void inject_scroll(float axis, int frames) noexcept
+{
+    g_injected_scroll = std::clamp(axis, -1.0f, 1.0f);
+    g_injected_scroll_frames = frames > 0 ? frames : 0;
 }
 
 bool pressed(Button button) noexcept

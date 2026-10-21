@@ -243,7 +243,8 @@ int draw_segmented(int x, int y, const Segmented &control, float chosen, const T
     const int low = static_cast<int>(std::floor(place));
     const int high = std::min(i - 1, low + 1);
     const float t = place - static_cast<float>(low);
-    const auto lerp = [t](int a, int b) {
+    const auto lerp = [t](int a, int b)
+    {
         return static_cast<int>(std::lround(static_cast<float>(a) + static_cast<float>(b - a) * t));
     };
     if (i > 0)
@@ -279,6 +280,46 @@ void panel(int x, int y, int w, int h) noexcept
 {
     gfx::rounded_rect(x + 6, y + 10, w, h, 20, gfx::rgba(0x00, 0x00, 0x00, 0x66));
     gfx::rounded_rect(x, y, w, h, 20, gfx::palette::surface);
+}
+
+void draw_search_field(int x, int y, int w, const SearchField &field) noexcept
+{
+    const int h = kSearchFieldH;
+    const bool active = field.typing;
+
+    /* The field stays legible behind the native keyboard. */
+    if (!active)
+        gfx::drop_shadow(x, y, w, h, h / 2, 18, 0x70);
+    gfx::rounded_rect(x, y, w, h, h / 2, gfx::rgba(0xff, 0xff, 0xff, active ? 0x16 : 0x10));
+    gfx::stroke_rounded_rect(x, y, w, h, h / 2, 2,
+                             active ? gfx::rgba(0xff, 0xff, 0xff, 0x8c)
+                                    : gfx::rgba(0xff, 0xff, 0xff, 0x24));
+
+    icons::draw(icons::Icon::search, x + 26, y + (h - 30) / 2, 30,
+                gfx::rgba(0xff, 0xff, 0xff, active ? 0xdd : 0x88));
+
+    const int text_x = x + 70;
+    const int text_w = w - 70 - 210;
+    control_label(text_x, y, text_w, h, field.text.empty() ? field.placeholder : field.text, 28,
+                  text::Weight::medium,
+                  field.text.empty() ? gfx::palette::text_dim : gfx::palette::text);
+
+    if (!field.scope.empty())
+    {
+        const int scope_w = text::measure(field.scope, 20, text::Weight::medium) + 34;
+        const int scope_x = x + w - scope_w - 18;
+        gfx::rounded_rect(scope_x, y + 19, scope_w, 34, 17, gfx::rgba(0xff, 0xff, 0xff, 0x14));
+        text::draw(scope_x + 17,
+                   text::centered_y(y + 19, 34, field.scope, 20, text::Weight::medium), field.scope,
+                   20, text::Weight::medium, gfx::rgba(0xff, 0xff, 0xff, 0xb4));
+    }
+
+    /* Triangle edits the existing search without clearing its results. */
+    const int chip_w = draw_button_chip(x + w + 26, y + (h - 44) / 2, icons::Icon::ps_triangle,
+                                        active ? "Typing" : "Edit", active);
+    if (!field.note.empty())
+        text::draw(x + w + 26 + chip_w + 22, y + 24, field.note, 22, text::Weight::regular,
+                   gfx::palette::text_dim);
 }
 
 } // namespace slopfin::ui

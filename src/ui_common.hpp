@@ -15,6 +15,7 @@
 #include "icons.hpp"
 #include "text.hpp"
 
+#include <algorithm>
 #include <initializer_list>
 #include <string>
 
@@ -138,6 +139,42 @@ void control_label(int x, int y, int w, int h, std::string_view label, int size,
 
 /* A raised surface with a soft shadow. */
 void panel(int x, int y, int w, int h) noexcept;
+
+/*
+ * The focus a stick-scrolled grid keeps: the same column, on a row wholly on
+ * screen, so nothing has to scroll back into place when the stick is let go.
+ */
+inline int stick_focus(int index, int columns, int rows, float scroll, int row_height,
+                       int viewport) noexcept
+{
+    if (columns <= 0 || rows <= 0 || row_height <= 0)
+        return index;
+    const int top = static_cast<int>(scroll);
+    int first = (top + row_height - 1) / row_height;
+    int last = (top + viewport) / row_height - 1;
+    /* No whole row fits: settle for the one at the top. */
+    if (last < first)
+        first = last = top / row_height;
+    last = std::min(last, rows - 1);
+    first = std::min(first, last);
+    return std::clamp(index / columns, first, last) * columns + index % columns;
+}
+
+/* The search field Home and Discover share, with the Triangle chip beside it
+   and a one-line answer after that. The keyboard opens just beneath it. */
+inline constexpr int kSearchFieldY = kPageTitleY - 6;
+inline constexpr int kSearchFieldH = 72;
+inline constexpr int kSearchFieldW = 832;
+inline constexpr int kSearchKeyboardY = kSearchFieldY + kSearchFieldH + 14;
+struct SearchField
+{
+    std::string text;
+    std::string placeholder;
+    std::string scope; /* what the search is bounded to, inside the field */
+    std::string note;  /* "Searching", "12 results" */
+    bool typing = false;
+};
+void draw_search_field(int x, int y, int w, const SearchField &field) noexcept;
 
 } // namespace slopfin::ui
 

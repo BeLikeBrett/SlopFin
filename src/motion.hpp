@@ -187,6 +187,76 @@ inline float ramp(float value, float from, float to) noexcept
     return ease_out_cubic((value - from) / (to - from));
 }
 
+/*
+ * Right-stick scrolling with weight. The stick sets a speed rather than a
+ * position: full deflection starts at a cruising speed, ramps up to twice
+ * that over the first second of a held push, then stays there. Speed eases in
+ * and, when the stick is let go, glides out over about a fifth of a second
+ * instead of stopping dead.
+ *
+ * Everything is in rows, so a tall poster grid and a short list feel the
+ * same. The caller turns rows into pixels and clamps to its own bounds.
+ */
+class StickGlide
+{
+  public:
+    /* Rows per second at full deflection, before and after the ramp. */
+    static constexpr float kCruise = 3.2f;
+    static constexpr float kTop = 6.4f;
+    /* The ramp starts after this long held, and takes this long. */
+    static constexpr float kRampDelay = 0.30f;
+    static constexpr float kRampTime = 0.70f;
+    /* Time constants for speeding up and for coasting to a stop. */
+    static constexpr float kEaseIn = 0.07f;
+    static constexpr float kEaseOut = 0.12f;
+
+    /* Advances one frame; returns how many rows to move by. */
+    float step(float axis, float dt) noexcept
+    {
+        dt = std::clamp(dt, 0.0f, 0.1f);
+        const float direction = axis > 0.0f ? 1.0f : axis < 0.0f ? -1.0f : 0.0f;
+        if (direction == 0.0f || direction != direction_)
+            held_ = 0.0f;
+        else
+            held_ += dt;
+        direction_ = direction;
+
+        /* A slightly bowed response, so a light push is precise. */
+        const float magnitude = std::pow(std::clamp(std::fabs(axis), 0.0f, 1.0f), 1.4f);
+        const float boost = ease_in_out_cubic((held_ - kRampDelay) / kRampTime);
+        const float wanted = direction * magnitude * (kCruise + (kTop - kCruise) * boost);
+
+        /* Reversing passes through zero on the quick constant, not the coast. */
+        const bool coasting = direction == 0.0f;
+        const float tau = coasting ? kEaseOut : kEaseIn;
+        velocity_ += (wanted - velocity_) * (1.0f - std::exp(-dt / tau));
+        if (coasting && std::fabs(velocity_) < 0.05f)
+            velocity_ = 0.0f;
+        return velocity_ * dt;
+    }
+
+    [[nodiscard]] bool moving() const noexcept
+    {
+        return velocity_ != 0.0f || direction_ != 0.0f;
+    }
+    [[nodiscard]] float velocity() const noexcept
+    {
+        return velocity_;
+    }
+
+    /* Hit an end, or something else took over the list. */
+    void stop() noexcept
+    {
+        velocity_ = 0.0f;
+        held_ = 0.0f;
+    }
+
+  private:
+    float velocity_ = 0.0f; /* rows per second */
+    float held_ = 0.0f;
+    float direction_ = 0.0f;
+};
+
 } // namespace slopfin::motion
 
 #endif

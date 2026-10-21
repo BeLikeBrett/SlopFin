@@ -2187,6 +2187,8 @@ void cover_rows(void *context, unsigned first, unsigned stride) noexcept
     const CoverJob &job = *static_cast<const CoverJob *>(context);
     const Bitmap &src = *job.src;
     std::uint32_t *frame = back_buffer();
+    const bool unit = job.step_x == 65536 && job.step_y == 65536 && (job.origin_u & 0xffff) == 0 &&
+                      (job.origin_v & 0xffff) == 0;
     for (int py = job.y0 + static_cast<int>(first); py < job.y1; py += static_cast<int>(stride))
     {
         std::uint32_t *row = frame + static_cast<std::size_t>(py) * g_phys_w;
@@ -2194,6 +2196,18 @@ void cover_rows(void *context, unsigned first, unsigned stride) noexcept
         const bool straight_row =
             job.radius <= 0 || (py >= job.y + job.radius && py < job.y + job.h - job.radius);
         std::int64_t u = job.origin_u + static_cast<std::int64_t>(job.x0 - job.x) * job.step_x;
+        /* A picture already at its drawn size: copy it across rather than
+           filter four pixels into one that is the same pixel. Artwork the
+           cache pre-sizes takes this path, which is most of a poster grid. */
+        if (unit && straight_row && job.alpha == 255)
+        {
+            const int sy = std::clamp(static_cast<int>(v >> 16), 0, src.height - 1);
+            const int sx = static_cast<int>(u >> 16);
+            const std::uint32_t *from = src.pixels + static_cast<std::size_t>(sy) * src.width;
+            for (int px = job.x0, x = sx; px < job.x1; ++px, ++x)
+                blend_pixel(row + px, from[std::clamp(x, 0, src.width - 1)]);
+            continue;
+        }
         for (int px = job.x0; px < job.x1; ++px, u += job.step_x)
         {
             float coverage = 1.0f;

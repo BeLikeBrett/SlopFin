@@ -90,6 +90,12 @@ int to_physical_size(int size) noexcept
     return size * image_scale;
 }
 } // namespace slopfin::gfx
+namespace slopfin::images
+{
+void set_remote_proxy(const std::string &, int) noexcept
+{
+}
+} // namespace slopfin::images
 namespace slopfin::http
 {
 Response get(std::string_view host, int, std::string_view path,
@@ -712,23 +718,37 @@ int main()
     ++g_model.search_epoch;
     snapshot();
     assert(g_view.grid_index == 1);
-    // Analogue scroll is pixel-based, rate-independent, bounded and keeps focus on screen.
+    // Analogue scroll ramps from cruise towards double speed, is rate-independent, bounded,
+    // glides to rest and keeps focus on a row wholly on screen.
     g_view.results.assign(100, focus);
     g_view.field_focused = false;
     g_view.grid_index = 0;
     g_view.grid_scroll.jump(0.0f);
+    g_view.grid_glide.stop();
     g_view.page = g_view.pages = 1; /* nothing more to load while scrolling here */
     scroll_axis_value = 1.0f;
     for (int i = 0; i < 60; ++i)
         search_input(1.0f / 60.0f);
     const float full_second = g_view.grid_scroll.value();
-    const float rate = 2.6f * static_cast<float>(kCardStepY);
-    assert(full_second > rate - 10 && full_second < rate + 10 && g_view.grid_index >= 12);
+    const float cruise = motion::StickGlide::kCruise * static_cast<float>(kCardStepY);
+    const float top = motion::StickGlide::kTop * static_cast<float>(kCardStepY);
+    assert(full_second > cruise * 0.85f && full_second < top && g_view.grid_index >= 12);
+    {
+        const int row = g_view.grid_index / grid_columns();
+        assert(row * kCardStepY >= static_cast<int>(full_second));
+        assert((row + 1) * kCardStepY <= static_cast<int>(full_second) + kCatalogViewport);
+    }
+    scroll_axis_value = 0.0f;
+    for (int i = 0; i < 60; ++i)
+        search_input(1.0f / 60.0f);
+    assert(!g_view.grid_glide.moving() && g_view.grid_scroll.value() > full_second);
     g_view.grid_scroll.jump(0.0f);
+    g_view.grid_glide.stop();
     g_view.grid_index = 0;
+    scroll_axis_value = 1.0f;
     for (int i = 0; i < 30; ++i)
         search_input(1.0f / 30.0f);
-    assert(std::abs(g_view.grid_scroll.value() - full_second) < 0.1f);
+    assert(std::abs(g_view.grid_scroll.value() - full_second) < full_second * 0.03f);
     for (int i = 0; i < 1000; ++i)
         search_input(1.0f / 60.0f);
     assert(g_view.grid_scroll.value() ==
@@ -738,6 +758,8 @@ int main()
         search_input(1.0f / 60.0f);
     assert(g_view.grid_scroll.value() == 0 && !g_view.field_focused);
     scroll_axis_value = 0.0f;
+    for (int i = 0; i < 60; ++i)
+        search_input(1.0f / 60.0f);
     // Reaching the last rows asks for the next page; it is appended, not swapped in.
     assert(jobs.empty());
     g_view.page = 1;

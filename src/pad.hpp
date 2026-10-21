@@ -100,6 +100,8 @@ void inject(Button button) noexcept;
  * one-way actions, the seek ramp.
  */
 void inject_hold(Button button, int frames) noexcept;
+/* Holds the right stick at `axis` (-1 up to 1 down) for `frames` frames. */
+void inject_scroll(float axis, int frames) noexcept;
 
 } // namespace slopfin::pad
 
