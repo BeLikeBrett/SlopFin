@@ -68,6 +68,11 @@ void load() noexcept;
 /* Writes the settings. False when they could not be stored, which leaves
    whatever was saved before in place. */
 bool save() noexcept;
+/* Why the last load found no settings: 0 when it read them, otherwise the
+   errno of the failed open or read, or -1 when the file did not parse. */
+int load_error() noexcept;
+/* Where settings, and anything else the app keeps between runs, live. */
+std::string data_directory() noexcept;
 
 /* A title's subtitle offset, 0 when it has none. */
 double subtitle_offset(const std::string &item_id) noexcept;

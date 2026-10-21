@@ -362,6 +362,7 @@ bool Stream::open(std::string_view host, int port, std::string_view path,
                   const std::vector<std::string> &headers) noexcept
 {
     close();
+    status_ = 0; /* 0 after a failure: no HTTP response arrived */
     if (server_address::web_transport(host))
     {
         web_ = std::make_unique<WebRequest>();

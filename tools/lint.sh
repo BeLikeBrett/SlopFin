@@ -19,6 +19,13 @@ for file in "${repository_files[@]}"; do
     [[ -f $file ]] || continue
     case "$file" in
         vendor/*) continue ;;
+        # Host-side package tools link the C# package library; none of it
+        # runs on the console or ships in a download.
+        tools/native-pkg/*/*.cs|tools/native-pkg/*/*.csproj)
+            header=$(head -n 20 "$file")
+            [[ $file == *.csproj ]] || grep -Fq 'SPDX-License-Identifier: GPL-3.0-or-later' <<<"$header"
+            continue
+            ;;
         *.c|*.cc|*.cpp|*.h|*.hpp|*.ld|*.py|*.ps1|*.sh|*.rs|*.yml|*.yaml|Makefile|.clang-format|.clang-tidy|*/env.example)
             header=$(head -n 20 "$file")
             grep -Eq 'Copyright \(C\) [0-9]{4} .+' <<<"$header"

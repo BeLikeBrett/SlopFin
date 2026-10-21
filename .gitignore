@@ -45,6 +45,7 @@ slopfin-audio.txt
 
 /assets/slopfin-update.bin
 /assets/slopfin-storage.bin
+/assets/slopfin-pkg-update.bin
 
 # Local maintainer plans and session records.
 /PLAN.md

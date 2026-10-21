@@ -6,6 +6,7 @@
 
 #include "trace.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 extern "C"
@@ -13,6 +14,9 @@ extern "C"
     int open(const char *path, int flags, ...);
     long write(int descriptor, const void *buffer, unsigned long bytes);
     int close(int descriptor);
+#ifndef SLOPFIN_HOST
+    int sceKernelDebugOutText(int channel, const char *text);
+#endif
 }
 
 namespace
@@ -33,7 +37,17 @@ void append(std::string_view text, bool truncate) noexcept
     const int flags = kWriteOnly | kCreate | (truncate ? kTruncate : kAppend);
     const int descriptor = open(kPath, flags, 0666);
     if (descriptor < 0)
+    {
+#ifndef SLOPFIN_HOST
+        /* Before shared data is reachable (an installed package starts
+           without it) the kernel log is the only place a line can go. */
+        char line[256];
+        const int length = static_cast<int>(std::min<std::size_t>(text.size(), 230));
+        (void)std::snprintf(line, sizeof(line), "[SlopFin] %.*s\n", length, text.data());
+        (void)sceKernelDebugOutText(0, line);
+#endif
         return;
+    }
     (void)write(descriptor, text.data(), text.size());
     (void)write(descriptor, "\n", 1);
     (void)close(descriptor);

@@ -106,7 +106,7 @@ std::string release_notes(std::string_view markdown) noexcept
     return result;
 }
 
-Release select_release(std::string_view feed, std::string_view current) noexcept
+Release select_release(std::string_view feed, std::string_view current, bool package) noexcept
 {
     Release best;
     auto root = json::parse(feed);
@@ -124,7 +124,8 @@ Release select_release(std::string_view feed, std::string_view current) noexcept
         const auto *assets = r->find("assets");
         if (!assets || assets->type != json::Type::array)
             continue;
-        const std::string name = "SlopFin-" + std::string(tag) + "-folder.zip";
+        const std::string name = "SlopFin-" + std::string(tag) + (package ? ".pkg" : "-folder.zip");
+        const double largest = package ? 256.0 * 1024 * 1024 : 32.0 * 1024 * 1024;
         const std::string expected = "https://github.com/BeLikeBrett/SlopFin/releases/download/" +
                                      std::string(tag) + "/" + name;
         for (const auto &a : assets->elements)
@@ -132,7 +133,7 @@ Release select_release(std::string_view feed, std::string_view current) noexcept
             const auto digest = a->str("digest");
             const auto size = a->num("size");
             if (a->str("name") != name || a->str("browser_download_url") != expected ||
-                a->str("state") != "uploaded" || size < 1024 || size > 32 * 1024 * 1024 ||
+                a->str("state") != "uploaded" || size < 1024 || size > largest ||
                 size != std::floor(size) || digest.size() != 71 || !digest.starts_with("sha256:"))
                 continue;
             if (!std::all_of(digest.begin() + 7, digest.end(), [](char c)

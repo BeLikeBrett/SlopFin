@@ -98,16 +98,15 @@ static inline int sf_update_write(const char *path, const void *data, size_t siz
     errno = error;
     return -1;
 }
-static inline int sf_update_hash_file(const char *path, char hex[65])
+/* Hash from the current offset; the caller owns the descriptor. */
+static inline int sf_update_hash_fd(int fd, char hex[65])
 {
-    int fd = open(path, O_RDONLY | O_NOFOLLOW);
     if (fd < 0)
         return -1;
     struct stat st;
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         st.st_size > 64 * 1024 * 1024)
     {
-        close(fd);
         return -1;
     }
     sf_sha256 s;
@@ -116,11 +115,19 @@ static inline int sf_update_hash_file(const char *path, char hex[65])
     ssize_t n;
     while ((n = read(fd, buf, sizeof(buf))) > 0)
         sf_sha_add(&s, buf, (size_t)n);
-    close(fd);
     if (n < 0)
         return -1;
     sf_sha_hex(&s, hex);
     return 0;
+}
+static inline int sf_update_hash_file(const char *path, char hex[65])
+{
+    const int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
+        return -1;
+    const int result = sf_update_hash_fd(fd, hex);
+    close(fd);
+    return result;
 }
 static inline int sf_update_copy(const char *from, const char *to)
 {

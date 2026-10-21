@@ -78,3 +78,14 @@ The tooling quit marker asks the main render loop to stop. The loop closes
 the IME dialog, stops playback, releases VideoOut, finishes the session and
 requests process termination. If termination returns, the thread parks;
 rendering must never resume against the released display.
+
+## Playback path
+
+The trace records how each title opened: `player: direct mkv from byte ...`
+with negotiation and index times, or `refused (<reason>)` before the server
+remux. `player: first picture shown ... ms after opening` gives the open or seek
+time, and how many pictures were decoded or skipped to reach the position. A
+refused media stream logs its HTTP status, which the error screen also shows.
+
+`/data/slopfin-remux` plays every title through the server's remux, as before
+direct play, for comparing the two paths. Delete it to return to direct play.

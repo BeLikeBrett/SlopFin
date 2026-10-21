@@ -1,6 +1,6 @@
 # SlopFin architecture
 
-Updated 2026-10-03. The app uses a custom C++ interface, VideoOut framebuffer,
+Updated 2026-10-20. The app uses a custom C++ interface, VideoOut framebuffer,
 native hardware video decode, platform audio decode and a PCM output sink.
 See [compatibility](../COMPATIBILITY.md) for validated scope rather than
 assuming every platform capability is integrated.
@@ -10,13 +10,16 @@ assuming every platform capability is integrated.
 1. `jellyfin.cpp` sends a device profile with container, video/audio codec,
    sample-rate, channel, video-range and bitrate constraints. It negotiates
    source-compatible codec ordering to preserve video where possible.
-2. `http::Stream` reads MPEG-TS and removes HTTP chunk framing. The server can
-   remux, transcode only audio, or transcode video. Source metadata and delivered
+2. MKV and MP4 the console can take as stored are read straight from the file
+   with HTTP ranges ([direct play](DIRECT_PLAY.md)). Anything else arrives as
+   MPEG-TS, which the server can remux, transcode only audio, or transcode video;
+   `http::Stream` removes HTTP chunk framing. Source metadata and delivered
    metadata are different; live copy/transcode status controls HDR handling.
-3. `tsdemux` reassembles PES access units and their timestamps. Audio compressed
-   frames may cross PES boundaries and need codec-specific framing. A transport
-   producer feeds audio and queues compressed video in a bounded 128 MiB flexible-
-   memory ring; a full presentation pool cannot block access to the next audio PES.
+3. A `media::Demuxer` (`mkv`, `mp4` or `tsdemux`) turns the bytes into access
+   units with title-time timestamps: Annex-B video and framed audio, whatever the
+   container. A transport producer feeds audio and queues compressed video in a
+   bounded 128 MiB flexible-memory ring; a full presentation pool cannot block
+   access to the next audio frames.
 4. `player` submits H.264/HEVC to `sceVideodec2`. HEVC Main10 output on the tested
    console uses low-aligned 10-bit samples in 16-bit words. A CPU conversion
    prepares SDR or packed PQ/BT.2020 pixels in a bounded presentation pool.

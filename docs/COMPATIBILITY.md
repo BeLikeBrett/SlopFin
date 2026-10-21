@@ -1,6 +1,6 @@
 # SlopFin compatibility
 
-Updated 2026-10-05. Console evidence comes mainly from PS5 firmware 8.20.
+Updated 2026-10-20. Console evidence comes mainly from PS5 firmware 8.20.
 **Implemented**, **decoder-tested** and **verified physical output** are different
 claims. A Linux test cannot prove HDMI behaviour on a PS5.
 
@@ -14,8 +14,11 @@ claims. A Linux test cannot prove HDMI behaviour on a PS5.
 | Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Selected Profile 7 / 8.1 files exercised | Enable **Dolby Vision HDR10 fallback**. No native Dolby Vision output. |
 | Other codecs, incompatible DV, HLG or HDR10+ | Jellyfin server converts to a supported stream | Server conversion path | No validated native HLG path or HDR10+ dynamic metadata output. |
 
-The server may repackage compatible video without re-encoding it (**remux**).
-Changing only the audio format can leave the video unchanged. SlopFin's CPU pixel
+MKV and MP4 files whose video and audio the console can take as stored play
+**directly**: SlopFin reads the file itself and the server runs no FFmpeg job
+([direct play](development/DIRECT_PLAY.md)). Other files are repackaged by the
+server without re-encoding where possible (**remux**). Changing only the audio
+format can leave the video unchanged. SlopFin's CPU pixel
 conversion is rendering work, not video transcoding.
 [Video evidence](development/VIDEO_DECODE.md) · [HDR evidence](development/HDR.md).
 

@@ -195,9 +195,17 @@ test-updates:
 	@build/tests/update_package_tests
 	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_update_transaction.c -o build/tests/update_transaction_tests
 
-test-integration: test-updates
+test-integration: test-updates test-native-tools
 	@printf '%s\n' '==> [test-integration] Running host tooling integration tests'
 	@python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+.PHONY: test-native-tools
+test-native-tools:
+	@mkdir -p build/tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Itooling/native tests/test_self_container.cpp tooling/native/self_container.cpp -lz -o build/tests/self_container_tests
+	@build/tests/self_container_tests
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror tests/test_pkg_canary.c -o build/tests/pkg_canary_tests
+	@build/tests/pkg_canary_tests
 
 deps:
 	@printf '%s\n' '==> [deps] Fetching declared native dependencies'
@@ -242,25 +250,31 @@ $(UPDATE_ELF): payloads/updater/main.c $(wildcard src/update/*.h)
 	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/updater slopfin-update.elf
 	@cp payloads/updater/slopfin-update.elf $@
 
+PKG_UPDATE_ELF := assets/slopfin-pkg-update.bin
+$(PKG_UPDATE_ELF): payloads/pkg-updater/main.c $(wildcard src/update/*.h)
+	@printf '%s\n' '==> [payload] Building the package update helper'
+	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/pkg-updater slopfin-pkg-update.elf
+	@cp payloads/pkg-updater/slopfin-pkg-update.elf $@
+
 STORAGE_ELF := assets/slopfin-storage.bin
 $(STORAGE_ELF): payloads/storage/main.c $(wildcard src/update/*.h)
 	@printf '%s\n' '==> [payload] Building the update storage helper'
 	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/storage slopfin-storage.elf
 	@cp payloads/storage/slopfin-storage.elf $@
 
-app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
+app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
-ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
+ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
 	@bash tools/build.sh Ffpkg
 
-ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
+ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [ffpfsc] Building the app folder and compressed image'
 	@bash tools/build.sh Ffpfsc
 
-packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(STORAGE_ELF)
+packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
 	@printf '%s\n' '==> [packages] Building the app folder and both package formats'
 	@bash tools/build.sh All
 
@@ -347,11 +361,23 @@ test-services:
 	@mkdir -p build/tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_storage.cpp -o build/tests/update_storage_tests
 	@build/tests/update_storage_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Isrc tests/test_app_files.cpp -o build/tests/app_files_tests
+	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_pkg_request.c -o build/tests/pkg_request_tests
+	@build/tests/pkg_request_tests
+	@build/tests/app_files_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Isrc tests/test_image_cache.cpp -o build/tests/image_cache_tests
+	@build/tests/image_cache_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_stream_failure.cpp -o build/tests/stream_failure_tests
+	@build/tests/stream_failure_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_direct_play.cpp -o build/tests/direct_play_tests
+	@build/tests/direct_play_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_direct_source.cpp src/direct_source.cpp src/mkv.cpp src/mp4.cpp -o build/tests/direct_source_tests
+	@build/tests/direct_source_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_background.cpp src/background.cpp -o build/tests/background_tests
 	@build/tests/background_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_download.cpp -o build/tests/update_download_tests
 	@build/tests/update_download_tests
-	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_update_state.cpp $(HOST_TEST_LDFLAGS) -o build/tests/update_state_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Wno-unused-function -pthread -Isrc tests/test_update_state.cpp $(HOST_TEST_LDFLAGS) -o build/tests/update_state_tests
 	@build/tests/update_state_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_seerr.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/seerr_tests
 	@build/tests/seerr_tests

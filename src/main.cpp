@@ -5,6 +5,7 @@
  */
 
 #include "app.hpp"
+#include "app_files.hpp"
 #include "crash.hpp"
 #include "gfx.hpp"
 #include "icons.hpp"
@@ -65,7 +66,12 @@ void draw_storage_help() noexcept
 
 int main()
 {
+    (void)slopfin::app_files::capture();
     slopfin::trace::begin();
+    slopfin::trace::mark(
+        "app files: kept " + std::to_string(slopfin::app_files::application.kept_count()) +
+        " of 7, " +
+        (slopfin::app_files::installed_package() ? "installed package" : "folder build"));
 
     if (!slopfin::gfx::initialize())
     {

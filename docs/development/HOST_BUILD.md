@@ -51,6 +51,8 @@ Settings live in `$XDG_CONFIG_HOME/slopfin/config.json` (or
 `~/.config/slopfin/`), in the same format the console keeps at
 `/data/slopfin/config.json`, so a token copied off the console works unchanged.
 `SLOPFIN_DATA` overrides the directory and `SLOPFIN_ASSETS` the font directory.
+`SLOPFIN_PREVIEW_STREAM_STATUS=500` makes playback fail as if the server answered
+the media request with that HTTP status (`0`: no response), to show the error screen.
 Run from the repository root so `assets/` is found.
 The host accepts `SSL_CERT_FILE` for an explicit trusted CA bundle; certificate
 and hostname verification remain enabled. This does not change PS5 trust support.

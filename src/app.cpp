@@ -1234,6 +1234,10 @@ constexpr const char *kUnreachableDetail =
 
 void *worker(void *) noexcept
 {
+    trace::mark(
+        "config: " + std::string(config::current().host.empty() ? "no server" : "server set") +
+        (config::current().signed_in() ? ", signed in" : ", not signed in") + ", load error " +
+        std::to_string(config::load_error()));
     if (config::current().host.empty())
     {
         set_status(Screen::server_setup, "Choose your server");
@@ -4562,10 +4566,20 @@ void draw_player_loading(const player::Status &status) noexcept
         gfx::arc(cx, cy - 40, 30, 4, 0.0f, 1.0f, gfx::rgba(0xcc, 0x44, 0x44, 0xc0));
         gfx::rounded_rect(cx - 2, cy - 58, 4, 22, 2, gfx::rgb(0xcc, 0x44, 0x44));
         gfx::rounded_rect(cx - 2, cy - 28, 4, 4, 2, gfx::rgb(0xcc, 0x44, 0x44));
-        const std::string &line =
+        const std::string message =
             status.message.empty() ? std::string{"Playback failed"} : status.message;
+        /* What happened, then what to do about it, each centred on its own line. */
+        const std::size_t split = message.find(". ");
+        const std::string line = message.substr(0, split == std::string::npos ? split : split + 1);
         const int width = text::measure(line, 26, Weight::regular);
         text::draw(cx - width / 2, cy + 16, line, 26, Weight::regular, gfx::rgb(0xd4, 0xd4, 0xdc));
+        if (split != std::string::npos)
+        {
+            const std::string advice = message.substr(split + 2);
+            const int advice_width = text::measure(advice, 22, Weight::regular);
+            text::draw(cx - advice_width / 2, cy + 58, advice, 22, Weight::regular,
+                       gfx::rgb(0x9a, 0x9a, 0xa4));
+        }
         return;
     }
 

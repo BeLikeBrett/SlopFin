@@ -136,12 +136,20 @@ source and license texts; preserve recipients' ability to rebuild the binary.
 
 ## Native package tooling
 
-Optional native packages are built with the public GPL-3.0 PS5Upload FPKG
-engine (https://github.com/phantomptr/ps5upload), pinned in
-`tools/build-native-pkg.sh`. Its copyright and license remain in the dependency
-checkout. The project-authored verification helper is GPL-3.0-or-later. The
-packaging tool is a host build dependency and is not linked into SlopFin.
-No proprietary `right.sprx` or publishing SDK is redistributed.
+Native packages (built from source only; not in current downloads) use UltraPack's MIT-licensed `ffpfsc-pkg-tool`
+(https://github.com/knutwurst/ps5-ultrapack) and the GPL-3.0 LibProsperoPkg
+library it ships. Both are pinned by revision and checksum in
+`tools/build-native-pkg.sh`. Before use, the project's GPL-3.0-or-later
+`tools/native-pkg/homebrew-patcher` modifies the library so it no longer adds
+Sony's `right.sprx`. These are host build tools: they are neither linked into
+SlopFin nor redistributed, and no proprietary `right.sprx` or publishing SDK is
+included in any download.
+
+`slopfin-a53-selector.elf` is drakmor's GPL-3.0 ppr-patch
+(https://github.com/drakmor/ppr-patch), built unmodified from the revision
+pinned in `tools/build-a53-selector.sh`. A project-authored wrapper supplies
+its `--install --idle` arguments. The build writes that revision's complete
+source alongside it as `ppr-patch-<revision>-source.tar.gz`.
 
 ## Public HTTPS trust anchors
 

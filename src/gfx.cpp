@@ -1166,7 +1166,17 @@ void present() noexcept
         sceVideoOutSubmitFlip(g_video, static_cast<std::int32_t>(g_back), 1, ++g_flip_sequence);
     if (submitted != 0)
     {
-        slopfin::trace::mark("gfx: flip submission failed");
+        /* Say so a few times, not every frame: without shared data these
+           lines go to the kernel log. */
+        static int reported = 0;
+        if (reported < 3)
+        {
+            ++reported;
+            char line[64];
+            (void)std::snprintf(line, sizeof(line), "gfx: flip submission failed 0x%08x",
+                                static_cast<unsigned>(submitted));
+            slopfin::trace::mark(line);
+        }
         (void)sceVideoOutWaitVblank(g_video);
         return;
     }

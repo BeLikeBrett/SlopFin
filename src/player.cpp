@@ -9,6 +9,7 @@
 
 #include "player.hpp"
 #include "playback_options.hpp"
+#include "stream_failure.hpp"
 
 #include "audio.hpp"
 #include "bigalloc.hpp"
@@ -27,6 +28,9 @@
 #include "subtitles.hpp"
 #include "order_capture.hpp"
 #include "trace.hpp"
+#include "direct_source.hpp"
+#include "media_demux.hpp"
+#include "seek_skip.hpp"
 #include "tsdemux.hpp"
 #include "video_sps.hpp"
 
@@ -39,6 +43,7 @@
 #include <mutex>
 #include <pthread.h>
 #include <string>
+#include <memory>
 #include <vector>
 
 extern "C"
@@ -347,6 +352,7 @@ bool g_absolute_timestamps = false;
 /* False only for a file played directly, which the server's muxer never touched. */
 bool g_server_muxed = false;
 std::atomic<bool> g_paused{false};
+std::uint64_t g_entry_us = 0; /* when this stream began opening */
 std::uint64_t g_pause_started_us = 0;
 
 audio::Codec delivered_audio_codec(const jellyfin::PlaybackPlan &plan) noexcept
@@ -1164,6 +1170,7 @@ void probe_decoder_support_impl() noexcept
 class TransportProducer
 {
     http::Stream &stream_;
+    media::Demuxer &demuxer_;
     player::OrderCapture &capture_;
     void *thread_ = nullptr;
 
@@ -1172,8 +1179,8 @@ class TransportProducer
        temporary server stalls do not block the next audio PES. */
     player::PacketQueue video{128u * 1024u * 1024u};
     std::size_t total_bytes = 0;
-    TransportProducer(http::Stream &stream, player::OrderCapture &capture)
-        : stream_(stream), capture_(capture)
+    TransportProducer(http::Stream &stream, media::Demuxer &demuxer, player::OrderCapture &capture)
+        : stream_(stream), demuxer_(demuxer), capture_(capture)
     {
     }
     bool start() noexcept
@@ -1232,7 +1239,7 @@ class TransportProducer
         const auto spare = images::spare_cores();
         if (spare)
             (void)scePthreadSetaffinity(scePthreadSelf(), spare);
-        ts::Demuxer demuxer;
+        media::Demuxer &demuxer = demuxer_;
         player::MediaBitrate bitrate;
         std::vector<std::uint8_t> chunk(64u * 1024u);
         std::size_t window_bytes = 0;
@@ -1270,6 +1277,14 @@ class TransportProducer
                     double(window_bytes) * 8000000.0 / double(now - window_start);
                 window_bytes = 0;
                 window_start = now;
+            }
+            if (demuxer.broken())
+            {
+                if (!g_stop.load())
+                    set_state(player::State::failed,
+                              "The video file could not be read past this point.");
+                video.close();
+                return;
             }
             ts::AccessUnit unit;
             while (!g_stop.load() && demuxer.next(unit))
@@ -1323,8 +1338,46 @@ class TransportProducer
     }
 };
 
+/* Byte ranges of the library file, for its index; one request each. */
+class HttpRanges final : public direct::Ranges
+{
+    const std::string &host_;
+    int port_;
+    const std::string &path_;
+
+  public:
+    HttpRanges(const std::string &host, int port, const std::string &path)
+        : host_(host), port_(port), path_(path)
+    {
+    }
+    bool read(std::uint64_t offset, std::size_t size, std::uint8_t *out,
+              std::size_t &got) noexcept override
+    {
+        got = 0;
+        if (size == 0)
+            return true;
+        http::Stream stream;
+        const std::string range =
+            "Range: bytes=" + std::to_string(offset) + "-" + std::to_string(offset + size - 1);
+        /* A server that ignores ranges answers 200 with the whole file. */
+        if (!stream.open(host_, port_, path_, {range}) ||
+            (stream.status() != 206 && !(stream.status() == 200 && offset == 0)))
+            return false;
+        while (got < size)
+        {
+            const long read = stream.read(out + got, size - got);
+            if (read <= 0)
+                break;
+            got += static_cast<std::size_t>(read);
+        }
+        stream.close();
+        return true;
+    }
+};
+
 void *playback_entry(void *) noexcept
 {
+    g_entry_us = now_us();
     const config::Settings &settings = config::current();
     Decoder decoder;
     http::Stream stream;
@@ -1338,13 +1391,91 @@ void *playback_entry(void *) noexcept
     set_state(player::State::opening, "Asking the server");
 
     g_request = player::with_console_options(g_request);
-    jellyfin::PlaybackPlan plan = jellyfin::playback_plan(g_request);
+    /* Developer comparison: /data/slopfin-remux plays everything the old way. */
+    if (std::FILE *marker = std::fopen("/data/slopfin-remux", "rb"); marker != nullptr)
+    {
+        (void)std::fclose(marker);
+        g_request.server_remux = true;
+    }
+    /*
+     * A direct-play seek reads the same file from elsewhere: nothing the
+     * server decides depends on the position, so the previous plan and play
+     * session stand, as they do for Jellyfin's own clients. Any other change
+     * negotiates again.
+     */
+    static jellyfin::PlaybackRequest s_last_request;
+    static jellyfin::PlaybackPlan s_last_plan;
+    const auto same_but_position =
+        [](const jellyfin::PlaybackRequest &a, const jellyfin::PlaybackRequest &b)
+    {
+        return a.item_id == b.item_id && a.media_source_id == b.media_source_id &&
+               a.audio_index == b.audio_index && a.subtitle_index == b.subtitle_index &&
+               a.max_bitrate == b.max_bitrate && a.video_codec == b.video_codec &&
+               a.max_audio_channels == b.max_audio_channels && a.audio_codec == b.audio_codec &&
+               a.allow_software_audio == b.allow_software_audio &&
+               a.allow_bitstream == b.allow_bitstream &&
+               a.allow_dv_hdr10_base == b.allow_dv_hdr10_base && a.server_remux == b.server_remux;
+    };
+    const bool reuse = s_last_plan.valid && s_last_plan.direct && s_last_plan.container != "ts" &&
+                       same_but_position(g_request, s_last_request);
+    jellyfin::PlaybackPlan plan = reuse ? s_last_plan : jellyfin::playback_plan(g_request);
+    s_last_plan = jellyfin::PlaybackPlan{};
     if (!plan.valid)
     {
         set_state(player::State::failed,
                   "Playback negotiation failed. Try again or change quality.");
         g_running.store(false);
         return nullptr;
+    }
+    /*
+     * MKV and MP4 are read straight from the file: its index first, then the
+     * media from the keyframe before the start. Anything that cannot be read
+     * that way goes back to the server's remux, for the rest of this title.
+     */
+    std::unique_ptr<media::Demuxer> demuxer;
+    std::uint64_t direct_offset = 0;
+    double present_from = 0.0;
+    if (plan.direct && plan.container != "ts")
+    {
+        set_state(player::State::opening, "Reading the file");
+        const std::uint64_t began = now_us();
+        HttpRanges ranges(settings.host, settings.port, plan.path);
+        direct::Source source;
+        source.key = plan.media_source_id + ":" + std::to_string(plan.size);
+        source.container = plan.container;
+        source.size = plan.size > 0 ? static_cast<std::uint64_t>(plan.size) : 0;
+        source.audio_ordinal = plan.audio_codec.empty() ? -1 : plan.audio_ordinal;
+        source.audio_codec = plan.audio_codec;
+        direct::Opened opened;
+        if (direct::open(source, g_request.start_seconds, ranges, opened))
+        {
+            demuxer = std::move(opened.demuxer);
+            direct_offset = opened.offset;
+            present_from = g_request.start_seconds > 0.5 ? g_request.start_seconds : 0.0;
+            trace::mark("player: direct " + plan.container + " from byte " +
+                        std::to_string(direct_offset) + ", negotiated in " +
+                        std::to_string((began - g_entry_us) / 1000) + " ms, index ready in " +
+                        std::to_string((now_us() - began) / 1000) + " ms");
+        }
+        else
+        {
+            trace::mark("player: direct " + plan.container + " refused (" + opened.why +
+                        "); asking the server to remux");
+            g_request.server_remux = true;
+            plan = jellyfin::playback_plan(g_request);
+            if (!plan.valid)
+            {
+                set_state(player::State::failed,
+                          "Playback negotiation failed. Try again or change quality.");
+                g_running.store(false);
+                return nullptr;
+            }
+        }
+    }
+    if (demuxer)
+    {
+        s_last_request = g_request;
+        s_last_plan = plan;
     }
     g_absolute_timestamps = plan.absolute_timestamps;
     g_server_muxed = !plan.direct;
@@ -1372,14 +1503,22 @@ void *playback_entry(void *) noexcept
                 std::to_string(plan.audio_channels) + (plan.direct ? " (direct)" : " (server)"));
     trace::mark("player: connecting media stream");
     set_state(player::State::opening, "Connecting");
-    if (!stream.open(settings.host, settings.port, plan.path, {}))
+    std::vector<std::string> range;
+    if (demuxer)
+        range.push_back("Range: bytes=" + std::to_string(direct_offset) + "-");
+    if (!stream.open(settings.host, settings.port, plan.path, range) ||
+        (demuxer && direct_offset != 0 && stream.status() != 206))
     {
-        set_state(player::State::failed, "The server would not start the stream.");
+        trace::mark("player: media stream refused, HTTP " + std::to_string(stream.status()));
+        set_state(player::State::failed, player::stream_failure_message(stream.status()));
         decoder.close();
         g_running.store(false);
         return nullptr;
     }
-    trace::mark("player: stream open");
+    trace::mark("player: stream open " + std::to_string((now_us() - g_entry_us) / 1000) +
+                " ms after opening");
+    if (!demuxer)
+        demuxer = std::make_unique<media::TsDemuxer>();
     reporter::begin({g_request.item_id, plan.media_source_id, plan.play_session,
                      plan.direct ? "DirectPlay" : "Transcode", g_request.audio_index,
                      g_request.subtitle_index},
@@ -1460,7 +1599,7 @@ void *playback_entry(void *) noexcept
     bool decoder_ready = false;
     set_state(player::State::opening, "Buffering");
 
-    TransportProducer transport(stream, order_capture);
+    TransportProducer transport(stream, *demuxer, order_capture);
     if (!transport.start())
     {
         set_state(player::State::failed, "Could not start the transport buffer.");
@@ -1499,6 +1638,9 @@ void *playback_entry(void *) noexcept
     constexpr std::size_t kReadDelay = 4;
     std::size_t accepted = 0;
     std::size_t concealed = 0;
+    std::size_t skipped_early = 0;  /* decoded only to reach a seek target */
+    std::size_t left_undecoded = 0; /* before the target and referenced by nothing */
+    video::SkipState skip_state;
     double last_published_seconds = 0.0;
     double frame_duration = 1.0 / 24.0;
     bool saw_picture = false;
@@ -1564,6 +1706,16 @@ void *playback_entry(void *) noexcept
                 break;
             }
             decoder_ready = true;
+        }
+
+        /* Before a seek target, a picture nothing references is not decoded. */
+        if (present_from > 0.0 &&
+            video::disposable(unit.data.data(), unit.data.size(), stream_codec == ts::Codec::hevc,
+                              skip_state) &&
+            unit.pts >= 0 && static_cast<double>(unit.pts) / 90000.0 + 0.0005 < present_from)
+        {
+            ++left_undecoded;
+            continue;
         }
 
         const std::size_t slot = submitted % decoder.slots;
@@ -1667,6 +1819,15 @@ void *playback_entry(void *) noexcept
             break;
         }
 
+        /* A seek decodes from the keyframe before; only the target is shown,
+           and the pictures before it are passed over without a trace each. */
+        if (present_from > 0.0 && picture_pts >= 0 &&
+            static_cast<double>(picture_pts) / 90000.0 + 0.0005 < present_from)
+        {
+            ++skipped_early;
+            continue;
+        }
+
         if (accepted < 12)
             trace::mark("player: pts input=" + std::to_string(unit.pts) + " picture=" +
                         std::to_string(picture_pts) + " depth=" + std::to_string(decoder.depth) +
@@ -1750,6 +1911,14 @@ void *playback_entry(void *) noexcept
         {
             saw_picture = true;
             set_state(player::State::playing, {});
+            trace::mark("player: first picture shown " +
+                        std::to_string((now_us() - g_entry_us) / 1000) + " ms after opening, " +
+                        std::to_string(skipped_early) + " decoded and " +
+                        std::to_string(left_undecoded) + " left undecoded to reach the start" +
+                        (stream_codec == ts::Codec::hevc && present_from > 0.0
+                             ? skip_state.single_layer ? " (single sub-layer)"
+                                                       : " (sub-layers: all decoded)"
+                             : ""));
         }
         /*
          * Main 10 output is P010, which stores each sample in two bytes, so
@@ -1828,8 +1997,8 @@ void *playback_entry(void *) noexcept
     trace::mark("player: finished after " + std::to_string(transport.total_bytes / 1024) +
                 " KiB  " + "submitted=" + std::to_string(submitted) +
                 " accepted=" + std::to_string(accepted) + " refused=" + std::to_string(rejected) +
-                " concealed=" + std::to_string(concealed) +
-                " failed=" + std::to_string(decode_errors));
+                " concealed=" + std::to_string(concealed) + " before_seek=" +
+                std::to_string(skipped_early) + " failed=" + std::to_string(decode_errors));
     return nullptr;
 }
 } // namespace

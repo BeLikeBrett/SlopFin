@@ -13,6 +13,7 @@
  */
 
 #include "account.hpp"
+#include "app_files.hpp"
 #include "avatar_crop.hpp"
 
 #include "background.hpp"
@@ -309,26 +310,12 @@ bool open_sandbox(std::string &why) noexcept
     struct stat st = {};
     if (stat("/user/av_contents", &st) == 0)
         return true;
-    int payload = open("/app0/assets/slopfin-sandbox.bin", O_RDONLY);
-    if (payload < 0)
-        payload = open("/data/homebrew/PPSA99001/assets/slopfin-sandbox.bin", O_RDONLY);
-    if (payload < 0 || fstat(payload, &st) != 0 || st.st_size <= 0 || st.st_size > 1024 * 1024)
+    const std::string bytes = app_files::contents("assets/slopfin-sandbox.bin", 1024 * 1024);
+    if (bytes.empty())
     {
-        if (payload >= 0)
-            (void)close(payload);
         why = "The picture picker's helper is missing from this build.";
         return false;
     }
-    std::string bytes(static_cast<std::size_t>(st.st_size), '\0');
-    std::size_t have = 0;
-    while (have < bytes.size())
-    {
-        const ssize_t got = read(payload, bytes.data() + have, bytes.size() - have);
-        if (got <= 0)
-            break;
-        have += static_cast<std::size_t>(got);
-    }
-    (void)close(payload);
     const std::string pid = std::to_string(getpid());
     const int out = open("/data/slopfin-sandbox-pid", O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (out >= 0)
@@ -337,7 +324,7 @@ bool open_sandbox(std::string &why) noexcept
         (void)close(out);
     }
     (void)unlink("/data/slopfin-sandbox-result");
-    if (have != bytes.size() || !http::send_bytes("127.0.0.1", 9021, bytes))
+    if (!http::send_bytes("127.0.0.1", 9021, bytes))
     {
         why = "Your captures need the console's payload loader (elfldr, port 9021), which did not "
               "answer.";

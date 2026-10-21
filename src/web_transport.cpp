@@ -4,6 +4,7 @@
  * PS5 API declarations follow ProsperoTV's iptv_http.cpp, copyright
  * BlackBearReloaded, GPL-3.0-or-later. */
 #include "web_transport.hpp"
+#include "app_files.hpp"
 #include "trace.hpp"
 #include <algorithm>
 #include <cstring>
@@ -223,23 +224,16 @@ bool initialize()
         return false;
     }
     /* Keep CA verification usable after shared-data recovery changes the process root. */
-    int ca_file = open("/app0/assets/ca-certificates.pem", O_RDONLY | O_NOFOLLOW);
-    if (ca_file < 0)
-        ca_file =
-            open("/data/homebrew/PPSA99001/assets/ca-certificates.pem", O_RDONLY | O_NOFOLLOW);
-    if (ca_file < 0)
+    static std::string bundle;
+    bundle = slopfin::app_files::contents("assets/ca-certificates.pem", 512 * 1024);
+    if (bundle.empty())
     {
-        slopfin::trace::mark("https: packaged CA certificates missing");
+        slopfin::trace::mark("https: packaged CA certificates missing, kept " +
+                             std::to_string(slopfin::app_files::application.kept_count()));
         return false;
     }
-    static std::string bundle;
-    char bytes[4096];
-    long count;
-    while ((count = read(ca_file, bytes, sizeof(bytes))) > 0 && bundle.size() <= 512 * 1024)
-        bundle.append(bytes, static_cast<std::size_t>(count));
-    close(ca_file);
     const auto certificates = slopfin::http::pem_certificates(bundle);
-    if (count < 0 || bundle.size() > 512 * 1024 || certificates.empty())
+    if (certificates.empty())
         return false;
     std::vector<HttpsCertificate> items;
     std::vector<const HttpsCertificate *> list;
