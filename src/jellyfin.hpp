@@ -175,7 +175,7 @@ bool probe(const std::string &host, int port, std::string &server_name) noexcept
 void sign_out() noexcept;
 
 /* Marks an item watched, which is how it leaves Continue Watching. */
-bool mark_played(const std::string &item_id) noexcept;
+bool mark_played(const std::string &item_id, bool played = true) noexcept;
 
 std::vector<Library> libraries() noexcept;
 

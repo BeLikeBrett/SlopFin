@@ -203,6 +203,7 @@ enum class Request
        carry: playback needs its media sources. */
     play_sibling,
     mark_played,
+    mark_unplayed,
     sign_out,
 };
 
@@ -1517,11 +1518,23 @@ void *worker(void *) noexcept
         }
 
         case Request::mark_played:
+        case Request::mark_unplayed:
             /* Marking something played moves it out of Continue Watching and
                pulls the next episode into Next Up. Nothing else on Home
                changes, so this no longer re-walks the libraries. */
-            if (jellyfin::mark_played(text))
+            if (const bool played = request == Request::mark_played;
+                jellyfin::mark_played(text, played))
+            {
+                {
+                    std::lock_guard<std::mutex> guard(g_shared.mutex);
+                    if (g_shared.detail_item.id == text)
+                    {
+                        g_shared.detail_item.played = played;
+                        ++g_shared.detail_epoch; /* the button names the new action */
+                    }
+                }
                 refresh_progress_rows();
+            }
             break;
 
         case Request::sign_out:
@@ -7329,7 +7342,7 @@ void handle_detail_input(const jellyfin::Item &item, const std::vector<jellyfin:
             begin_playback(item, g_view.detail_source, 0.0);
             break;
         case DetailAction::watched:
-            submit(Request::mark_played, item.id);
+            submit(item.played ? Request::mark_unplayed : Request::mark_played, item.id);
             break;
         case DetailAction::details:
         {
