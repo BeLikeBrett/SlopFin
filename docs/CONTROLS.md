@@ -5,7 +5,7 @@
 | Control | Action |
 | --- | --- |
 | D-pad | Navigate rows, artwork and menus |
-| Right stick | Scroll libraries, Discover and Settings |
+| Right stick | Scroll libraries, Discover and Settings; held, it speeds up to double after about a second |
 | Cross | Select or play |
 | Circle | Go back |
 | L1 / R1 | Switch between the **Home** and **Discover** tabs |

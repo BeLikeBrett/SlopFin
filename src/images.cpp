@@ -204,7 +204,8 @@ std::string make_key(const std::string &item_id, slopfin::images::Kind kind,
     case slopfin::images::Kind::file:
         return item_id + "|f" + tag;
     case slopfin::images::Kind::remote:
-        return item_id + "|r";
+        /* Sized on arrival, so each drawn size is its own entry. */
+        return item_id + "|r" + tag;
     }
     return item_id;
 }
@@ -267,11 +268,69 @@ unsigned char *read_local_file(const std::string &path, std::size_t &size) noexc
     return bytes;
 }
 
+/*
+ * A request server on the local network can hand out TMDB artwork itself
+ * (Seerr's /imageproxy). Over plain HTTP on the LAN that is far quicker than a
+ * fresh TLS connection to TMDB for every poster. Set from the render thread,
+ * read by the workers, so it lives under g_mutex.
+ */
+std::string g_proxy_host;
+int g_proxy_port = 0;
+int g_proxy_failures = 0;
+
+unsigned char *fetch_through_proxy(const std::string &path, std::size_t &size) noexcept
+{
+    std::string host;
+    int port = 0;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        /* A server that keeps refusing is not asked again this session. */
+        if (g_proxy_host.empty() || g_proxy_failures >= 3)
+            return nullptr;
+        host = g_proxy_host;
+        port = g_proxy_port;
+    }
+    const auto response = slopfin::http::get(host, port, "/imageproxy/tmdb/t/p/" + path, {});
+    const bool ok =
+        response.ok() && response.body.size() > 2 && response.body.size() <= 4u * 1024u * 1024u;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_proxy_failures = ok ? 0 : g_proxy_failures + 1;
+    }
+    if (!ok)
+        return nullptr;
+    auto *bytes = static_cast<unsigned char *>(slopfin::bigalloc::allocate(response.body.size()));
+    if (bytes == nullptr)
+        return nullptr;
+    std::memcpy(bytes, response.body.data(), response.body.size());
+    size = response.body.size();
+    return bytes;
+}
+
 unsigned char *fetch_remote(const std::string &url, std::size_t &size) noexcept
 {
     size = 0;
-    if (!url.starts_with("https://image.tmdb.org/t/p/"))
+    constexpr std::string_view kTmdb = "https://image.tmdb.org/t/p/";
+    if (!url.starts_with(kTmdb))
         return nullptr;
+    static std::atomic<int> reported{0};
+    const auto began = std::chrono::steady_clock::now();
+    const auto report = [&](const char *source)
+    {
+        if (reported.fetch_add(1) < 24)
+            slopfin::trace::mark(
+                std::string("img remote ") + source + " " +
+                std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - began)
+                                   .count()) +
+                "ms " + std::to_string(size) + " bytes");
+    };
+    if (auto *proxied = fetch_through_proxy(url.substr(kTmdb.size()), size))
+    {
+        report("proxy");
+        return proxied;
+    }
+    size = 0;
     slopfin::http::WebRequest request;
     if (!request.open(url, "GET", {}, {}, {}) || request.status() != 200)
         return nullptr;
@@ -310,7 +369,87 @@ unsigned char *fetch_remote(const std::string &url, std::size_t &size) noexcept
         size = 0;
         return nullptr;
     }
+    report("tmdb");
     return bytes;
+}
+
+/*
+ * Resamples RGBA down to exactly `target` rows, keeping the shape, by
+ * averaging the source area under each output pixel. Done once on a worker so
+ * the picture is drawn at its own size every frame after, with no filtering.
+ * Only shrinks: a picture smaller than asked for is left alone.
+ */
+unsigned char *resample_to_height(unsigned char *pixels, int &width, int &height,
+                                  int target) noexcept
+{
+    if (target <= 0 || height <= target)
+        return pixels;
+    const int out_h = target;
+    const int out_w =
+        std::max(1, static_cast<int>(static_cast<long long>(width) * target * 2 / height + 1) / 2);
+    /* One pass across, into rows of floats, then one pass down. */
+    const std::size_t across = static_cast<std::size_t>(out_w) * static_cast<std::size_t>(height);
+    auto *mid = static_cast<float *>(slopfin::bigalloc::allocate(across * 4u * sizeof(float)));
+    auto *out = static_cast<unsigned char *>(slopfin::bigalloc::allocate(
+        static_cast<std::size_t>(out_w) * static_cast<std::size_t>(out_h) * 4u));
+    if (mid == nullptr || out == nullptr)
+    {
+        if (mid != nullptr)
+            slopfin::bigalloc::release(mid);
+        if (out != nullptr)
+            slopfin::bigalloc::release(out);
+        return pixels;
+    }
+    const auto pass = [](int in_size, int out_size, auto &&accumulate)
+    {
+        const float scale = static_cast<float>(in_size) / static_cast<float>(out_size);
+        for (int o = 0; o < out_size; ++o)
+        {
+            const float from = static_cast<float>(o) * scale;
+            const float to = from + scale;
+            for (int i = static_cast<int>(from); i < in_size && static_cast<float>(i) < to; ++i)
+            {
+                const float weight = (std::min(to, static_cast<float>(i + 1)) -
+                                      std::max(from, static_cast<float>(i))) /
+                                     scale;
+                accumulate(o, i, weight);
+            }
+        }
+    };
+    std::memset(mid, 0, across * 4u * sizeof(float));
+    for (int y = 0; y < height; ++y)
+    {
+        const unsigned char *in = pixels + static_cast<std::size_t>(y) * width * 4u;
+        float *row = mid + static_cast<std::size_t>(y) * out_w * 4u;
+        pass(width, out_w,
+             [&](int o, int i, float weight)
+             {
+                 for (int c = 0; c < 4; ++c)
+                     row[o * 4 + c] += static_cast<float>(in[i * 4 + c]) * weight;
+             });
+    }
+    std::vector<float> column(static_cast<std::size_t>(out_h) * 4u);
+    for (int x = 0; x < out_w; ++x)
+    {
+        std::fill(column.begin(), column.end(), 0.0f);
+        pass(height, out_h,
+             [&](int o, int i, float weight)
+             {
+                 const float *from = mid + (static_cast<std::size_t>(i) * out_w + x) * 4u;
+                 for (int c = 0; c < 4; ++c)
+                     column[static_cast<std::size_t>(o) * 4u + c] += from[c] * weight;
+             });
+        for (int y = 0; y < out_h; ++y)
+            for (int c = 0; c < 4; ++c)
+                out[(static_cast<std::size_t>(y) * out_w + x) * 4u + c] =
+                    static_cast<unsigned char>(std::clamp(
+                        column[static_cast<std::size_t>(y) * 4u + c] + 0.5f, 0.0f, 255.0f));
+    }
+    slopfin::bigalloc::release(mid);
+    slopfin::bigalloc::release(pixels);
+    width = out_w;
+    height = out_h;
+    return out;
 }
 
 /* Averages whole blocks of pixels down to at most `height` rows. RGBA in, RGBA out. */
@@ -554,7 +693,7 @@ void *worker(void *) noexcept
         const std::string cache_key =
             local                                  ? std::string{}
             : std::strcmp(job.kind, "Remote") == 0 ? "remote|" + job.item_id
-            : job.tag.empty()                      ? std::string{}
+            : job.tag.empty() ? std::string{}
                               : std::string(job.kind) + "|" + job.item_id + "|" + job.tag + "|" +
                                     std::to_string(job.height);
         const bool cached = !cache_key.empty() && slopfin::image_cache::load(cache_key, encoded);
@@ -610,6 +749,11 @@ void *worker(void *) noexcept
             }
             if (pixels != nullptr && width > 0 && height > 0 && local)
                 pixels = shrink(pixels, width, height, job.height);
+            /* TMDB only serves fixed widths; bring its posters to the size
+               they are drawn at. */
+            if (pixels != nullptr && width > 0 && height > 0 &&
+                std::strcmp(job.kind, "Remote") == 0)
+                pixels = resample_to_height(pixels, width, height, job.height);
             if (pixels != nullptr && width > 0 && height > 0)
             {
                 /*
@@ -678,6 +822,16 @@ void *worker(void *) noexcept
 
 namespace slopfin::images
 {
+
+void set_remote_proxy(const std::string &host, int port) noexcept
+{
+    std::lock_guard<std::mutex> guard(g_mutex);
+    if (host == g_proxy_host && port == g_proxy_port)
+        return;
+    g_proxy_host = host;
+    g_proxy_port = port;
+    g_proxy_failures = 0;
+}
 
 std::uint64_t spare_cores() noexcept
 {

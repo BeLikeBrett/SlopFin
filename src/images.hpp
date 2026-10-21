@@ -43,6 +43,10 @@ bool start() noexcept;
  * starts inherits the render core, so background threads should be given
  * this. 0 where it cannot be known.
  */
+/* A LAN request server that serves TMDB artwork through /imageproxy; empty
+   host fetches it from TMDB directly. */
+void set_remote_proxy(const std::string &host, int port) noexcept;
+
 std::uint64_t spare_cores() noexcept;
 
 /*

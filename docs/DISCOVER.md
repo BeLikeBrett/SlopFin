@@ -35,7 +35,7 @@ opens each one straight away.
 
 | Control | Action |
 | --- | --- |
-| Triangle | Search using the PlayStation keyboard (Refresh on Requests) |
+| Triangle | Search using the PlayStation keyboard (Refresh on Requests); the search field and keyboard sit where Home's do |
 | D-pad | Browse titles; Up from the first row reaches the media filter |
 | Cross | Open a title, then choose its action |
 | R3 | Cycle All / Movies / Shows; the right-stick prompt beside the filter depresses on a press |
@@ -55,7 +55,11 @@ New releases excludes future dates and requires 10 votes to reduce empty entries
 Titles load a few upstream pages at a time and more arrive as you scroll toward
 the end, up to 600 titles. A scrollbar shows your position. The selected title
 stays focused as more results arrive. The right stick scrolls the catalog and
-Requests continuously. Requests has no filters.
+Requests continuously: it eases in, speeds up to double after about a second
+held, and glides to a stop when let go. A category seen in the last three
+minutes reopens at once from memory; a request, cancellation or Clear Data
+forgets them. When the request server is a LAN address, posters come through
+its `/imageproxy` over plain HTTP instead of from TMDB directly. Requests has no filters.
 
 ## Seasons and quality
 

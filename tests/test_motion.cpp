@@ -181,6 +181,52 @@ int main()
         check(mix(10.0f, 20.0f, 0.5f) == 15.0f, "mix is a straight line");
     }
 
+    /* Stick scrolling: cruise, ramp to double and hold, then glide out. */
+    {
+        StickGlide glide;
+        float moved = 0.0f;
+        for (int i = 0; i < 6; ++i)
+            moved += glide.step(1.0f, kFrame);
+        check(glide.velocity() > 0.0f && glide.velocity() < StickGlide::kCruise,
+              "the stick eases in rather than jumping to speed");
+        for (int i = 0; i < 12; ++i)
+            moved += glide.step(1.0f, kFrame);
+        check(std::fabs(glide.velocity() - StickGlide::kCruise) < 0.3f,
+              "a fresh push settles at the cruising speed");
+        for (int i = 0; i < 90; ++i)
+            moved += glide.step(1.0f, kFrame);
+        check(std::fabs(glide.velocity() - StickGlide::kTop) < 0.05f,
+              "a held push reaches twice the cruising speed");
+        for (int i = 0; i < 300; ++i)
+            moved += glide.step(1.0f, kFrame);
+        check(std::fabs(glide.velocity() - StickGlide::kTop) < 0.05f, "and stays there");
+        const float before = moved;
+        int frames = 0;
+        while (glide.moving() && frames < 120)
+        {
+            moved += glide.step(0.0f, kFrame);
+            ++frames;
+        }
+        check(!glide.moving(), "letting go comes to rest");
+        check(frames > 6 && frames < 60, "the glide out lasts a fraction of a second");
+        check(moved - before > 0.2f && moved - before < 1.5f,
+              "the glide carries on under a row and a half");
+
+        StickGlide light;
+        for (int i = 0; i < 30; ++i)
+            (void)light.step(0.3f, kFrame);
+        check(light.velocity() > 0.0f && light.velocity() < 0.25f * StickGlide::kCruise,
+              "a light push scrolls slowly");
+
+        StickGlide reverse;
+        for (int i = 0; i < 120; ++i)
+            (void)reverse.step(1.0f, kFrame);
+        for (int i = 0; i < 30; ++i)
+            (void)reverse.step(-1.0f, kFrame);
+        check(reverse.velocity() < 0.0f && reverse.velocity() > -StickGlide::kTop + 0.5f,
+              "reversing starts the ramp again");
+    }
+
     if (g_failures == 0)
         std::printf("motion: all checks passed\n");
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -84,6 +84,16 @@ struct Model
     std::string search_error;
     int page = 1;
     int pages = 1;
+    /* Catalogs already fetched, by query, media and category, so moving
+       back to one shows it at once. Kept briefly: availability changes. */
+    struct CachedCatalog
+    {
+        std::vector<Title> results;
+        int page = 1;
+        int pages = 1;
+        std::chrono::steady_clock::time_point at;
+    };
+    std::unordered_map<std::string, CachedCatalog> catalogs;
 
     std::vector<Request> requests;
     long requests_epoch = 0;
@@ -153,8 +163,10 @@ struct View
     std::string query;
     int grid_index = 0;
     motion::Spring grid_scroll;
+    motion::StickGlide grid_glide;
     int request_index = 0;
     motion::Spring request_scroll;
+    motion::StickGlide request_glide;
     int media_filter = 0;
     /* Where the filter's pill is, sliding toward media_filter. */
     motion::Spring filter_slide{0.0f};
@@ -244,6 +256,9 @@ std::string g_open_item;
 /* The tab bar owns the top of the screen; the category's own name sits under
    it, with the media filter on the same line at the right. */
 constexpr int kHeaderY = ui::kPageTitleY;
+/* A little narrower than Home's, which has nothing at its right: room for the
+   answer beside it before the media filter. */
+constexpr int kSearchFieldW = ui::kSearchFieldW - 64;
 constexpr int kFieldY = kHeaderY;
 constexpr int kGridY = ui::kPageTitleY + 104;
 constexpr int kListY = kGridY;
@@ -353,7 +368,12 @@ void sync_connection() noexcept
     g_connection = {
         settings.seerr_host,        settings.seerr_port, settings.seerr_auth, key, cookie,
         g_connection.generation + 1};
+    /* Posters come through the request server when it is on the LAN. */
+    images::set_remote_proxy(
+        server_address::web_transport(settings.seerr_host) ? std::string{} : settings.seerr_host,
+        settings.seerr_port);
     g_model.results.clear();
+    g_model.catalogs.clear();
     g_model.requests.clear();
     g_model.known_titles.clear();
     g_model.detail_pending.clear();
@@ -684,6 +704,11 @@ std::string catalog_path(const std::string &term, int media, int sort, int page)
     return "/api/v1/discover/" + type + "?" + paging + "&sortBy=" + order + extra;
 }
 constexpr int kCatalogBatch = 5;
+constexpr auto kCatalogFresh = std::chrono::minutes(3);
+std::string catalog_key(const std::string &term, int media, int sort) noexcept
+{
+    return std::to_string(media) + "|" + std::to_string(sort) + "|" + term;
+}
 struct CatalogPage
 {
     std::vector<Title> results;
@@ -783,11 +808,21 @@ void job_search(Connection connection, std::string term, long generation, int me
             g_model.search_loading = more;
             g_model.search_error = error;
             ++g_model.search_epoch;
+            /* Only a page whose every batch arrived, so paging on from a
+               cached copy never skips server pages. */
+            if (!more && error.empty())
+            {
+                if (g_model.catalogs.size() >= 24)
+                    g_model.catalogs.clear();
+                g_model.catalogs[catalog_key(term, media, sort)] = {
+                    results, page, pages, std::chrono::steady_clock::now()};
+            }
         }
         if (fetched && more &&
             !background::run(
                 [connection, term = std::move(term), generation, media, sort, page, batch,
-                 catalog = std::move(catalog)] {
+                 catalog = std::move(catalog)]
+                {
                     job_search(connection, term, generation, media, sort, page, batch + 1, catalog);
                 },
                 background::Lane::requests))
@@ -1104,6 +1139,7 @@ void job_request(Connection connection, Title title, std::string body, bool is4k
                                                    true);
         if (response.ok() || response.status == 409)
         {
+            g_model.catalogs.clear();
             for (auto &result : g_model.results)
                 if (result.tmdb_id == title.tmdb_id && result.media_type == title.media_type)
                 {
@@ -1260,6 +1296,19 @@ void start_search(const std::string &term, int page = 1, bool append = false) no
         generation = ++g_model.search_wanted;
         g_model.search_loading = !connection.host.empty();
         g_model.search_error.clear();
+        if (!append)
+            if (const auto cached =
+                    g_model.catalogs.find(catalog_key(term, g_view.media_filter, g_view.sort));
+                cached != g_model.catalogs.end() &&
+                std::chrono::steady_clock::now() - cached->second.at < kCatalogFresh)
+            {
+                g_model.results = cached->second.results;
+                g_model.page = cached->second.page;
+                g_model.pages = cached->second.pages;
+                g_model.search_loading = false;
+                ++g_model.search_epoch;
+                return;
+            }
         if (append)
         {
             catalog->results = g_model.results;
@@ -1449,6 +1498,13 @@ std::vector<int> visible_requests() noexcept
     return out;
 }
 
+std::string search_label() noexcept
+{
+    return g_view.media_filter == 1   ? "Search movies"
+           : g_view.media_filter == 2 ? "Search shows"
+                                      : "Search movies and shows";
+}
+
 void open_keyboard(Field field) noexcept
 {
     if (g_field != Field::none || ime::busy())
@@ -1461,8 +1517,11 @@ void open_keyboard(Field field) noexcept
     {
     case Field::query:
         initial = g_view.query;
-        title = "Search the request server";
-        placeholder = "Movie or series name";
+        /* Says what the media filter limits the search to. */
+        title = search_label();
+        placeholder = g_view.media_filter == 1   ? "Movie name"
+                      : g_view.media_filter == 2 ? "Series name"
+                                                 : "Movie or series name";
         mode = ime::Mode::search;
         break;
     case Field::host:
@@ -1489,7 +1548,8 @@ void open_keyboard(Field field) noexcept
         return;
     }
     g_field = field;
-    ime::request(initial, title, placeholder, mode, kFieldY + 64 + 16);
+    ime::request(initial, title, placeholder, mode,
+                 field == Field::query ? ui::kSearchKeyboardY : kFieldY + 64 + 16);
 }
 
 void apply_keyboard(const std::string &entered) noexcept
@@ -1633,6 +1693,11 @@ bool can_cancel() noexcept
 }
 void cancel_request() noexcept
 {
+    {
+        /* Availability is about to change under every cached catalog. */
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_model.catalogs.clear();
+    }
     if (!can_cancel())
         return;
     const auto connection = connection_snapshot();
@@ -1685,6 +1750,11 @@ void cancel_request() noexcept
 }
 void clear_data() noexcept
 {
+    {
+        /* Availability is about to change under every cached catalog. */
+        std::lock_guard<std::mutex> guard(g_mutex);
+        g_model.catalogs.clear();
+    }
     if (!can_clear_data())
         return;
     const auto connection = connection_snapshot();
@@ -2026,6 +2096,10 @@ void open_sheet_for_request(const Request &request) noexcept
 
 void reload_catalog() noexcept
 {
+    /* A fresh catalog starts at its top, not on whatever was focused in the
+       last one: that may be in this one too, and arrive cached. */
+    g_view.results.clear();
+    g_view.grid_glide.stop();
     g_view.grid_index = 0;
     g_view.grid_scroll.jump(0.0f);
     start_search(g_view.query);
@@ -2053,20 +2127,29 @@ void reveal_selection(motion::Spring &scroll, int index, int count, int columns,
     else if (bottom > scroll.target() + viewport)
         scroll.aim(std::min(limit, bottom - viewport));
 }
-bool scroll_with_stick(motion::Spring &scroll, int &index, int count, int columns, int row_height,
-                       int viewport, float dt) noexcept
+bool scroll_with_stick(motion::Spring &scroll, motion::StickGlide &glide, int &index, int count,
+                       int columns, int row_height, int viewport, float dt) noexcept
 {
-    const float stick = pad::scroll_axis();
-    if (count == 0 || stick == 0.0f || (g_view.field_focused && stick < 0.0f))
+    float axis = pad::scroll_axis();
+    /* Up from the first row belongs to the filter, not to the list. */
+    if (g_view.field_focused && axis < 0.0f)
+        axis = 0.0f;
+    /* A press on the d-pad takes over from a list still coasting. */
+    if (pad::pressed(pad::Button::up) || pad::pressed(pad::Button::down) ||
+        pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right))
+        glide.stop();
+    const float rows = glide.step(axis, dt);
+    if (count == 0 || !glide.moving())
         return false;
     g_view.field_focused = false;
     const float limit = scroll_limit(count, columns, row_height, viewport);
-    const float at = std::clamp(scroll.value() + stick * 2.6f * row_height * dt, 0.0f, limit);
+    float at = scroll.value() + rows * row_height;
+    if (at <= 0.0f || at >= limit)
+        glide.stop();
+    at = std::clamp(at, 0.0f, limit);
     scroll.jump(at);
-    const int first = static_cast<int>(at) / row_height;
-    const int last = std::max(first, static_cast<int>(at + viewport - 1) / row_height);
-    index =
-        std::min(count - 1, std::clamp(index / columns, first, last) * columns + index % columns);
+    index = std::min(count - 1, ui::stick_focus(index, columns, (count + columns - 1) / columns, at,
+                                                row_height, viewport));
     return true;
 }
 /* Once something has scrolled off the top, soften the edge it leaves by
@@ -2109,8 +2192,8 @@ bool search_input(float dt) noexcept
             g_view.grid_index / columns >= rows - 2)
             start_search(g_view.query, g_view.page + 1, true);
     };
-    if (scroll_with_stick(g_view.grid_scroll, g_view.grid_index, count, grid_columns(), kCardStepY,
-                          kCatalogViewport, dt))
+    if (scroll_with_stick(g_view.grid_scroll, g_view.grid_glide, g_view.grid_index, count,
+                          grid_columns(), kCardStepY, kCatalogViewport, dt))
     {
         load_more();
         return true;
@@ -2186,8 +2269,8 @@ bool requests_input(float dt) noexcept
     const int count = static_cast<int>(visible.size());
     /* The list has no toolbar above it: Triangle refreshes, from anywhere. */
     g_view.field_focused = false;
-    if (scroll_with_stick(g_view.request_scroll, g_view.request_index, count, 1, kRequestRow,
-                          kRequestViewport, dt))
+    if (scroll_with_stick(g_view.request_scroll, g_view.request_glide, g_view.request_index, count,
+                          1, kRequestRow, kRequestViewport, dt))
         return true;
     g_view.request_index = std::clamp(g_view.request_index, 0, std::max(0, count - 1));
     if (pad::pressed(pad::Button::up))
@@ -2379,7 +2462,7 @@ void draw_poster(const std::string &path, int x, int y, int w, int h, int radius
 {
     const gfx::Bitmap *art = nullptr;
     if (!path.empty())
-        art = images::acquire(poster_url_for(path, h), {}, images::Kind::remote, h);
+        art = images::acquire(poster_url_for(path, h), std::to_string(h), images::Kind::remote, h);
     if (art != nullptr && art->valid())
     {
         gfx::blit_cover(*art, x, y, w, h, radius, 255);
@@ -2426,24 +2509,38 @@ void draw_header() noexcept
         return;
     }
     const bool requests = g_view.mode == 1;
-    const bool searching = !requests && !g_view.query.empty();
-    const std::string title = requests    ? std::string{"Requests"}
-                              : searching ? "\xE2\x80\x9C" + g_view.query + "\xE2\x80\x9D"
-                                          : std::string{kSectionLabels[g_view.sort]};
+    const bool typing = g_field == Field::query && ime::busy();
+    const bool searching = !requests && (!g_view.query.empty() || typing);
     const int count = requests ? static_cast<int>(g_view.requests.size()) : results_size();
-    constexpr int kTitleSize = 44;
-    const int title_w = std::min(820, text::measure(title, kTitleSize, Weight::bold));
-    text::draw_ellipsized(ui::kContentX, kHeaderY, 820, title, kTitleSize, Weight::bold,
-                          gfx::palette::text);
-    if (count > 0)
-        text::draw(ui::kContentX + title_w + 18, kHeaderY + 16, std::to_string(count), 22,
-                   Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x66));
-    /* Says where a search came from, and how to get back there. */
     if (searching)
     {
-        const std::string back = std::string{"Search results  \xC2\xB7  Circle returns to "} +
-                                 kSectionLabels[g_view.sort];
-        text::draw(ui::kContentX, kHeaderY + 62, back, 20, Weight::regular, gfx::palette::text_dim);
+        /* The same field Home searches with, in the same place, so the
+           keyboard opens under it on both tabs. */
+        ui::SearchField field;
+        field.text = g_view.query;
+        field.placeholder = search_label();
+        constexpr const char *kScopes[] = {"Everything", "Movies", "Shows"};
+        field.scope = kScopes[std::clamp(g_view.media_filter, 0, 2)];
+        field.typing = typing;
+        if (typing)
+            field.note.clear();
+        else if (g_view.search_loading && count == 0)
+            field.note = "Searching";
+        else
+            field.note = count == 0 ? "No matches" : std::to_string(count) + " results";
+        ui::draw_search_field(ui::kContentX, ui::kSearchFieldY, kSearchFieldW, field);
+    }
+    else
+    {
+        const std::string title =
+            requests ? std::string{"Requests"} : std::string{kSectionLabels[g_view.sort]};
+        constexpr int kTitleSize = 44;
+        const int title_w = std::min(820, text::measure(title, kTitleSize, Weight::bold));
+        text::draw_ellipsized(ui::kContentX, kHeaderY, 820, title, kTitleSize, Weight::bold,
+                              gfx::palette::text);
+        if (count > 0)
+            text::draw(ui::kContentX + title_w + 18, kHeaderY + 16, std::to_string(count), 22,
+                       Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x66));
     }
     if (requests)
         return;
@@ -2581,8 +2678,8 @@ void draw_results() noexcept
                         .results[static_cast<std::size_t>(visible[static_cast<std::size_t>(index)])]
                         .poster_path;
                 if (!path.empty())
-                    images::prefetch(poster_url_for(path, kCardH), {}, images::Kind::remote,
-                                     kCardH);
+                    images::prefetch(poster_url_for(path, kCardH), std::to_string(kCardH),
+                                     images::Kind::remote, kCardH);
             }
     gfx::pop_clip();
     draw_scroll_fade(kGridY - 24, scroll);
@@ -2709,7 +2806,8 @@ void draw_requests() noexcept
         const auto &item =
             g_view.requests[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])];
         if (!item.poster_path.empty())
-            images::prefetch(poster_url_for(item.poster_path, 112), {}, images::Kind::remote, 112);
+            images::prefetch(poster_url_for(item.poster_path, 112), "112", images::Kind::remote,
+                             112);
         if (item.name.empty() && item.tmdb_id > 0)
         {
             const auto connection = connection_snapshot();

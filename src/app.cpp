@@ -143,9 +143,9 @@ constexpr int kGridFade = 34;
 constexpr int kGridViewHeight = gfx::kHeight - kGridTop - 40;
 /* Search stays in its originating category; the PS5 owns text entry. */
 constexpr int kSearchBarX = kContentX;
-constexpr int kSearchBarY = ui::kPageTitleY - 6;
-constexpr int kSearchBarH = 72;
-constexpr int kSearchBarW = 832;
+constexpr int kSearchBarY = ui::kSearchFieldY;
+constexpr int kSearchBarH = ui::kSearchFieldH;
+constexpr int kSearchBarW = ui::kSearchFieldW;
 
 /* The position bar: clear of the last column, inside the title-safe edge. */
 constexpr int kBarWidth = 6;
@@ -314,6 +314,7 @@ struct View
 
     int grid_index = 0;
     motion::Spring grid_scroll;
+    motion::StickGlide grid_glide;
 
     /* How far the content is dimmed while the sidebar holds the input. */
     motion::Spring sidebar_dim;
@@ -2498,49 +2499,16 @@ int search_results_top() noexcept
 
 void draw_search_bar(const SearchScope &scope, bool loading, std::size_t results) noexcept
 {
-    const int x = kSearchBarX;
-    const int y = kSearchBarY;
-    const int w = kSearchBarW;
-    const int h = kSearchBarH;
-    const bool active = ime::busy();
-
-    /* The bar stays legible behind the native keyboard. */
-    if (!active)
-        gfx::drop_shadow(x, y, w, h, h / 2, 18, 0x70);
-    gfx::rounded_rect(x, y, w, h, h / 2, gfx::rgba(0xff, 0xff, 0xff, active ? 0x16 : 0x10));
-    gfx::stroke_rounded_rect(x, y, w, h, h / 2, 2,
-                             active ? gfx::rgba(0xff, 0xff, 0xff, 0x8c)
-                                    : gfx::rgba(0xff, 0xff, 0xff, 0x24));
-
-    icons::draw(icons::Icon::search, x + 26, y + (h - 30) / 2, 30,
-                gfx::rgba(0xff, 0xff, 0xff, active ? 0xdd : 0x88));
-
-    const std::string &shown = g_view.search.committed;
-    const int text_x = x + 70;
-    const int text_w = w - 70 - 210;
-    ui::control_label(text_x, y, text_w, h, shown.empty() ? "Search " + scope.label : shown, 28,
-                      Weight::medium, shown.empty() ? gfx::palette::text_dim : gfx::palette::text);
-
-    /* What the search is bounded to, on the right of the bar. */
-    const int scope_w = text::measure(scope.label, 20, Weight::medium) + 34;
-    const int scope_x = x + w - scope_w - 18;
-    gfx::rounded_rect(scope_x, y + 19, scope_w, 34, 17, gfx::rgba(0xff, 0xff, 0xff, 0x14));
-    text::draw(scope_x + 17, text::centered_y(y + 19, 34, scope.label, 20, Weight::medium),
-               scope.label, 20, Weight::medium, gfx::rgba(0xff, 0xff, 0xff, 0xb4));
-
-    /* Triangle edits the existing search without clearing its results. */
-    const int chip_w = draw_button_chip(x + w + 26, y + (h - 44) / 2, icons::Icon::ps_triangle,
-                                        active ? "Typing" : "Edit", active);
-
-    /* A one-line answer beside it, rather than a screen that changes. */
-    std::string note;
+    ui::SearchField field;
+    field.text = g_view.search.committed;
+    field.placeholder = "Search " + scope.label;
+    field.scope = scope.label;
+    field.typing = ime::busy();
     if (loading)
-        note = "Searching";
+        field.note = "Searching";
     else if (!g_view.search.committed.empty())
-        note = results == 0 ? "No matches" : std::to_string(results) + " results";
-    if (!note.empty())
-        text::draw(x + w + 26 + chip_w + 22, y + 24, note, 22, Weight::regular,
-                   gfx::palette::text_dim);
+        field.note = results == 0 ? "No matches" : std::to_string(results) + " results";
+    ui::draw_search_field(kSearchBarX, kSearchBarY, kSearchBarW, field);
 }
 
 void draw_search_results(const std::vector<jellyfin::Item> &items,
@@ -6294,7 +6262,7 @@ void ask_keyboard(View::Prompt prompt) noexcept
         break;
     case View::Prompt::search:
         ime::request(g_view.search.committed, "Search Jellyfin", "Find a movie, series or episode",
-                     ime::Mode::search);
+                     ime::Mode::search, ui::kSearchKeyboardY);
         break;
     case View::Prompt::none:
         break;
@@ -6965,23 +6933,20 @@ void handle_grid_input(const std::vector<jellyfin::Item> &items) noexcept
 
     /* Continuous analogue scrolling keeps the focused item inside the viewport. */
     const float limit = grid_scroll_limit(items.size());
-    const float stick = pad::scroll_axis();
-    if (stick != 0.0f && limit > 0.0f)
+    if (moved || pad::pressed(pad::Button::up) || pad::pressed(pad::Button::down))
+        g_view.grid_glide.stop();
+    const float rows_moved = g_view.grid_glide.step(pad::scroll_axis(), frame_seconds());
+    if (g_view.grid_glide.moving() && limit > 0.0f)
     {
-        constexpr float kRowsPerSecond = 2.6f;
-        const float step = stick * kRowsPerSecond * kGridRowHeight * frame_seconds();
-        const float at = std::clamp(g_view.grid_scroll.value() + step, 0.0f, limit);
+        float at = g_view.grid_scroll.value() + rows_moved * kGridRowHeight;
+        if (at <= 0.0f || at >= limit)
+            g_view.grid_glide.stop();
+        at = std::clamp(at, 0.0f, limit);
         g_view.grid_scroll.jump(at);
         note_scrolling();
-
-        const int rows = grid_rows(items.size());
-        const int first_visible = static_cast<int>(at) / kGridRowHeight;
-        const int last_visible =
-            std::min(rows - 1, (static_cast<int>(at) + kGridViewHeight - 1) / kGridRowHeight);
-        const int column = g_view.grid_index % kGridColumns;
-        const int wanted = std::clamp(g_view.grid_index / kGridColumns, first_visible,
-                                      std::max(first_visible, last_visible));
-        g_view.grid_index = std::min(last, wanted * kGridColumns + column);
+        g_view.grid_index =
+            std::min(last, ui::stick_focus(g_view.grid_index, kGridColumns, grid_rows(items.size()),
+                                           at, kGridRowHeight, kGridViewHeight));
         return;
     }
 
@@ -9576,6 +9541,15 @@ void frame() noexcept
                         std::lock_guard<std::mutex> guard(g_shared.mutex);
                         g_shared.screen = Screen::playing;
                     }
+                    continue;
+                }
+                if (name.rfind("stick:", 0) == 0)
+                {
+                    /* stick:<-1..1>:<frames>, the right stick held that far. */
+                    float axis = 0.0f;
+                    int frames = 0;
+                    if (std::sscanf(name.c_str() + 6, "%f:%d", &axis, &frames) == 2)
+                        pad::inject_scroll(axis, frames);
                     continue;
                 }
                 /* Synthetic hold input persists for the specified frame count. */
