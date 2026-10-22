@@ -81,6 +81,11 @@ bool paused() noexcept;
 /* True while compressed audio is going to the TV undecoded (IEC 61937). */
 bool bitstream() noexcept;
 
+/* True when the current or last stream was decoded by the PS5 CPU (FFmpeg)
+   rather than the platform decoder or the TV. Still answers after a failure,
+   so the player can tell whose decoder it was. */
+bool software() noexcept;
+
 /* True once the output is running and the clock is meaningful. */
 bool running() noexcept;
 

@@ -386,6 +386,22 @@ void set_state(player::State state, const std::string &message) noexcept
     g_status.message = message;
 }
 
+/* A failure, and what recover() may turn off to try again. */
+void fail(const std::string &message, player::Fallback fallback) noexcept
+{
+    std::lock_guard<std::mutex> guard(g_mutex);
+    g_status.state = player::State::failed;
+    g_status.message = message;
+    g_status.fallback = fallback;
+}
+
+/* The audio fallback applies only when the CPU decoder was the one in use. */
+player::Fallback audio_fallback() noexcept
+{
+    return g_request.allow_software_audio && audio::software() ? player::Fallback::software_audio
+                                                               : player::Fallback::none;
+}
+
 /* ------------------------------------------------- subtitle fetching */
 
 /*
@@ -1313,10 +1329,9 @@ class TransportProducer
                     audio::submit(unit.data.data(), unit.data.size(), unit.pts);
                     if (audio::failed())
                     {
-                        set_state(
-                            player::State::failed,
-                            "PS5 audio decode failed. Turn off PS5 audio decoding in Settings > "
-                            "Audio & video, then retry with Jellyfin conversion.");
+                        fail("PS5 audio decode failed. Turn off PS5 audio decoding in Settings > "
+                             "Audio & video, then retry with Jellyfin conversion.",
+                             audio_fallback());
                         video.close();
                         return;
                     }
@@ -1328,8 +1343,7 @@ class TransportProducer
                 if (!g_stop.load())
                     audio::finish();
                 if (audio::failed())
-                    set_state(player::State::failed,
-                              "CPU audio decoder could not finish the stream.");
+                    fail("CPU audio decoder could not finish the stream.", audio_fallback());
                 break;
             }
         }
@@ -1655,8 +1669,8 @@ void *playback_entry(void *) noexcept
             if (stream_codec != ts::Codec::hevc ||
                 !video::strip_dolby_vision(unit.data.data(), size))
             {
-                set_state(player::State::failed,
-                          "Invalid Dolby Vision base-layer stream. Use SDR fallback.");
+                fail("Invalid Dolby Vision base-layer stream. Use SDR fallback.",
+                     player::Fallback::dolby_vision);
                 g_stop.store(true);
                 break;
             }
@@ -1701,7 +1715,8 @@ void *playback_entry(void *) noexcept
             }
             if (!opened)
             {
-                set_state(player::State::failed, "The hardware decoder could not be opened.");
+                fail("The hardware decoder could not be opened.",
+                     plan.dv_hdr10_base ? player::Fallback::dolby_vision : player::Fallback::none);
                 g_stop.store(true, std::memory_order_release);
                 break;
             }
@@ -1775,7 +1790,8 @@ void *playback_entry(void *) noexcept
                             " au=" + std::to_string(unit.data.size()));
             if (decode_errors < 60)
                 continue;
-            set_state(player::State::failed, "The stream could not be decoded.");
+            fail("The stream could not be decoded.",
+                 plan.dv_hdr10_base ? player::Fallback::dolby_vision : player::Fallback::none);
             g_stop.store(true, std::memory_order_release);
             break;
         }
@@ -1793,7 +1809,8 @@ void *playback_entry(void *) noexcept
 
         if (!timestamps.push(unit.pts))
         {
-            set_state(player::State::failed, "The decoder stopped returning pictures.");
+            fail("The decoder stopped returning pictures.",
+                 plan.dv_hdr10_base ? player::Fallback::dolby_vision : player::Fallback::none);
             g_stop.store(true, std::memory_order_release);
             break;
         }
@@ -1893,7 +1910,8 @@ void *playback_entry(void *) noexcept
                         " buffer=" + std::to_string(output.buffer_size) +
                         " needed=" + std::to_string(needed_bytes) +
                         " format=" + std::to_string(output.frame_format));
-            set_state(player::State::failed, "The decoder returned an unusable picture.");
+            fail("The decoder returned an unusable picture.",
+                 plan.dv_hdr10_base ? player::Fallback::dolby_vision : player::Fallback::none);
             g_stop.store(true, std::memory_order_release);
             break;
         }
@@ -2165,9 +2183,22 @@ bool software_audio_available() noexcept
 #endif
 }
 
+/* Options recover() turned off, and the title they were turned off for. A
+   seek or a track change negotiates again; this keeps it from re-enabling
+   what already failed on this title. */
+std::string g_fallback_item;
+bool g_fallback_software_audio = false;
+bool g_fallback_dolby_vision = false;
+
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept
 {
-    return apply_preferences(std::move(request), config::current(), software_audio_available());
+    request = apply_preferences(std::move(request), config::current(), software_audio_available());
+    if (!request.item_id.empty() && request.item_id == g_fallback_item)
+    {
+        request.allow_software_audio &= !g_fallback_software_audio;
+        request.allow_dv_hdr10_base &= !g_fallback_dolby_vision;
+    }
+    return request;
 }
 
 bool restart(const jellyfin::PlaybackRequest &request, bool preserve_output) noexcept
@@ -2176,6 +2207,41 @@ bool restart(const jellyfin::PlaybackRequest &request, bool preserve_output) noe
     const double duration = g_duration_seconds;
     stop(preserve_output);
     return start(request, title, duration);
+}
+
+bool recover() noexcept
+{
+    Fallback fallback = Fallback::none;
+    double position = 0.0;
+    {
+        std::lock_guard<std::mutex> guard(g_mutex);
+        if (g_status.state != State::failed)
+            return false;
+        fallback = g_status.fallback;
+        position = g_status.position_seconds;
+    }
+    jellyfin::PlaybackRequest request = g_request;
+    if (request.item_id != g_fallback_item)
+    {
+        g_fallback_item = request.item_id;
+        g_fallback_software_audio = g_fallback_dolby_vision = false;
+    }
+    if (fallback == Fallback::software_audio && request.allow_software_audio)
+    {
+        request.allow_software_audio = false;
+        g_fallback_software_audio = true;
+        trace::mark("player: PS5 audio decoding failed; retrying with Jellyfin audio conversion");
+    }
+    else if (fallback == Fallback::dolby_vision && request.allow_dv_hdr10_base)
+    {
+        request.allow_dv_hdr10_base = false;
+        g_fallback_dolby_vision = true;
+        trace::mark("player: Dolby Vision base layer failed; retrying with Jellyfin conversion");
+    }
+    else
+        return false;
+    request.start_seconds = std::max(0.0, position);
+    return restart(request);
 }
 
 bool seek(double seconds) noexcept
@@ -2239,6 +2305,7 @@ const gfx::Bitmap *frame() noexcept
         g_status.state = State::failed;
         g_status.message =
             "Audio could not decode or refill its buffer. Try server audio conversion.";
+        g_status.fallback = audio_fallback();
         g_stop.store(true, std::memory_order_release);
         return showing == kFramePool ? nullptr : &g_pool[showing].bitmap;
     }
