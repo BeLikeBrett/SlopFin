@@ -13,6 +13,7 @@ All commands run from the repository root.
 | Work on audio | [Audio paths](AUDIO.md) and [software decoder](SOFTWARE_AUDIO.md) |
 | Build the native package and A53 selector | [Native FPKG](NATIVE_FPKG.md) |
 | Investigate a crash | [Diagnostic internals](DIAGNOSTICS.md) |
+| See which audio path a track takes, and what is proven | [Audio route and evidence](AUDIO_ROUTE.md) |
 
 ## Tooling references
 

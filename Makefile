@@ -371,6 +371,8 @@ test-services:
 	@build/tests/stream_failure_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_direct_play.cpp -o build/tests/direct_play_tests
 	@build/tests/direct_play_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc -Itests tests/test_audio_route.cpp -o build/tests/audio_route_tests
+	@build/tests/audio_route_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_direct_source.cpp src/direct_source.cpp src/mkv.cpp src/mp4.cpp -o build/tests/direct_source_tests
 	@build/tests/direct_source_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_background.cpp src/background.cpp -o build/tests/background_tests

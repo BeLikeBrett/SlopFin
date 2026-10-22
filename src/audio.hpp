@@ -13,6 +13,8 @@
 #define SLOPFIN_AUDIO_HPP
 
 #include <cstddef>
+#include "audio_route.hpp"
+
 #include <cstdint>
 
 namespace slopfin::audio
@@ -28,7 +30,16 @@ enum class Codec : std::uint8_t
     truehd,
 };
 
-bool start(Codec codec = Codec::aac_adts, bool buffered_start = false) noexcept;
+/* passthrough: send AC-3, E-AC-3 or DTS to the TV undecoded, as the audio
+   route decided (src/audio_route.hpp); a refused HDMI port fails the start
+   and passthrough_refused() says so, rather than decoding behind the route. */
+bool start(Codec codec = Codec::aac_adts, bool buffered_start = false,
+           bool passthrough = false) noexcept;
+/* The last start failed because the HDMI port would not open for passthrough. */
+bool passthrough_refused() noexcept;
+/* What the TV or receiver says it accepts (sceAudioOutExGetMonitorInfo);
+   unknown when the console gives no list. Never during playback. */
+audio_route::Sink sink() noexcept;
 void video_ready() noexcept;
 bool buffering() noexcept;
 /* preserve_output keeps the current HDMI/PCM port and its format alive across

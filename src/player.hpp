@@ -38,6 +38,7 @@ enum class Fallback : unsigned char
 {
     none,
     software_audio, /* the CPU (FFmpeg) audio decoder */
+    passthrough,    /* the HDMI port refused compressed audio */
     dolby_vision,   /* the Dolby Vision HDR10 base layer */
 };
 

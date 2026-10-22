@@ -157,6 +157,7 @@ extern "C"
     int sceAudioOutExConfigureOutput(int zero, long unused, int mode, int device, long unused2);
     int sceAudioOutExOpen(int user, int mode);
     int sceAudioOutExClose(int handle);
+    int sceAudioOutExGetMonitorInfo(int zero, long unused, void *buffer, int size);
 }
 
 /* Decoder state, touched only by the thread that calls submit. */
@@ -188,12 +189,11 @@ std::uint32_t g_output_rate = kRate;
 std::uint64_t g_bitstream_queued = 0; /* carrier frames queued, for the clock origin */
 slopfin::audio::iec61937::Packer g_packer;
 
-bool bitstream_candidate(Codec codec) noexcept
+bool bitstream_codec(Codec codec) noexcept
 {
-    if (codec != Codec::ac3 && codec != Codec::eac3 && codec != Codec::dts)
-        return false;
-    return slopfin::config::current().audio_passthrough;
+    return codec == Codec::ac3 || codec == Codec::eac3 || codec == Codec::dts;
 }
+bool g_passthrough_refused = false;
 
 /* Mode numbers from the library's ExConfigureOutput table. */
 int bitstream_mode(Codec codec) noexcept
@@ -483,12 +483,13 @@ void *output_entry(void *) noexcept
 namespace slopfin::audio
 {
 
-bool start(Codec codec, bool buffered_start) noexcept
+bool start(Codec codec, bool buffered_start, bool passthrough) noexcept
 {
     if (g_running.load(std::memory_order_acquire))
         return true;
 
-    const bool wants_bitstream = bitstream_candidate(codec);
+    g_passthrough_refused = false;
+    const bool wants_bitstream = passthrough && bitstream_codec(codec);
     const bool reuse_output =
         g_output_preserved && g_sink >= 0 && codec == g_codec && wants_bitstream == g_bitstream;
     if (g_output_preserved && !reuse_output)
@@ -562,6 +563,13 @@ bool start(Codec codec, bool buffered_start) noexcept
                           "audio: bitstream mode %d configure 0x%08x open 0x%08x", mode,
                           static_cast<unsigned>(configured), static_cast<unsigned>(handle));
             trace::mark(line);
+            /* The route chose the TV; decoding here instead would be a path
+               nobody chose. The player falls back without passthrough. */
+            if (handle < 0)
+            {
+                g_passthrough_refused = true;
+                return false;
+            }
         }
     }
     else
@@ -1140,6 +1148,35 @@ double buffered_seconds() noexcept
 bool bitstream() noexcept
 {
     return g_bitstream && g_running.load(std::memory_order_acquire);
+}
+
+bool passthrough_refused() noexcept
+{
+    return g_passthrough_refused;
+}
+
+audio_route::Sink sink() noexcept
+{
+    /* Read between titles only: the list cannot change under a playing port. */
+    static audio_route::Sink last;
+    if (g_running.load(std::memory_order_acquire) || g_output_preserved)
+        return last;
+    if (!g_module_loaded)
+    {
+        if (sceSysmoduleLoadModule(kAudioModuleId) < 0)
+            return {};
+        g_module_loaded = true;
+    }
+    if (!g_output_initialized && sceAudioOutInit() >= 0)
+        g_output_initialized = true;
+    if (!g_output_initialized)
+        return {};
+    alignas(16) static std::uint8_t buffer[0x400];
+    std::memset(buffer, 0, sizeof(buffer));
+    last = sceAudioOutExGetMonitorInfo(0, 0, buffer, sizeof(buffer)) < 0
+               ? audio_route::Sink{}
+               : audio_route::parse_monitor_info(buffer, sizeof(buffer));
+    return last;
 }
 
 bool software() noexcept

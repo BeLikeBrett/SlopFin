@@ -28,6 +28,7 @@
 #include "subtitles.hpp"
 #include "order_capture.hpp"
 #include "trace.hpp"
+#include "direct_play.hpp"
 #include "direct_source.hpp"
 #include "media_demux.hpp"
 #include "seek_skip.hpp"
@@ -354,6 +355,17 @@ bool g_server_muxed = false;
 std::atomic<bool> g_paused{false};
 std::uint64_t g_entry_us = 0; /* when this stream began opening */
 std::uint64_t g_pause_started_us = 0;
+
+/* Jellyfin's name for a codec the audio path plays, for the audio route. */
+const char *delivered_codec_name(audio::Codec codec) noexcept
+{
+    return codec == audio::Codec::mp3      ? "mp3"
+           : codec == audio::Codec::ac3    ? "ac3"
+           : codec == audio::Codec::eac3   ? "eac3"
+           : codec == audio::Codec::dts    ? "dts"
+           : codec == audio::Codec::truehd ? "truehd"
+                                           : "aac";
+}
 
 audio::Codec delivered_audio_codec(const jellyfin::PlaybackPlan &plan) noexcept
 {
@@ -1592,7 +1604,31 @@ void *playback_entry(void *) noexcept
         g_status.delivery_info = delivery;
     }
     const audio::Codec audio_codec = delivered_audio_codec(plan);
-    const bool audio_started = audio::start(audio_codec, audio_codec == audio::Codec::truehd);
+    /* The same rule as the negotiation, for what actually arrives. */
+    const audio_route::Route source_route = jellyfin::source_route(plan, g_request);
+    const bool converted = !plan.direct && source_route.path == audio_route::Path::server;
+    const audio_route::Route out_route =
+        audio_route::choose({delivered_codec_name(audio_codec), plan.audio_profile,
+                             converted ? source_route.channels : plan.audio_channels, 48000},
+                            jellyfin::route_options(g_request));
+    trace::mark(std::string{"player: audio route "} + audio_route::path_name(out_route.path) +
+                " (" + out_route.why + "); TV list " +
+                (g_request.sink.known ? std::to_string(g_request.sink.count) + " formats"
+                                      : std::string{"unknown"}));
+    const bool audio_started = audio::start(audio_codec, audio_codec == audio::Codec::truehd,
+                                            out_route.path == audio_route::Path::passthrough);
+    if (!audio_started &&
+        (audio::passthrough_refused() || audio_fallback() != player::Fallback::none))
+    {
+        /* recover() restarts here without the part that failed. */
+        fail(audio::passthrough_refused() ? "The TV did not accept HDMI passthrough."
+                                          : "PS5 audio decoding could not start.",
+             audio::passthrough_refused() ? player::Fallback::passthrough : audio_fallback());
+        audio::stop(false);
+        stream.close();
+        g_running.store(false);
+        return nullptr;
+    }
     if (!audio_started)
         trace::mark("player: continuing without audio");
     {
@@ -1609,6 +1645,8 @@ void *playback_entry(void *) noexcept
             g_status.audio_decode_info = "PS5 CPU software (FFmpeg) -> 48 kHz PCM";
         else
             g_status.audio_decode_info = "PS5 platform audio decoder -> 48 kHz PCM";
+        if (audio_started)
+            g_status.audio_decode_info += std::string{" \xc2\xb7 "} + out_route.why;
     }
     bool decoder_ready = false;
     set_state(player::State::opening, "Buffering");
@@ -2188,13 +2226,16 @@ bool software_audio_available() noexcept
    what already failed on this title. */
 std::string g_fallback_item;
 bool g_fallback_software_audio = false;
+bool g_fallback_passthrough = false;
 bool g_fallback_dolby_vision = false;
 
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept
 {
     request = apply_preferences(std::move(request), config::current(), software_audio_available());
+    request.sink = audio::sink();
     if (!request.item_id.empty() && request.item_id == g_fallback_item)
     {
+        request.allow_bitstream &= !g_fallback_passthrough;
         request.allow_software_audio &= !g_fallback_software_audio;
         request.allow_dv_hdr10_base &= !g_fallback_dolby_vision;
     }
@@ -2224,13 +2265,19 @@ bool recover() noexcept
     if (request.item_id != g_fallback_item)
     {
         g_fallback_item = request.item_id;
-        g_fallback_software_audio = g_fallback_dolby_vision = false;
+        g_fallback_software_audio = g_fallback_dolby_vision = g_fallback_passthrough = false;
     }
     if (fallback == Fallback::software_audio && request.allow_software_audio)
     {
         request.allow_software_audio = false;
         g_fallback_software_audio = true;
         trace::mark("player: PS5 audio decoding failed; retrying with Jellyfin audio conversion");
+    }
+    else if (fallback == Fallback::passthrough && request.allow_bitstream)
+    {
+        request.allow_bitstream = false;
+        g_fallback_passthrough = true;
+        trace::mark("player: HDMI passthrough refused; retrying with the audio decoded here");
     }
     else if (fallback == Fallback::dolby_vision && request.allow_dv_hdr10_base)
     {
