@@ -32,10 +32,21 @@ enum class State : std::uint8_t
     failed,
 };
 
+/* A PS5-side decoding option a failed playback can drop, to try again with
+   the server converting that part instead. */
+enum class Fallback : unsigned char
+{
+    none,
+    software_audio, /* the CPU (FFmpeg) audio decoder */
+    dolby_vision,   /* the Dolby Vision HDR10 base layer */
+};
+
 struct Status
 {
     State state = State::idle;
     std::string message;
+    /* With State::failed: what to turn off to retry; see recover(). */
+    Fallback fallback = Fallback::none;
     std::string title;
     int width = 0;
     int height = 0;
@@ -105,6 +116,12 @@ jellyfin::PlaybackRequest current_request() noexcept;
 /* Restarts the stream; this is how seeking and track changes work, since the
    server delivers one continuous stream per request. */
 bool restart(const jellyfin::PlaybackRequest &request, bool preserve_output = false) noexcept;
+
+/* After a failure the PS5's own decoding caused, starts the title again where
+   it stopped with that option off, so Jellyfin converts that part instead. The
+   option stays off for the rest of that title; a second failure is shown as
+   usual. True when it restarted. Render thread, once a frame while playing. */
+bool recover() noexcept;
 
 /* The request as this console would negotiate it, using saved preferences. Play
    and the Details sheet both go through it, so their answers cannot differ. */

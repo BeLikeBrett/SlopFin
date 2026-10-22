@@ -234,6 +234,12 @@ jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request
     return apply_preferences(std::move(request), config::current(), software_audio_available());
 }
 
+/* The preview decodes nothing, so nothing on it can fail and fall back. */
+bool recover() noexcept
+{
+    return false;
+}
+
 bool restart(const jellyfin::PlaybackRequest &request, bool) noexcept
 {
     std::lock_guard<std::mutex> guard(g_mutex);

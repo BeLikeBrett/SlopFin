@@ -1142,6 +1142,11 @@ bool bitstream() noexcept
     return g_bitstream && g_running.load(std::memory_order_acquire);
 }
 
+bool software() noexcept
+{
+    return !g_bitstream && software_codec(g_codec);
+}
+
 bool running() noexcept
 {
     return g_running.load(std::memory_order_acquire);

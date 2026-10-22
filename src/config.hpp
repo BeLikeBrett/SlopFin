@@ -34,8 +34,10 @@ struct Settings
     std::vector<std::string> navigation_hidden;
     std::vector<std::string> seerr_watched_requests;
     bool audio_passthrough = true;
-    bool software_audio = false;
-    bool dv_hdr10_base = false;
+    /* Both on by default since 1.17: when the PS5 can decode a format it
+       does, and a failure falls back to Jellyfin conversion by itself. */
+    bool software_audio = true;
+    bool dv_hdr10_base = true;
     /* The request server behind Discover: a Seerr/Jellyseerr/Overseerr address,
        an API key, or a signed-in session. Empty host leaves Discover offered
        but unconfigured. */

@@ -5754,12 +5754,12 @@ void draw_settings(const std::string &server_name) noexcept
             !software
                 ? "This build has no software decoder. Install the complete public folder build."
                 : "Decode these formats on the PS5 to 48 kHz PCM instead of asking Jellyfin "
-                  "to convert the audio. "
-                  "TrueHD uses PCM; passthrough takes priority for DTS / E-AC-3. "
+                  "to convert the audio. Passthrough takes priority for DTS / E-AC-3. If "
+                  "decoding fails, the title restarts with Jellyfin converting the audio. "
                   "Atmos objects, DTS:X and full 24-bit output are not preserved.",
-            "Try the HDR10-compatible video layer in supported Dolby Vision files. This does "
-            "not output Dolby Vision. Leave off for Jellyfin conversion; HDR signalling still "
-            "needs display testing."};
+            "Play Dolby Vision profile 7 and 8.1 files from their HDR10 layer on the PS5 "
+            "instead of asking Jellyfin to convert the video. This does not output Dolby "
+            "Vision. If a file fails, it restarts with Jellyfin converting it."};
         text::draw_wrapped(kContentX, kGridTop + 280, 1100, 4, 34, help[g_view.audio_row], 24,
                            Weight::regular, gfx::palette::text_dim);
         text::draw(kContentX, kGridTop + 470, "Changes apply when you next start playback.", 22,
@@ -8648,6 +8648,12 @@ void frame() noexcept
             screen = Screen::playing;
         }
     }
+
+    /* PS5 audio decoding and the Dolby Vision base layer are on by default; if
+       either fails on a title, start it again where it stopped with that part
+       left to Jellyfin, rather than showing an error. */
+    if (screen == Screen::playing)
+        (void)player::recover();
 
     static std::vector<SidebarEntry> sidebar_cache;
     static std::uint64_t sidebar_epoch = ~std::uint64_t{0};

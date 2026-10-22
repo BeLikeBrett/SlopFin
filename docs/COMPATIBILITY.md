@@ -11,7 +11,7 @@ claims. A Linux test cannot prove HDMI behaviour on a PS5.
 | H.264 | PS5 hardware decodes; PS5 CPU converts pixels for rendering | Console playback tested, including selected 4K sources | Current converted picture is usually at most 1920 pixels wide. |
 | HEVC Main / Main10 | PS5 hardware decodes; PS5 CPU converts pixels | SDR and PQ Main10 console playback tested | Decode support does not imply full-detail 4K presentation. |
 | HDR10 | PS5 renders a ten-bit HDR surface or tone maps to SDR | Surface registration and live switches tested on firmware 8.20 | HDMI metadata, brightness and different displays/receivers still need physical validation. |
-| Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Selected Profile 7 / 8.1 files exercised | Enable **Dolby Vision HDR10 fallback**. No native Dolby Vision output. |
+| Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Selected Profile 7 / 8.1 files exercised | **Dolby Vision HDR10 fallback** is on by default. No native Dolby Vision output. |
 | Other codecs, incompatible DV, HLG or HDR10+ | Jellyfin server converts to a supported stream | Server conversion path | No validated native HLG path or HDR10+ dynamic metadata output. |
 
 MKV and MP4 files whose video and audio the console can take as stored play
@@ -36,8 +36,8 @@ conversion is rendering work, not video transcoding.
 | Setting | On | Off / default |
 | --- | --- | --- |
 | HDMI audio passthrough | Send supported compressed audio for the TV/receiver to decode | Off uses local PCM decoding or Jellyfin conversion. Default **On** preserves existing behaviour. |
-| Decode TrueHD / DTS / E-AC-3 on PS5 | Use the included FFmpeg CPU decoder for compatible tracks | Default **Off**: request Jellyfin conversion if there is no supported passthrough/native path. Builds without FFmpeg show **Not included**. |
-| Dolby Vision HDR10 fallback | Admit tested HDR10-compatible base layers | Default **Off**: ask Jellyfin to convert incompatible video. |
+| Decode TrueHD / DTS / E-AC-3 on PS5 | Use the included FFmpeg CPU decoder for compatible tracks | Default **On** since 1.17. Off requests Jellyfin conversion if there is no supported passthrough/native path. Builds without FFmpeg show **Not included**. |
+| Dolby Vision HDR10 fallback | Admit tested HDR10-compatible base layers | Default **On** since 1.17. Off asks Jellyfin to convert Dolby Vision video. |
 
 TrueHD cannot pass through: when compatible CPU decoding is enabled it wins over
 server TrueHD → E-AC-3 conversion. DTS/E-AC-3 passthrough takes priority when both
@@ -45,8 +45,10 @@ settings are on. Choices apply to the next playback. Old marker choices are impo
 on the first upgrade; the saved setting then takes precedence.
 
 A format outside the advertised capabilities is negotiated with Jellyfin **before**
-playback. A mid-stream decoder failure is not a guaranteed automatic server retry;
-turn off the affected local option or select a compatible conversion and restart.
+playback. If PS5 audio decoding or the Dolby Vision base layer fails during a
+title, SlopFin restarts it where it stopped with that option off for the rest
+of the title, so Jellyfin converts that part. Other decoder failures are shown;
+select a compatible conversion and restart.
 The recorded TrueHD passthrough attempts produced beeping or silence, including
 a real TrueHD/Atmos movie sample. They did not establish working TrueHD passthrough.
 [Audio evidence](development/AUDIO.md) · [Software decoder](development/SOFTWARE_AUDIO.md).

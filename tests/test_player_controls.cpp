@@ -43,12 +43,16 @@ int main()
     assert(!config::current().audio_passthrough);
     press(pad::Button::down, handle_settings_input);
     assert(g_view.audio_row == 1 && !player::software_audio_available());
+    // Without FFmpeg in the build the row says Not included and cannot change.
+    const bool software_before = config::current().software_audio;
     press(pad::Button::cross, handle_settings_input);
-    assert(!config::current().software_audio);
+    assert(config::current().software_audio == software_before);
     press(pad::Button::down, handle_settings_input);
+    const bool dv_before = config::current().dv_hdr10_base;
+    assert(dv_before); /* on by default since 1.17 */
     press(pad::Button::right, handle_settings_input);
     config::load();
-    assert(config::current().dv_hdr10_base);
+    assert(config::current().dv_hdr10_base == !dv_before);
     g_view.audio_row = 0;
     for (int row = 0; row < 3; ++row)
     {

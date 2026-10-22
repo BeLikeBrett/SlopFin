@@ -31,7 +31,8 @@ int main()
     auto &settings = slopfin::config::current();
     assert(!settings.device_id.empty() && !settings.signed_in());
     assert(!slopfin::diagnostics::destination(settings.report_server).valid());
-    assert(settings.audio_passthrough && !settings.software_audio && !settings.dv_hdr10_base);
+    // A new install decodes on the PS5 whatever the PS5 can decode.
+    assert(settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
     settings.audio_passthrough = false;
     settings.software_audio = true;
     settings.dv_hdr10_base = true;
@@ -109,10 +110,28 @@ int main()
     }
     slopfin::config::load();
     assert(settings.device_id == "legacy" && settings.port == 8096);
-    assert(settings.audio_passthrough && !settings.software_audio && !settings.dv_hdr10_base);
+    assert(settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
     effective = slopfin::player::apply_preferences(request, settings, true);
-    assert(effective.allow_bitstream && !effective.allow_software_audio &&
-           !effective.allow_dv_hdr10_base);
+    assert(effective.allow_bitstream && effective.allow_software_audio &&
+           effective.allow_dv_hdr10_base);
+
+    // Saved before 1.17 with both off: turned on once, then the choice is kept.
+    {
+        std::ofstream old_choice(path);
+        old_choice << R"({"deviceId":"old","softwareAudio":0,"dvHdr10Base":0})";
+    }
+    slopfin::config::load();
+    assert(settings.software_audio && settings.dv_hdr10_base);
+    {
+        std::ifstream saved(path);
+        const std::string text(std::istreambuf_iterator<char>(saved), {});
+        assert(text.find("\"playbackDefaults\": 1") != std::string::npos);
+    }
+    settings.software_audio = false;
+    settings.dv_hdr10_base = false;
+    slopfin::config::save();
+    slopfin::config::load();
+    assert(!settings.software_audio && !settings.dv_hdr10_base);
     assert(settings.report_server.empty() && settings.autoplay_series_overrides.empty());
     const auto receiver = slopfin::diagnostics::destination("http://reports.example.com:8103/base");
     assert(receiver.valid() && receiver.port == 8103 &&
