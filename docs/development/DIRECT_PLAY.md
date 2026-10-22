@@ -21,9 +21,12 @@ must be 48 kHz and one of:
 - E-AC-3, DTS core or TrueHD with PS5 software audio on.
 
 A converted format chosen in the Audio panel, a channel limit, or an audio track
-in a separate file sends the title to the server. Image subtitles that must be
-burned in do too. Text subtitles are fetched from the server and drawn by
-SlopFin, as before.
+in a separate file sends the title to the server. Text subtitles are fetched
+from the server and drawn by SlopFin. With bitmap subtitle decoding included,
+embedded PGS and VobSub tracks in MKV are decoded on the PS5 and drawn over the
+video, preserving their palette, alpha and authored positions. This avoids a
+server video encode for those subtitle selections. See [picture subtitles](BITMAP_SUBTITLES.md)
+for build switches, fallback boundaries and validation.
 
 ## Reading the file
 

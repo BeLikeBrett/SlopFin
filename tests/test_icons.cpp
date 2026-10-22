@@ -11,10 +11,11 @@
 
 namespace slopfin::gfx
 {
-void blend_mask_physical(int, int, int, int, const unsigned char *, Color) noexcept
+void blend_mask_physical(int, int, int, int, const unsigned char *, Color, std::uint64_t) noexcept
 {
 }
-void blend_mask_gradient_physical(int, int, int, int, const unsigned char *, Color, Color) noexcept
+void blend_mask_gradient_physical(int, int, int, int, const unsigned char *, Color, Color,
+                                  std::uint64_t) noexcept
 {
 }
 int to_physical_x(int x) noexcept

@@ -577,7 +577,11 @@ std::string complete_job(const Job &job, const slopfin::gfx::Bitmap &bitmap, int
     entry.failed = !bitmap.valid();
     if (bitmap.valid())
     {
+        /* Decoded pictures never change, so each is named once for the GPU
+           cache, which then finds it without reading it. */
+        static std::uint64_t named = 0;
         entry.bitmap = bitmap;
+        entry.bitmap.id = (std::uint64_t{0x49} << 56) | ++named;
         entry.failures = 0;
         entry.retry_after = {};
         g_held_bytes += weight(entry);

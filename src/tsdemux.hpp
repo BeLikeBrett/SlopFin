@@ -39,6 +39,8 @@ struct AccessUnit
     std::int64_t pts = -1; /* 90 kHz units, -1 when absent */
     std::int64_t dts = -1;
     bool video = false;
+    bool subtitle = false;
+    std::int64_t duration = 0; /* subtitle BlockDuration, 90 kHz */
 };
 
 class Demuxer final

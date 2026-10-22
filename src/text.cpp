@@ -312,8 +312,13 @@ void draw(int x, int y, std::string_view utf8, int pixel_size, Weight weight,
             continue;
         if (glyph->width > 0 && glyph->height > 0)
         {
+            /* A glyph's pixels follow from its character, size and weight. */
+            const std::uint64_t id = (std::uint64_t{0x54} << 56) |
+                                     (static_cast<std::uint64_t>(weight) << 40) |
+                                     (static_cast<std::uint64_t>(size) << 24) | codepoint;
             gfx::blend_mask_physical(pen + glyph->offset_x, baseline + glyph->offset_y,
-                                     glyph->width, glyph->height, glyph->coverage.data(), color);
+                                     glyph->width, glyph->height, glyph->coverage.data(), color,
+                                     id);
         }
         pen += glyph->advance;
     }

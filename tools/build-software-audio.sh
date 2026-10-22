@@ -37,7 +37,7 @@ cd build/software-audio
     --disable-avfilter --disable-swscale --enable-pthreads \
     --disable-w32threads --disable-os2threads --disable-asm --disable-inline-asm \
     --enable-static --disable-shared --enable-avcodec --enable-avutil --enable-swresample \
-    --enable-decoder=truehd,eac3,dca --enable-parser=mlp,ac3,dca \
+    --enable-decoder=truehd,eac3,dca,pgssub,dvdsub --enable-parser=mlp,ac3,dca \
     --malloc-prefix=slopfin_av_ \
     --extra-cflags='-O2 -fPIC -ffunction-sections -fdata-sections'
 # The SDK declares these POSIX functions but its runtime does not export them.

@@ -45,6 +45,10 @@ int main()
     settings.seerr_auth = 2;
     settings.autoplay_series_overrides["show"] = false;
     settings.subtitle_offsets["episode"] = 1.5;
+    assert(settings.subtitle_look.picture_size == 1 &&
+           settings.subtitle_look.picture_position == 0);
+    settings.subtitle_look.picture_size = 3;
+    settings.subtitle_look.picture_position = 2;
     settings.navigation_order = {"library:a", "home", "discover"};
     settings.navigation_hidden = {"home", "discover"};
     settings.seerr_watched_requests = {"123", "456"};
@@ -53,6 +57,8 @@ int main()
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
     assert(!settings.audio_passthrough);
+    assert(settings.subtitle_look.picture_size == 3 &&
+           settings.subtitle_look.picture_position == 2);
     assert(settings.navigation_order ==
            (std::vector<std::string>{"library:a", "home", "discover"}));
     assert(settings.navigation_hidden == (std::vector<std::string>{"home", "discover"}));

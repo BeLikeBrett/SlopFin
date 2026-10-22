@@ -195,6 +195,8 @@ inline std::vector<details::Line> describe(const jellyfin::PlaybackPlan &plan, i
         pair("Subtitles", "Off");
     else if (plan.subtitle_burned)
         pair("Subtitles", "Drawn into the picture by the server");
+    else if (plan.subtitle_bitmap)
+        pair("Subtitles", "Picture subtitles, drawn by SlopFin on the PS5");
     else if (!plan.subtitle_url.empty())
         pair("Subtitles", "Text, drawn by SlopFin");
 

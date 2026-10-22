@@ -45,7 +45,9 @@ struct Track
     int channels = 0;
     int width = 0, height = 0;
     std::uint64_t codec_delay = 0; /* ns of encoder priming, subtracted from timestamps */
-    bool encoded = false;          /* compressed or header-stripped: not readable here */
+    int compression = -1;          /* subtitle block compression: 0 zlib, 3 header stripping */
+    std::vector<std::uint8_t> compression_settings;
+    bool encoded = false; /* compressed or header-stripped: not readable here */
 };
 
 struct Info
@@ -106,7 +108,8 @@ class Demuxer final : public media::Demuxer
 {
   public:
     /* False when either track cannot be read as the player needs it. */
-    bool configure(const Info &info, const Track &video, const Track *audio);
+    bool configure(const Info &info, const Track &video, const Track *audio,
+                   const Track *subtitle = nullptr);
     /* Audio before this presentation time (90 kHz) is dropped. */
     void present_from(std::int64_t pts) noexcept
     {
@@ -131,11 +134,12 @@ class Demuxer final : public media::Demuxer
 
   private:
     void parse() noexcept;
-    void block(const std::uint8_t *data, std::size_t size, bool simple, bool keyframe) noexcept;
+    void block(const std::uint8_t *data, std::size_t size, bool simple, bool keyframe,
+               std::uint64_t duration = 0) noexcept;
     void block_group(const std::uint8_t *data, std::size_t size) noexcept;
 
     std::uint64_t scale_ = 1000000;
-    std::uint64_t video_number_ = 0, audio_number_ = 0;
+    std::uint64_t video_number_ = 0, audio_number_ = 0, subtitle_number_ = 0;
     std::int64_t audio_delay_ = 0; /* 90 kHz */
     std::int64_t present_from_ = 0;
     ts::Codec video_codec_ = ts::Codec::unknown;

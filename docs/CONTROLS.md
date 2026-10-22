@@ -60,6 +60,17 @@ When Skip Intro is visible, **Square** always skips. Outside intros, Square
 toggles subtitles. **Cross** keeps its pause/select role. Circle dismisses an intro or
 Up Next card when the normal controls are hidden.
 
+## Subtitle appearance
+
+Settings → Subtitles has separate text and picture controls. Blu-ray PGS and
+DVD overlays preserve their font and colours, with adjustable size and
+Original/Bottom/Higher/Top placement. During picture-subtitle playback, open
+Options → Subtitles and scroll past the tracks and timing controls to change
+picture size/position with Left/Right or Cross. Changes apply immediately and
+are saved; Back to original picture layout restores size and placement.
+Timing is saved per title and applies to text and PS5 picture overlays.
+Server-burned subtitles keep the server's layout.
+
 ## Text and pictures
 
 Text fields use the PlayStation keyboard. Confirm applies the text; cancel

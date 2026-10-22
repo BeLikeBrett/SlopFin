@@ -24,7 +24,7 @@ jobs:
   build:
     name: Lint, build, and package
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Check out source
@@ -38,7 +38,7 @@ jobs:
       - name: Install native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 clang-format-18 clang-tidy-18 lld-18 make pkg-config tar unzip wget openssl libsdl2-dev libcurl4-openssl-dev
+          sudo apt-get install --yes clang-18 clang-format-18 clang-tidy-18 lld-18 make pkg-config tar unzip wget openssl libsdl2-dev libcurl4-openssl-dev libavcodec-dev libavutil-dev zlib1g-dev glslang-tools libvulkan-dev mesa-vulkan-drivers rsync
 
       - name: Read app identity and version
         shell: bash
@@ -63,6 +63,9 @@ jobs:
       - name: Run app, network and tooling tests
         run: make test
 
+      - name: Test picture subtitle decoders and negotiation
+        run: make test-bitmap-subtitles
+
       - name: Build Linux preview
         run: make host
 
@@ -77,8 +80,28 @@ jobs:
           make sdk-archives
           PS5_CLANG=clang-18 bash tools/build-software-audio.sh
 
+      # Menus draw on the GPU through Mesa RADV (docs/development/GPU_MENU.md),
+      # built from the revisions pinned in tools/setup-gpu-menu.sh and cached
+      # until that script changes.
+      - name: Restore GPU menu dependencies
+        id: gpu-deps
+        uses: actions/cache@v5
+        with:
+          path: .deps/gpu
+          key: gpu-menu-${{ runner.os }}-${{ hashFiles('tools/setup-gpu-menu.sh') }}
+
+      - name: Build GPU menu dependencies
+        if: steps.gpu-deps.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install --yes bison flex llvm-18-dev libclang-18-dev libclang-cpp18-dev libclc-18-dev llvm-spirv-18 libllvmspirvlib-18-dev libpolly-18-dev
+          python3 -m pip install meson ninja mako pyyaml packaging
+          PATH="/usr/lib/llvm-18/bin:$PATH" bash tools/setup-gpu-menu.sh
+
+      - name: Check the GPU menu draws what the CPU renderer draws
+        run: bash tools/test-gpu-menu.sh
+
       - name: Build and verify folder app
-        run: make PS5_CLANG=clang-18 SOFTWARE_AUDIO=1
+        run: make PS5_CLANG=clang-18 SOFTWARE_AUDIO=1 GPU_MENU=1
 
       - name: Prepare public downloads
         run: |

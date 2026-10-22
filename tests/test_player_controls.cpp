@@ -200,6 +200,95 @@ int main()
     g_view.intro_dismissed = false;
     press(pad::Button::square, handle_player_input);
     assert(!g_view.intro_dismissed && player::current_request().start_seconds == 0.0);
+    // Square must restart the MKV reader when re-enabling a picture track;
+    // asking the server to turn that track into SRT cannot work.
+    jellyfin::PlaybackRequest picture_request;
+    picture_request.item_id = "picture-fixture";
+    assert(player::start(picture_request, "Picture fixture", 300));
+    g_view.panel_open = false;
+    g_view.intro_visible = false;
+    g_view.osd_visible = false;
+    jellyfin::Track bitmap_track;
+    bitmap_track.index = 2;
+    bitmap_track.codec = "pgssub";
+    g_view.playing_source.subtitle_tracks = {bitmap_track};
+    press(pad::Button::square, handle_player_input);
+    assert(player::current_request().subtitle_index == 2 && player::status().subtitle_index == 2);
+    press(pad::Button::square, handle_player_input);
+    assert(player::status().subtitle_index == -1);
+    press(pad::Button::square, handle_player_input);
+    assert(player::current_request().subtitle_index == 2 && player::status().subtitle_index == 2);
+    // Picture appearance controls use the same saved choices on Settings and in playback.
+    g_view.settings_page = 1;
+    const auto &appearance_rows = subtitle_rows();
+    for (const auto field :
+         {&subtitle_style::Choices::picture_size, &subtitle_style::Choices::picture_position})
+    {
+        for (int i = 0; i < static_cast<int>(appearance_rows.size()); ++i)
+            if (appearance_rows[static_cast<std::size_t>(i)].field == field)
+                g_view.subtitle_row = i;
+        const int before = config::current().subtitle_look.*field;
+        press(pad::Button::right, handle_subtitle_settings_input);
+        config::load();
+        assert(config::current().subtitle_look.*field == before + 1);
+        for (int frame = 0; frame < 12; ++frame)
+        {
+            gfx::clear(gfx::palette::background);
+            ui::begin_frame(1.0f / 60.0f);
+            draw_subtitle_settings();
+        }
+        gfx::present();
+        assert(host::write_png(field == &subtitle_style::Choices::picture_size
+                                   ? "build/tests/subtitles-picture-size-settings.png"
+                                   : "build/tests/subtitles-picture-position-settings.png"));
+    }
+    // Each reset affects only its own appearance section, and keeps track preference.
+    int text_reset = -1, picture_reset = -1;
+    for (int i = 0; i < static_cast<int>(appearance_rows.size()); ++i)
+    {
+        if (std::string_view(appearance_rows[i].label) == "Reset text appearance")
+            text_reset = i;
+        if (std::string_view(appearance_rows[i].label) == "Reset picture appearance")
+            picture_reset = i;
+    }
+    assert(text_reset > 0 && picture_reset > text_reset);
+    auto &look = config::current().subtitle_look;
+    look.size = 4;
+    look.colour = 3;
+    look.picture_size = 4;
+    look.picture_position = 3;
+    look.picture = 1;
+    g_view.subtitle_row = text_reset;
+    press(pad::Button::cross, handle_subtitle_settings_input);
+    config::load();
+    assert(look.size == 1 && look.colour == 0 && look.picture_size == 4 &&
+           look.picture_position == 3 && look.picture == 1);
+    look.size = 3;
+    look.colour = 2;
+    g_view.subtitle_row = picture_reset;
+    press(pad::Button::cross, handle_subtitle_settings_input);
+    config::load();
+    assert(look.size == 3 && look.colour == 2 && look.picture_size == 1 &&
+           look.picture_position == 0 && look.picture == 1);
+    player::Status picture_status = player::status();
+    picture_status.subtitle_index = 2;
+    picture_status.subtitle_bitmap = true;
+    note_subtitle_state(picture_status);
+    g_view.panel_kind = 0;
+    g_view.panel_open = true;
+    const int first_picture =
+        1 + static_cast<int>(g_view.playing_source.subtitle_tracks.size()) + 4;
+    assert(timing_row(first_picture) == TimingRow::picture_size);
+    g_view.panel_index = first_picture;
+    /* The row shows the current choice; the reset above left it at Original. */
+    assert(panel_row_label(first_picture).find("Original") != std::string::npos);
+    look.picture_size = 2;
+    assert(panel_row_label(first_picture).find("Larger") != std::string::npos);
+    assert(panel_rows() == 1 + static_cast<int>(g_view.playing_source.subtitle_tracks.size()) + 7);
+    picture_status.subtitle_burned = true;
+    picture_status.subtitle_bitmap = false;
+    note_subtitle_state(picture_status);
+    assert(timing_row(first_picture) == TimingRow::none);
     gfx::shutdown();
     host::close_display();
     std::cout << "player controls: settings persistence, disabled decoder, intro input passed\n";

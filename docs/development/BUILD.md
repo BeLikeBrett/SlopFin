@@ -29,6 +29,20 @@ make PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
 
 See [software audio](SOFTWARE_AUDIO.md) for its Settings toggle and limits.
 
+## GPU menus
+
+Menus draw on the PS5's GPU at 4K and 60 FPS when built with `GPU_MENU=1`;
+without it they fall back to the CPU renderer (about 20 FPS at 4K). The flag
+links Mesa RADV, built once from pinned sources:
+
+```sh
+bash tools/setup-gpu-menu.sh
+GPU_MENU=1 make PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1
+bash tools/test-gpu-menu.sh
+```
+
+See [GPU menus](GPU_MENU.md) for how frames are drawn and measured.
+
 ## Deploy to a development console
 
 Copy `tools/env.example` to `.env` and set `PS5_HOST`. Close SlopFin before replacing

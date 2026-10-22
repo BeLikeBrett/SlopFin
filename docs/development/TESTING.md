@@ -26,6 +26,9 @@ they do not require a public server or credentials.
 `make test-unit` aliases the app model suite; `make test` adds local network and
 tooling integration tests. The optional software audio test needs host FFmpeg
 development libraries: `bash tools/test-software-audio.sh`.
+The picture subtitle decoder and negotiation tests use host FFmpeg development
+libraries too: `bash tools/test-bitmap-subtitles.sh`. The normal direct-source
+suite also checks selection and packet delivery from a synthetic PGS MKV.
 
 ## Console evidence
 

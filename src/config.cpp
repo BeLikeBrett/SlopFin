@@ -199,6 +199,9 @@ void load() noexcept
                 c.spacing = static_cast<int>(look->num("spacing", c.spacing));
                 c.position = static_cast<int>(look->num("position", c.position));
                 c.picture = static_cast<int>(look->num("picture", c.picture));
+                c.picture_size = static_cast<int>(look->num("pictureSize", c.picture_size));
+                c.picture_position =
+                    static_cast<int>(look->num("picturePosition", c.picture_position));
             }
             if (const json::Value *play = root->find("autoplay"); play != nullptr)
             {
@@ -278,7 +281,9 @@ bool save() noexcept
             ", \"background\": " + std::to_string(c.background) +
             ", \"box\": " + std::to_string(c.box) + ", \"spacing\": " + std::to_string(c.spacing) +
             ", \"position\": " + std::to_string(c.position) +
-            ", \"picture\": " + std::to_string(c.picture) + "},\n";
+            ", \"picture\": " + std::to_string(c.picture) +
+            ", \"pictureSize\": " + std::to_string(c.picture_size) +
+            ", \"picturePosition\": " + std::to_string(c.picture_position) + "},\n";
     }
     {
         const auto &c = g_settings.autoplay_look;

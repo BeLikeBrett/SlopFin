@@ -792,6 +792,7 @@ std::string device_profile(const std::string &codec_order, const std::string &au
 "SubtitleProfiles":[
  {"Format":"srt","Method":"External"},
  {"Format":"subrip","Method":"External"},
+ @BITMAP@
  {"Format":"pgssub","Method":"Encode"},
  {"Format":"dvdsub","Method":"Encode"},
  {"Format":"dvbsub","Method":"Encode"}]}})";
@@ -800,6 +801,12 @@ std::string device_profile(const std::string &codec_order, const std::string &au
         for (std::size_t at = body.find(token); at != std::string::npos; at = body.find(token))
             body.replace(at, token.size(), value);
     };
+#ifdef SLOPFIN_BITMAP_SUBTITLES
+    replace("@BITMAP@", R"({"Format":"pgssub","Method":"Embed","Container":"mkv,matroska,webm"},
+ {"Format":"dvdsub","Method":"Embed","Container":"mkv,matroska,webm"},)");
+#else
+    replace("@BITMAP@", "");
+#endif
     replace("@DIRECTAUDIO@", direct_audio);
     replace("@EXTRAAUDIO@", extra_audio.empty() ? "" : "," + extra_audio);
     replace("@CODECS@", codec_order);
@@ -837,6 +844,7 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
     const int selected_audio = request.audio_index >= 0
                                    ? request.audio_index
                                    : static_cast<int>(source->num("DefaultAudioStreamIndex", -1));
+    int internal_subtitle = 0;
     int internal_audio = 0; /* audio tracks inside the file so far, in file order */
     if (const json::Value *streams = source->find("MediaStreams"); streams != nullptr)
     {
@@ -849,6 +857,8 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
             const int index = static_cast<int>(stream->num("Index", -1.0));
             if (kind == "Audio" && !stream->flag("IsExternal"))
                 ++internal_audio;
+            if (kind == "Subtitle" && !stream->flag("IsExternal"))
+                ++internal_subtitle;
             if (kind == "Video" && plan.video_codec.empty())
             {
                 plan.video_codec = std::string{stream->str("Codec")};
@@ -882,6 +892,13 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
             else if (kind == "Subtitle" && index == request.subtitle_index)
             {
                 const std::string method{stream->str("DeliveryMethod")};
+                plan.subtitle_codec = std::string{stream->str("Codec")};
+                for (char &c : plan.subtitle_codec)
+                    if (c >= 'A' && c <= 'Z')
+                        c = static_cast<char>(c + 32);
+                plan.subtitle_ordinal = stream->flag("IsExternal") ? -1 : internal_subtitle - 1;
+                plan.subtitle_bitmap = method == "Embed" && (plan.subtitle_codec == "pgssub" ||
+                                                             plan.subtitle_codec == "dvdsub");
                 if (method == "External")
                     plan.subtitle_url = std::string{stream->str("DeliveryUrl")};
                 else if (method == "Encode")
@@ -911,8 +928,9 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
     const char *readable = has("mkv") || has("matroska") || has("webm") ? "mkv"
                            : has("mp4") || has("m4v") || has("mov")     ? "mp4"
                                                                         : nullptr;
-    if (readable != nullptr && source->flag("SupportsDirectPlay") && !request.server_remux &&
-        std::string{source->str("Protocol")} != "Http" && !source->flag("IsRemote"))
+    if (readable != nullptr && !plan.subtitle_burned && source->flag("SupportsDirectPlay") &&
+        !request.server_remux && std::string{source->str("Protocol")} != "Http" &&
+        !source->flag("IsRemote"))
     {
         const config::Settings &settings = config::current();
         plan.container = readable;
@@ -1075,6 +1093,14 @@ PlaybackPlan playback_plan(const PlaybackRequest &request) noexcept
         remux.server_remux = true;
         plan = negotiate(remux);
     }
+    if (plan.subtitle_bitmap &&
+        (!plan.direct || plan.container != "mkv" || plan.subtitle_ordinal < 0))
+    {
+        PlaybackRequest burned = request;
+        burned.media_source_id = plan.media_source_id;
+        burned.burn_picture_subtitles = true;
+        plan = negotiate(burned);
+    }
     return plan;
 }
 
@@ -1086,6 +1112,19 @@ PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
     /* The remux fallback offers the server nothing to play directly but TS. */
     const auto request_post = [&request](const std::string &at, std::string profile)
     {
+        if (request.server_remux || request.burn_picture_subtitles)
+        {
+            /* The TS demuxer and external files do not supply picture packets. */
+            for (const char *codec : {"pgssub", "dvdsub"})
+            {
+                const std::string entry =
+                    std::string{"{\"Format\":\""} + codec +
+                    "\",\"Method\":\"Embed\",\"Container\":\"mkv,matroska,webm\"},";
+                const auto found = profile.find(entry);
+                if (found != std::string::npos)
+                    profile.erase(found, entry.size());
+            }
+        }
         if (request.server_remux)
         {
             const std::string all = "ts,mpegts,mkv,matroska,webm,mp4,m4v,mov";

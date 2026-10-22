@@ -42,6 +42,8 @@
 #include "subtitle_style.hpp"
 #include "subtitle_timing.hpp"
 #include "subtitles.hpp"
+#include "bitmap_subtitles.hpp"
+#include "picture_subtitle_layout.hpp"
 #include "telemetry.hpp"
 #include "text.hpp"
 #include "trace.hpp"
@@ -2062,6 +2064,17 @@ Wash g_wash;
 /* Counts compositions, so the trace can say whether the cache is being hit. */
 unsigned g_wash_composed = 0;
 
+/* The cached background, named by its composition: its pixels change only
+   when it is composed again, so the GPU keeps its copy until then. */
+void blit_wash() noexcept
+{
+    const std::uint64_t id = (std::uint64_t{0x57} << 56) | g_wash_composed;
+    if (g_wash.shape == 0)
+        gfx::blit_surface_height(g_wash.pixels, 720, id);
+    else
+        gfx::blit_surface(g_wash.pixels, id);
+}
+
 /* Reuse the cached background until its item or composition key changes. */
 bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexcept
 {
@@ -2083,10 +2096,7 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
     if (g_wash.ready && g_wash.shape == shape && g_wash.key == key &&
         g_wash.hdr == gfx::hdr_output())
     {
-        if (shape == 0)
-            gfx::blit_surface_height(g_wash.pixels, 720);
-        else
-            gfx::blit_surface(g_wash.pixels);
+        blit_wash();
         gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
         return false;
     }
@@ -2111,10 +2121,7 @@ void wash_end() noexcept
     gfx::pop_target();
     g_wash.ready = true;
     ++g_wash_composed;
-    if (g_wash.shape == 0)
-        gfx::blit_surface_height(g_wash.pixels, 720);
-    else
-        gfx::blit_surface(g_wash.pixels);
+    blit_wash();
     gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
 }
 
@@ -4096,20 +4103,25 @@ enum class TimingRow : std::uint8_t
     late,
     early,
     reset,
+    picture_size,
+    picture_position,
+    picture_reset,
 };
 
 /* Refreshed once a frame from the status both the input and the drawing
    already read, rather than copying the whole status for every row. */
-bool g_subtitle_text_showing = false;
+bool g_subtitle_client_showing = false;
+bool g_subtitle_picture_showing = false;
 
 void note_subtitle_state(const player::Status &status) noexcept
 {
-    g_subtitle_text_showing = status.subtitle_index >= 0 && !status.subtitle_burned;
+    g_subtitle_client_showing = status.subtitle_index >= 0 && !status.subtitle_burned;
+    g_subtitle_picture_showing = status.subtitle_bitmap;
 }
 
 bool subtitle_timing_offered() noexcept
 {
-    return g_subtitle_text_showing;
+    return g_subtitle_client_showing;
 }
 
 TimingRow timing_row(int row) noexcept
@@ -4127,6 +4139,12 @@ TimingRow timing_row(int row) noexcept
         return TimingRow::early;
     case 3:
         return TimingRow::reset;
+    case 4:
+        return g_subtitle_picture_showing ? TimingRow::picture_size : TimingRow::none;
+    case 5:
+        return g_subtitle_picture_showing ? TimingRow::picture_position : TimingRow::none;
+    case 6:
+        return g_subtitle_picture_showing ? TimingRow::picture_reset : TimingRow::none;
     default:
         return TimingRow::none;
     }
@@ -4146,7 +4164,7 @@ int panel_rows() noexcept
 {
     if (g_view.panel_kind == 0)
         return 1 + static_cast<int>(g_view.playing_source.subtitle_tracks.size()) +
-               (subtitle_timing_offered() ? 4 : 0);
+               (subtitle_timing_offered() ? 4 : 0) + (g_subtitle_picture_showing ? 3 : 0);
     if (g_view.panel_kind == 1)
         return static_cast<int>(audio_rows(player::status()).size());
     return static_cast<int>(quality_rows().size());
@@ -4167,6 +4185,16 @@ std::string panel_row_label(int row) noexcept
             return "Subtitles early?  Show them later";
         case TimingRow::reset:
             return "Back to original timing";
+        case TimingRow::picture_size:
+            return std::string{"Picture size  \xc2\xb7  "} +
+                   subtitle_style::kPictureSizeNames[subtitle_style::wrap(
+                       config::current().subtitle_look.picture_size, 5)];
+        case TimingRow::picture_position:
+            return std::string{"Picture position  \xc2\xb7  "} +
+                   subtitle_style::kPicturePositionNames[subtitle_style::wrap(
+                       config::current().subtitle_look.picture_position, 4)];
+        case TimingRow::picture_reset:
+            return "Back to original picture layout";
         case TimingRow::none:
             break;
         }
@@ -4308,7 +4336,7 @@ void apply_panel_choice() noexcept
         }
         const auto &track = source.subtitle_tracks[static_cast<std::size_t>(chosen)];
         /* A text subtitle is drawn by the app, so it can be swapped without
-           interrupting the picture. An image one is burned in by the server. */
+           interrupting the picture. A picture track restarts the reader to select its packets. */
         if (track.is_text && text_now)
         {
             player::show_text_subtitle(track.index);
@@ -5237,6 +5265,8 @@ void draw_player() noexcept
     }
     const std::string cue = subtitles::current(
         subtitle_timing::cue_clock(status.position_seconds, g_view.subtitle_offset));
+    const auto bitmap_cue = bitmap_subtitles::current(
+        subtitle_timing::cue_clock(status.position_seconds, g_view.subtitle_offset));
     static long last_shown = -1;
     static bool last_clean = false;
     /* A frame is only worth reusing when nothing is drawn over the picture --
@@ -5244,9 +5274,9 @@ void draw_player() noexcept
        would never appear at all.  */
     const bool clean = picture && status.state == player::State::playing && !status.paused &&
                        !g_view.osd_visible && !g_view.panel_open && !g_view.show_debug &&
-                       cue.empty() && g_view.flash == 0 && !gfx::hdr_request_pending() &&
-                       g_view.up_next_in.value() <= 0.004f && g_view.intro_in.value() <= 0.004f &&
-                       !g_view.autoplay.asking();
+                       cue.empty() && !bitmap_cue && g_view.flash == 0 &&
+                       !gfx::hdr_request_pending() && g_view.up_next_in.value() <= 0.004f &&
+                       g_view.intro_in.value() <= 0.004f && !g_view.autoplay.asking();
     const bool reuse = clean && last_clean && status.shown == last_shown;
     last_clean = clean;
     last_shown = status.shown;
@@ -5382,6 +5412,8 @@ void draw_player() noexcept
         std::string subtitle_line = "Subtitles  ";
         if (status.subtitle_burned)
             subtitle_line += "burned in by the server";
+        else if (status.subtitle_bitmap)
+            subtitle_line += "PS5 picture overlay";
         else if (status.subtitle_index < 0)
             subtitle_line += "off";
         else
@@ -5406,6 +5438,8 @@ void draw_player() noexcept
         {
             display_line += "unavailable";
         }
+        display_line += "  overlay " + std::to_string(gfx::physical_width()) + "x" +
+                        std::to_string(gfx::physical_height());
         /* Compare repeated-frame cadence with the expected source/display ratio. */
         std::string cadence_line = "Cadence    ";
         {
@@ -5491,6 +5525,21 @@ void draw_player() noexcept
 
     /* The subtitles hold one height whatever the controls are doing, and the
        controls are drawn over the top of them. */
+    if (bitmap_cue && picture)
+    {
+        /* Fit the authored canvas without distorting its artwork. A cropped movie can
+           still have a full-height PGS canvas, including captions in its black bars. */
+        const auto &look = config::current().subtitle_look;
+        const auto placement = picture_subtitle_layout::place(
+            *bitmap_cue, subtitle_style::kPictureSizes[subtitle_style::wrap(look.picture_size, 5)],
+            subtitle_style::wrap(look.picture_position, 4));
+        for (const auto &r : bitmap_cue->rects)
+        {
+            gfx::Bitmap image{r.pixels.get(), r.width, r.height};
+            const auto box = placement.apply(r);
+            gfx::blit_scaled(image, box.x, box.y, box.width, box.height, true);
+        }
+    }
     if (!cue.empty())
         draw_subtitle_lines(cue);
 
@@ -5551,6 +5600,7 @@ struct SubtitleRow
     int subtitle_style::Choices::*field;
     int count;
     const char *const *names;
+    bool picture_reset = false;
 };
 
 const std::vector<SubtitleRow> &subtitle_rows() noexcept
@@ -5567,9 +5617,12 @@ const std::vector<SubtitleRow> &subtitle_rows() noexcept
         {"Background shape", nullptr, &ss::Choices::box, 2, ss::kBoxNames},
         {"Line spacing", nullptr, &ss::Choices::spacing, 3, ss::kSpacingNames},
         {"Position", nullptr, &ss::Choices::position, 4, ss::kPositionNames},
+        {"Reset text appearance", nullptr, nullptr, 0, nullptr},
         {"", "Picture subtitles (Blu-ray, DVD)", nullptr, 0, nullptr},
+        {"Size", nullptr, &ss::Choices::picture_size, 5, ss::kPictureSizeNames},
+        {"Position", nullptr, &ss::Choices::picture_position, 4, ss::kPicturePositionNames},
         {"When one is the default", nullptr, &ss::Choices::picture, 2, ss::kPictureNames},
-        {"Back to the original look", nullptr, nullptr, 0, nullptr},
+        {"Reset picture appearance", nullptr, nullptr, 0, nullptr, true},
     };
     return rows;
 }
@@ -5589,10 +5642,25 @@ void draw_subtitle_settings() noexcept
     const auto &rows = subtitle_rows();
 
     constexpr int kListW = 700;
-    /* Nine choices, two headings and an action have to finish above the hint
-       line at the foot of the screen. */
     constexpr int kRowH = 52;
-    int focus_y = kGridTop - 20;
+    constexpr int list_top = kGridTop - 20;
+    constexpr int list_height = gfx::kHeight - 132 - list_top;
+    int total_height = 0, selected_y = 0;
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+    {
+        if (rows[static_cast<std::size_t>(i)].label[0] == '\0')
+            total_height += (i == 0 ? 0 : 14) + 44;
+        else
+        {
+            if (i == g_view.subtitle_row)
+                selected_y = total_height;
+            total_height += kRowH;
+        }
+    }
+    const int scroll =
+        std::clamp(selected_y - list_height + kRowH, 0, std::max(0, total_height - list_height));
+    gfx::push_clip(kContentX - 16, list_top, kListW, list_height);
+    int focus_y = list_top - scroll;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
         if (rows[static_cast<std::size_t>(i)].label[0] == '\0')
@@ -5604,7 +5672,7 @@ void draw_subtitle_settings() noexcept
             ui::focus_pill(kContentX - 16, focus_y, kListW, kRowH - 8, ui::FocusGroup::settings, 1);
         focus_y += kRowH;
     }
-    int y = kGridTop - 20;
+    int y = list_top - scroll;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
         const SubtitleRow &row = rows[static_cast<std::size_t>(i)];
@@ -5632,6 +5700,7 @@ void draw_subtitle_settings() noexcept
         y += kRowH;
     }
 
+    gfx::pop_clip();
     /* The preview: bright below, dark above, so the edge and box choices can be
        judged against both kinds of picture. */
     constexpr int kPreviewX = kContentX + 760;
@@ -5642,14 +5711,52 @@ void draw_subtitle_settings() noexcept
     gfx::rounded_rect(kPreviewX, kPreviewY, preview_w, kPreviewH, 18, gfx::rgb(0x1a, 0x1f, 0x2b));
     gfx::fill_rect(kPreviewX, kPreviewY + kPreviewH / 2, preview_w, kPreviewH / 2,
                    gfx::rgb(0xc9, 0xcf, 0xd6));
-    text::draw(kPreviewX + 24, kPreviewY + 18, "Preview", 20, Weight::medium,
+    const auto field = rows[static_cast<std::size_t>(g_view.subtitle_row)].field;
+    const bool picture_preview =
+        rows[static_cast<std::size_t>(g_view.subtitle_row)].picture_reset ||
+        field == &subtitle_style::Choices::picture ||
+        field == &subtitle_style::Choices::picture_size ||
+        field == &subtitle_style::Choices::picture_position;
+    text::draw(kPreviewX + 24, kPreviewY + 18,
+               picture_preview ? "Picture placement preview" : "Text preview", 20, Weight::medium,
                gfx::palette::text_faint);
-    subtitle_style::Style style = subtitle_style::resolve(settings.subtitle_look);
-    /* Position is shown to scale: the preview is about half the screen's height. */
-    style.bottom_margin = style.bottom_margin * kPreviewH / gfx::kHeight + 24;
-    draw_subtitle_block("This is how your subtitles\nwill look while you watch.", style,
-                        kPreviewX + preview_w / 2, kPreviewY + kPreviewH);
+    if (picture_preview)
+    {
+        bitmap_subtitles::Frame sample;
+        sample.width = 1920;
+        sample.height = 1080;
+        sample.rects = {{410, 830, 1100, 170, {}}};
+        const auto transform = picture_subtitle_layout::place(
+            sample,
+            subtitle_style::kPictureSizes[subtitle_style::wrap(settings.subtitle_look.picture_size,
+                                                               5)],
+            subtitle_style::wrap(settings.subtitle_look.picture_position, 4),
+            {kPreviewX, kPreviewY + 60, preview_w, kPreviewH - 60});
+        const auto box = transform.apply(sample.rects[0]);
+        subtitle_style::Style preview;
+        preview.pixel_size = std::max(12, static_cast<int>(72 * transform.scale));
+        preview.line_step = preview.pixel_size * 5 / 4;
+        preview.bottom_margin = 0;
+        preview.edge_px = 1;
+        draw_subtitle_block("Picture subtitles\nkeep their original lettering.", preview,
+                            box.x + box.width / 2, box.y + box.height);
+    }
+    else
+    {
+        subtitle_style::Style style = subtitle_style::resolve(settings.subtitle_look);
+        /* Position is shown to scale: the preview is about half the screen's height. */
+        style.bottom_margin = style.bottom_margin * kPreviewH / gfx::kHeight + 24;
+        draw_subtitle_block("This is how your subtitles\nwill look while you watch.", style,
+                            kPreviewX + preview_w / 2, kPreviewY + kPreviewH);
+    }
     gfx::pop_clip();
+    text::draw_wrapped(
+        kPreviewX, kPreviewY + kPreviewH + 24, preview_w, 3, 28,
+        picture_preview
+            ? "Original font and colours. Size and position apply to PS5 picture overlays."
+            : "Font, colour, edges and background apply to text tracks. Picture tracks have "
+              "separate controls.",
+        20, Weight::regular, gfx::palette::text_dim);
 
     text::draw(kContentX, gfx::kHeight - 90, "Left and right to change", 20, Weight::regular,
                gfx::palette::text_faint);
@@ -6769,6 +6876,8 @@ void switch_to_discover() noexcept
         g_shared.screen = Screen::discover;
     }
     g_back.clear();
+    g_view.leaving_items.clear();
+    g_view.leaving_frame = -1;
     g_view.world_dir = 1;
     g_view.sidebar_scroll.jump(0.0f);
     restart_focus();
@@ -6803,6 +6912,8 @@ void switch_to_home(const std::vector<SidebarEntry> &entries) noexcept
     g_view.active_section = index;
     g_view.sidebar_index = index;
     g_back.clear();
+    g_view.leaving_items.clear();
+    g_view.leaving_frame = -1;
     g_view.world_dir = -1;
     g_view.sidebar_scroll.jump(0.0f);
     restart_focus();
@@ -7754,7 +7865,26 @@ void handle_player_input() noexcept
         g_view.timing_held =
             adjusting && pad::held(pad::Button::cross) ? g_view.timing_held + 1 : 0;
         const bool repeat = g_view.timing_held > 20 && (g_view.timing_held - 20) % 3 == 0;
-        if (adjusting && (pad::pressed(pad::Button::cross) || repeat))
+        const bool picture_control =
+            timing == TimingRow::picture_size || timing == TimingRow::picture_position;
+        if (picture_control &&
+            (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right) ||
+             pad::pressed(pad::Button::cross)))
+        {
+            auto &look = config::current().subtitle_look;
+            int &value =
+                timing == TimingRow::picture_size ? look.picture_size : look.picture_position;
+            const int count = timing == TimingRow::picture_size ? 5 : 4;
+            value = subtitle_style::wrap(value + (pad::pressed(pad::Button::left) ? -1 : 1), count);
+            config::save();
+        }
+        else if (timing == TimingRow::picture_reset && pad::pressed(pad::Button::cross))
+        {
+            config::current().subtitle_look.picture_size = 1;
+            config::current().subtitle_look.picture_position = 0;
+            config::save();
+        }
+        else if (adjusting && (pad::pressed(pad::Button::cross) || repeat))
         {
             g_view.subtitle_offset =
                 subtitle_timing::nudge(g_view.subtitle_offset, timing == TimingRow::late);
@@ -8035,11 +8165,18 @@ void handle_player_input() noexcept
                 player::show_text_subtitle(-1);
             else
             {
-                int wanted = tracks.front().index;
+                const jellyfin::Track *wanted = &tracks.front();
                 for (const auto &track : tracks)
                     if (track.is_default && track.is_text)
-                        wanted = track.index;
-                player::show_text_subtitle(wanted);
+                        wanted = &track;
+                if (wanted->is_text)
+                    player::show_text_subtitle(wanted->index);
+                else
+                {
+                    jellyfin::PlaybackRequest request = player::current_request();
+                    request.subtitle_index = wanted->index;
+                    restart_here(request);
+                }
             }
         }
         /* Subtitles have nothing to do with the timeline, so they do not
@@ -8094,7 +8231,22 @@ void handle_subtitle_settings_input() noexcept
     }
     else if (row.field == nullptr && pad::pressed(pad::Button::cross))
     {
-        settings.subtitle_look = subtitle_style::Choices{};
+        const subtitle_style::Choices defaults{};
+        if (row.picture_reset)
+        {
+            settings.subtitle_look.picture_size = defaults.picture_size;
+            settings.subtitle_look.picture_position = defaults.picture_position;
+        }
+        else
+        {
+            for (const auto &appearance : rows)
+            {
+                if (&appearance == &row)
+                    break;
+                if (appearance.field != nullptr)
+                    settings.subtitle_look.*appearance.field = defaults.*appearance.field;
+            }
+        }
         config::save();
     }
 }
@@ -8487,6 +8639,10 @@ void frame() noexcept
     g_last_loop_us = loop_start;
 
     ++g_view.frames;
+    if (g_view.frames == 1)
+        trace::mark(gfx::menu_accelerated()
+                        ? "Menu renderer: Vulkan GPU at native output resolution"
+                        : "Menu renderer: CPU fallback");
     /* Once signed in, the typed credentials have no further use. */
     if (config::current().signed_in() &&
         (!g_view.pending_password.empty() || !g_view.pending_username.empty()))
@@ -8914,6 +9070,7 @@ void frame() noexcept
     /* Output mode changes are a frame-boundary operation, not a side effect of
        clearing a UI screen. The playback worker waits for this acknowledgement
        before it configures HDMI audio and starts decoding. */
+    gfx::set_menu_acceleration(screen != Screen::playing);
     gfx::apply_pending_output_mode();
 
     // Playback draws its own full frame/bars. A menu gradient here both
@@ -8922,8 +9079,7 @@ void frame() noexcept
         screen == Screen::detail && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
         g_wash.ready && g_wash.shape == 1 && g_wash.words == gfx::surface_words();
     bool home_background_covers_top = false;
-    if (screen == Screen::home && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
-        !rows.empty())
+    if (screen == Screen::home && !g_view.search.open && !rows.empty())
     {
         const auto &row = rows[static_cast<std::size_t>(g_view.row_index)];
         if (!row.items.empty())
@@ -9096,7 +9252,7 @@ void frame() noexcept
             g_view.world_dir = 0;
         /* A page rises into place; a tab slides in from its own side. */
         if (page_moving)
-            gfx::set_origin(static_cast<int>((1.0f - page_in) * 90.0f * g_view.world_dir),
+            gfx::set_origin(0,
                             g_view.world_dir != 0 ? 0 : static_cast<int>((1.0f - page_in) * 30.0f));
 
         switch (screen)

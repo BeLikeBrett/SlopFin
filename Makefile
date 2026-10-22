@@ -15,8 +15,20 @@ APP_STATIC_ARCHIVES ?=
 APP_STATIC_ARCHIVES += .deps/native/cxx/libcxx.a .deps/native/cxx/libcxxabi.a .deps/native/cxx/libunwind.a
 APP_RUNTIME_MODULES ?=
 SOFTWARE_AUDIO ?= 0
+BITMAP_SUBTITLES ?= $(SOFTWARE_AUDIO)
+GPU_MENU ?= 0
+export GPU_MENU
+ifeq ($(GPU_MENU),1)
+APP_DEFINITIONS += SLOPFIN_GPU_MENU
+APP_INCLUDE_PATHS += .deps/gpu/radv-release/include build/gpu
+endif
 ifeq ($(SOFTWARE_AUDIO),1)
 APP_DEFINITIONS += SLOPFIN_SOFTWARE_AUDIO
+endif
+ifeq ($(BITMAP_SUBTITLES),1)
+APP_DEFINITIONS += SLOPFIN_BITMAP_SUBTITLES
+endif
+ifneq ($(filter 1,$(SOFTWARE_AUDIO) $(BITMAP_SUBTITLES)),)
 APP_INCLUDE_PATHS += .deps/audio/install/include
 APP_STATIC_ARCHIVES += .deps/audio/install/lib/libavcodec.a .deps/audio/install/lib/libswresample.a .deps/audio/install/lib/libavutil.a
 endif
@@ -54,7 +66,7 @@ HOST_SRC := \
 	host/host_main.cpp host/host_platform.cpp host/host_player.cpp \
 	src/app.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp \
 	src/ime.cpp src/http.cpp src/web_transport.cpp src/jellyfin.cpp src/json.cpp src/pad.cpp \
-	src/bigalloc.cpp src/config.cpp src/subtitles.cpp src/telemetry.cpp \
+	src/bigalloc.cpp src/config.cpp src/bitmap_subtitles.cpp src/subtitles.cpp src/telemetry.cpp \
 	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp src/seerr.cpp src/update.cpp src/update_package.cpp
 HOST_CXXFLAGS ?= -std=c++20 -O2 -g -DSLOPFIN_HOST -Wall -Wextra \
 	-Wno-unused-parameter -pthread $(shell pkg-config --cflags sdl2)
@@ -169,6 +181,10 @@ test-playback: test-updates test-services
 	@build/tests/autoplay_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_subtitle_style.cpp -o build/tests/subtitle_style_tests
 	@build/tests/subtitle_style_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_picture_subtitle_layout.cpp -o build/tests/picture_subtitle_layout_tests
+	@build/tests/picture_subtitle_layout_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_subtitle_render.cpp src/gfx.cpp src/text.cpp src/bigalloc.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2) -lz -o build/tests/subtitle_render_tests
+	@SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/subtitle_render_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_intro_metadata.cpp src/json.cpp -o build/tests/intro_metadata_tests
 	@build/tests/intro_metadata_tests
 
@@ -383,3 +399,7 @@ test-services:
 	@build/tests/update_state_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_seerr.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/seerr_tests
 	@build/tests/seerr_tests
+
+.PHONY: test-bitmap-subtitles
+test-bitmap-subtitles:
+	@bash tools/test-bitmap-subtitles.sh

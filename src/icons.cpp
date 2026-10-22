@@ -278,13 +278,20 @@ const unsigned char *mask(Icon icon, int size) noexcept
     return g_cache.back().coverage.data();
 }
 
+/* An icon's mask follows from which icon and its size. */
+static std::uint64_t mask_id(Icon icon, int pixels) noexcept
+{
+    return (std::uint64_t{0x4b} << 56) | (static_cast<std::uint64_t>(icon) << 32) |
+           static_cast<std::uint32_t>(pixels);
+}
+
 void draw(Icon icon, int x, int y, int size, gfx::Color color) noexcept
 {
     /* Built at the surface's pixel size, so the curves stay clean at 4K. */
     const int pixels = std::max(1, gfx::to_physical_size(size));
     if (const unsigned char *coverage = mask(icon, pixels); coverage != nullptr)
         gfx::blend_mask_physical(gfx::to_physical_x(x), gfx::to_physical_y(y), pixels, pixels,
-                                 coverage, color);
+                                 coverage, color, mask_id(icon, pixels));
 }
 
 void draw_gradient(Icon icon, int x, int y, int size, gfx::Color from, gfx::Color to) noexcept
@@ -292,7 +299,7 @@ void draw_gradient(Icon icon, int x, int y, int size, gfx::Color from, gfx::Colo
     const int pixels = std::max(1, gfx::to_physical_size(size));
     if (const unsigned char *coverage = mask(icon, pixels); coverage != nullptr)
         gfx::blend_mask_gradient_physical(gfx::to_physical_x(x), gfx::to_physical_y(y), pixels,
-                                          pixels, coverage, from, to);
+                                          pixels, coverage, from, to, mask_id(icon, pixels));
 }
 
 } // namespace slopfin::icons

@@ -10,9 +10,8 @@
  * for anyone who never opens the page.
  *
  * Only text subtitles (SubRip, MP4 text, and ASS shown as plain text) are
- * drawn by the app. Picture subtitles (Blu-ray PGS, DVD) are images drawn into
- * the video by the server and cannot be restyled; the one useful choice for
- * them -- prefer a text track instead -- is `Choices::picture`.
+ * drawn by the app. Picture subtitles retain their artwork; PS5 overlays have
+ * separate size and placement controls. Server-burned tracks cannot be moved.
  *
  * Header-only so the choices and the defaults are tested on the host.
  */
@@ -53,16 +52,18 @@ enum class Box : std::uint8_t
 /* The choices, as stored: one index per list. */
 struct Choices
 {
-    int size = 1;       /* Small, Medium, Large, Extra large, Huge */
-    int font = 0;       /* Standard, Easy to read */
-    int bold = 0;       /* Normal, Bold */
-    int colour = 0;     /* White, Yellow, Soft cream, Sky, Green, Grey */
-    int edge = 0;       /* Outline, Drop shadow, None, Thick outline */
-    int background = 0; /* None, See-through, Solid */
-    int box = 0;        /* Behind each line, One band */
-    int spacing = 1;    /* Tight, Normal, Roomy */
-    int position = 0;   /* Bottom, A little higher, Higher, Near the top */
-    int picture = 0;    /* Draw into the picture, Use a text track when there is one */
+    int size = 1;             /* Small, Medium, Large, Extra large, Huge */
+    int font = 0;             /* Standard, Easy to read */
+    int bold = 0;             /* Normal, Bold */
+    int colour = 0;           /* White, Yellow, Soft cream, Sky, Green, Grey */
+    int edge = 0;             /* Outline, Drop shadow, None, Thick outline */
+    int background = 0;       /* None, See-through, Solid */
+    int box = 0;              /* Behind each line, One band */
+    int spacing = 1;          /* Tight, Normal, Roomy */
+    int position = 0;         /* Bottom, A little higher, Higher, Near the top */
+    int picture = 0;          /* Show the selected default, or prefer text */
+    int picture_size = 1;     /* Smaller, Original, Larger, Extra large, Huge */
+    int picture_position = 0; /* Original, Bottom, Higher, Top */
 };
 
 /* What drawing needs, resolved from the choices. */
@@ -98,8 +99,11 @@ inline constexpr const char *kBoxNames[] = {"Behind each line", "One band"};
 inline constexpr const char *kSpacingNames[] = {"Tight", "Normal", "Roomy"};
 inline constexpr const char *kPositionNames[] = {"Bottom", "A little higher", "Higher",
                                                  "Near the top"};
-inline constexpr const char *kPictureNames[] = {"Draw into the picture",
-                                                "Use a text track when there is one"};
+inline constexpr const char *kPictureNames[] = {"Show it", "Prefer a text track"};
+inline constexpr const char *kPictureSizeNames[] = {"Smaller", "Original", "Larger", "Extra large",
+                                                    "Huge"};
+inline constexpr int kPictureSizes[] = {75, 100, 125, 150, 200};
+inline constexpr const char *kPicturePositionNames[] = {"Original", "Bottom", "Higher", "Top"};
 
 inline constexpr int kSizes[] = {34, 42, 54, 66, 78};
 /* The first three are the original list, in their original order. */

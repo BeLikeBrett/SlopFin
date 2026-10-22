@@ -26,6 +26,7 @@
 #include "reporter.hpp"
 #include "stream_clock.hpp"
 #include "subtitles.hpp"
+#include "bitmap_subtitles.hpp"
 #include "order_capture.hpp"
 #include "trace.hpp"
 #include "direct_play.hpp"
@@ -1200,6 +1201,7 @@ class TransportProducer
     http::Stream &stream_;
     media::Demuxer &demuxer_;
     player::OrderCapture &capture_;
+    bitmap_subtitles::Decoder &subtitles_;
     void *thread_ = nullptr;
 
   public:
@@ -1207,8 +1209,9 @@ class TransportProducer
        temporary server stalls do not block the next audio PES. */
     player::PacketQueue video{128u * 1024u * 1024u};
     std::size_t total_bytes = 0;
-    TransportProducer(http::Stream &stream, media::Demuxer &demuxer, player::OrderCapture &capture)
-        : stream_(stream), demuxer_(demuxer), capture_(capture)
+    TransportProducer(http::Stream &stream, media::Demuxer &demuxer, player::OrderCapture &capture,
+                      bitmap_subtitles::Decoder &subtitles)
+        : stream_(stream), demuxer_(demuxer), capture_(capture), subtitles_(subtitles)
     {
     }
     bool start() noexcept
@@ -1272,6 +1275,7 @@ class TransportProducer
         std::vector<std::uint8_t> chunk(64u * 1024u);
         std::size_t window_bytes = 0;
         std::uint64_t window_start = now_us();
+        bool noted_subtitles = false;
         while (!g_stop.load(std::memory_order_acquire))
         {
             const auto began = now_us();
@@ -1317,6 +1321,24 @@ class TransportProducer
             ts::AccessUnit unit;
             while (!g_stop.load() && demuxer.next(unit))
             {
+                if (unit.subtitle)
+                {
+                    if (!subtitles_.decode(unit.data.data(), unit.data.size(), unit.pts,
+                                           unit.duration))
+                    {
+                        fail("PS5 picture subtitles could not be decoded; retrying with Jellyfin "
+                             "burn-in.",
+                             player::Fallback::bitmap_subtitles);
+                        video.close();
+                        return;
+                    }
+                    if (!noted_subtitles)
+                    {
+                        trace::mark("player: PS5 picture subtitle decoder receiving MKV packets");
+                        noted_subtitles = true;
+                    }
+                    continue;
+                }
                 const double measured =
                     bitrate.add(unit.data.size(), unit.video, unit.dts >= 0 ? unit.dts : unit.pts);
                 {
@@ -1440,7 +1462,8 @@ void *playback_entry(void *) noexcept
                a.max_audio_channels == b.max_audio_channels && a.audio_codec == b.audio_codec &&
                a.allow_software_audio == b.allow_software_audio &&
                a.allow_bitstream == b.allow_bitstream &&
-               a.allow_dv_hdr10_base == b.allow_dv_hdr10_base && a.server_remux == b.server_remux;
+               a.allow_dv_hdr10_base == b.allow_dv_hdr10_base && a.server_remux == b.server_remux &&
+               a.burn_picture_subtitles == b.burn_picture_subtitles;
     };
     const bool reuse = s_last_plan.valid && s_last_plan.direct && s_last_plan.container != "ts" &&
                        same_but_position(g_request, s_last_request);
@@ -1458,6 +1481,7 @@ void *playback_entry(void *) noexcept
      * media from the keyframe before the start. Anything that cannot be read
      * that way goes back to the server's remux, for the rest of this title.
      */
+    bitmap_subtitles::Decoder bitmap_decoder;
     std::unique_ptr<media::Demuxer> demuxer;
     std::uint64_t direct_offset = 0;
     double present_from = 0.0;
@@ -1472,8 +1496,15 @@ void *playback_entry(void *) noexcept
         source.size = plan.size > 0 ? static_cast<std::uint64_t>(plan.size) : 0;
         source.audio_ordinal = plan.audio_codec.empty() ? -1 : plan.audio_ordinal;
         source.audio_codec = plan.audio_codec;
+        source.subtitle_ordinal = plan.subtitle_bitmap ? plan.subtitle_ordinal : -1;
+        source.subtitle_codec = plan.subtitle_codec;
         direct::Opened opened;
-        if (direct::open(source, g_request.start_seconds, ranges, opened))
+        if (direct::open(source, g_request.start_seconds, ranges, opened) &&
+            (!plan.subtitle_bitmap ||
+             bitmap_decoder.open(opened.subtitle_codec, opened.subtitle_private,
+                                 opened.subtitle_width, opened.subtitle_height,
+                                 opened.subtitle_compression,
+                                 opened.subtitle_compression_settings)))
         {
             demuxer = std::move(opened.demuxer);
             direct_offset = opened.offset;
@@ -1503,6 +1534,7 @@ void *playback_entry(void *) noexcept
         s_last_request = g_request;
         s_last_plan = plan;
     }
+    bitmap_subtitles::enable(plan.subtitle_bitmap);
     g_absolute_timestamps = plan.absolute_timestamps;
     g_server_muxed = !plan.direct;
     if (g_server_muxed)
@@ -1511,11 +1543,13 @@ void *playback_entry(void *) noexcept
                 (plan.absolute_timestamps ? "on title time" : "relative to start") + ", subtitle " +
                 std::to_string(g_request.subtitle_index) +
                 (plan.subtitle_burned        ? " burned in"
+                 : plan.subtitle_bitmap      ? " as PS5 bitmap overlay"
                  : plan.subtitle_url.empty() ? ""
                                              : " as text"));
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_status.subtitle_burned = plan.subtitle_burned;
+        g_status.subtitle_bitmap = plan.subtitle_bitmap;
         g_status.media_source_id = plan.media_source_id;
         g_status.source_fps = plan.frame_rate;
     }
@@ -1651,7 +1685,7 @@ void *playback_entry(void *) noexcept
     bool decoder_ready = false;
     set_state(player::State::opening, "Buffering");
 
-    TransportProducer transport(stream, *demuxer, order_capture);
+    TransportProducer transport(stream, *demuxer, order_capture, bitmap_decoder);
     if (!transport.start())
     {
         set_state(player::State::failed, "Could not start the transport buffer.");
@@ -2120,6 +2154,7 @@ bool start(const jellyfin::PlaybackRequest &request, const std::string &title,
     }
     if (g_request.item_id != request.item_id)
         clear_subtitles();
+    bitmap_subtitles::reset();
     g_request = request;
     g_title = title;
     g_duration_seconds = duration_seconds;
@@ -2180,6 +2215,7 @@ void stop(bool preserve_output) noexcept
         g_thread = nullptr;
     }
     g_preserve_outputs_on_exit.store(false, std::memory_order_release);
+    bitmap_subtitles::reset();
     std::lock_guard<std::mutex> guard(g_mutex);
     g_status.state = State::idle;
     g_status.paused = false;
@@ -2290,6 +2326,11 @@ bool recover() noexcept
         g_fallback_dolby_vision = true;
         trace::mark("player: Dolby Vision base layer failed; retrying with Jellyfin conversion");
     }
+    else if (fallback == Fallback::bitmap_subtitles && !request.burn_picture_subtitles)
+    {
+        request.burn_picture_subtitles = true;
+        trace::mark("player: picture subtitle decode failed; retrying with Jellyfin burn-in");
+    }
     else
         return false;
     request.start_seconds = std::max(0.0, position);
@@ -2308,11 +2349,13 @@ bool seek(double seconds) noexcept
 
 void show_text_subtitle(int index) noexcept
 {
+    bitmap_subtitles::enable(false);
     g_request.subtitle_index = index;
     std::string source;
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         g_status.subtitle_index = index;
+        g_status.subtitle_bitmap = false;
         source = g_status.media_source_id;
     }
     if (index < 0 || source.empty())

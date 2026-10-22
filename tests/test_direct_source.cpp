@@ -171,8 +171,54 @@ void check(const char *name, const char *container, int ordinal, const char *cod
 }
 } // namespace
 
+void picture_subtitles(bool compressed)
+{
+    FileRanges file(compressed ? "tests/media/h264_aac_srt_pgs_zlib.mkv"
+                               : "tests/media/h264_aac_srt_pgs.mkv");
+    direct::Source source;
+    source.key = compressed ? "picture-zlib-fixture" : "picture-fixture";
+    source.container = "mkv";
+    source.size = file.bytes.size();
+    source.audio_ordinal = 0;
+    source.audio_codec = "aac";
+    source.subtitle_ordinal = 1; // a text subtitle precedes the selected PGS track
+    source.subtitle_codec = "pgssub";
+    direct::Opened opened;
+    assert(direct::open(source, 0, file, opened));
+    assert(opened.subtitle_codec == "pgssub" && opened.subtitle_private.empty());
+    assert(opened.subtitle_compression == (compressed ? 0 : -1));
+    unsigned video = 0, audio = 0, pictures = 0;
+    for (std::size_t at = opened.offset; at < file.bytes.size();)
+    {
+        const auto n = std::min<std::size_t>(37, file.bytes.size() - at);
+        opened.demuxer->feed(file.bytes.data() + at, n);
+        at += n;
+        ts::AccessUnit unit;
+        while (opened.demuxer->next(unit))
+        {
+            if (unit.subtitle)
+            {
+                assert(!unit.video && !unit.data.empty());
+                assert(unit.pts == static_cast<std::int64_t>(pictures) * 90000);
+                ++pictures;
+            }
+            else if (unit.video)
+                ++video;
+            else
+                ++audio;
+        }
+    }
+    assert(pictures >= 4 && video == 96 && audio == 188);
+    assert(!opened.demuxer->broken());
+    source.subtitle_ordinal = 0; // never reinterpret a text block as bitmap bytes
+    assert(!direct::open(source, 0, file, opened));
+    direct::forget();
+}
+
 int main()
 {
+    picture_subtitles(false);
+    picture_subtitles(true);
     /* FFmpeg's packet counts less the one priming frame before zero. */
     check("h264_aac_ac3_srt.mkv", "mkv", 0, "aac", false, 188);
     check("h264_aac_ac3_srt.mkv", "mkv", 1, "ac3", false, 124);

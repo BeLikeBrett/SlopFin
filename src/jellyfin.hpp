@@ -249,6 +249,7 @@ struct PlaybackRequest
     /* Leave MKV and MP4 to the server's remux, as before direct play: the
        fallback when a file cannot be read here. */
     bool server_remux = false;
+    bool burn_picture_subtitles = false; /* retry after local subtitle failure */
     /* What the TV or receiver accepts, read when playback starts; unknown on
        the host and when the console gives no list. */
     audio_route::Sink sink;
@@ -274,6 +275,9 @@ struct PlaybackPlan
     int width = 0, height = 0; /* source picture; sizes the decoder, 0 when unknown */
     double frame_rate = 0.0;   /* the source video's rate, for display cadence */
     std::string media_source_id;
+    bool subtitle_bitmap = false;
+    int subtitle_ordinal = -1;
+    std::string subtitle_codec;
     std::string subtitle_url;         /* SubRip to fetch and draw; empty when none */
     bool subtitle_burned = false;     /* the server draws it into the picture */
     bool absolute_timestamps = false; /* stream time equals title time */

@@ -8,6 +8,7 @@
 namespace
 {
 std::string response_body;
+std::string burned_response_body;
 std::string session_body;
 std::string last_get_path;
 std::vector<std::string> requests, bodies;
@@ -28,7 +29,11 @@ Response post(std::string_view, int, std::string_view path, const std::vector<st
 {
     requests.emplace_back(path);
     bodies.emplace_back(body);
-    return {response_body.empty() ? 500 : 200, response_body, {}};
+    const auto &reply =
+        !burned_response_body.empty() && body.find("\"Method\":\"Embed\"") == std::string_view::npos
+            ? burned_response_body
+            : response_body;
+    return {reply.empty() ? 500 : 200, reply, {}};
 }
 Response get(std::string_view, int, std::string_view path,
              const std::vector<std::string> &) noexcept
@@ -299,6 +304,39 @@ int main()
     assert(dv.video_delivery_known && !dv.hdr && !dv.dv_hdr10_base && dv.bit_depth == 8);
     defaults.media_source_id = "absent-version";
     assert(!playback_plan(defaults).valid);
+#ifdef SLOPFIN_BITMAP_SUBTITLES
+    PlaybackRequest picture;
+    picture.item_id = "picture";
+    picture.subtitle_index = 5;
+    response_body = R"({"MediaSources":[{"Id":"bitmap-source","Container":"mkv","Protocol":"File",
+      "SupportsDirectPlay":true,"Size":10000,"MediaStreams":[
+      {"Type":"Video","Codec":"hevc","Width":3840,"Height":2160},
+      {"Type":"Subtitle","Index":3,"Codec":"subrip","IsExternal":true},
+      {"Type":"Subtitle","Index":4,"Codec":"subrip"},
+      {"Type":"Subtitle","Index":5,"Codec":"PGSSUB","DeliveryMethod":"Embed"}]}]})";
+    burned_response_body = R"({"MediaSources":[{"Id":"bitmap-source","Container":"mkv",
+      "TranscodingUrl":"/stream.ts?VideoCodec=h264&AudioCodec=aac",
+      "MediaStreams":[{"Type":"Video","Codec":"hevc"},
+      {"Type":"Subtitle","Index":5,"Codec":"PGSSUB","DeliveryMethod":"Encode"}]}]})";
+    auto bitmap = playback_plan(picture);
+    assert(bitmap.valid && bitmap.direct && bitmap.subtitle_bitmap && !bitmap.subtitle_burned);
+    assert(bitmap.subtitle_ordinal == 1 && bitmap.subtitle_codec == "pgssub");
+    picture.burn_picture_subtitles = true;
+    auto burned = playback_plan(picture);
+    assert(burned.valid && !burned.direct && burned.subtitle_burned && !burned.subtitle_bitmap);
+    assert(query_value(burned.path, "SubtitleStreamIndex") == "5");
+    picture.burn_picture_subtitles = false;
+    picture.server_remux = true;
+    burned = playback_plan(picture);
+    assert(burned.subtitle_burned && !burned.subtitle_bitmap);
+    picture.server_remux = false;
+    // An external track must not accidentally select an internal MKV stream.
+    response_body.replace(response_body.find("\"DeliveryMethod\":\"Embed\""), 24,
+                          "\"DeliveryMethod\":\"Embed\",\"IsExternal\":true");
+    burned = playback_plan(picture);
+    assert(burned.subtitle_burned && !burned.subtitle_bitmap);
+    burned_response_body.clear();
+#endif
     response_body.clear();
     assert(!playback_plan(request).valid); // Never a hidden fixed-rate fallback.
     std::puts("Negotiation quality, TrueHD fallback and delivered HDR tests passed");

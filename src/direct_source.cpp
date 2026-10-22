@@ -203,8 +203,27 @@ bool open_mkv(const Source &source, double seconds, Kept &index, Opened &out)
         out.why = "audio track " + audio->codec_id + " is not the expected " + source.audio_codec;
         return false;
     }
+    const mkv::Track *subtitle =
+        source.subtitle_ordinal >= 0 ? mkv::nth_track(info, 17, source.subtitle_ordinal) : nullptr;
+    if (source.subtitle_ordinal >= 0 &&
+        (!subtitle || (source.subtitle_codec == "pgssub" ? subtitle->codec_id != "S_HDMV/PGS"
+                                                         : subtitle->codec_id != "S_VOBSUB")))
+    {
+        out.why = "the selected picture subtitle is not in the file";
+        return false;
+    }
+    if (subtitle)
+    {
+        out.subtitle_codec = source.subtitle_codec;
+        out.subtitle_private = subtitle->codec_private;
+        out.subtitle_compression = subtitle->compression;
+        out.subtitle_compression_settings = subtitle->compression_settings;
+        /* VobSub CodecPrivate supplies the DVD canvas; do not substitute 4K video dimensions. */
+        out.subtitle_width = source.subtitle_codec == "dvdsub" ? 0 : video->width;
+        out.subtitle_height = source.subtitle_codec == "dvdsub" ? 0 : video->height;
+    }
     auto demuxer = std::make_unique<mkv::Demuxer>();
-    if (!demuxer->configure(info, *video, audio))
+    if (!demuxer->configure(info, *video, audio, subtitle))
     {
         out.why = "unsupported track setup (" + video->codec_id + ")";
         return false;

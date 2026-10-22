@@ -26,29 +26,6 @@ extern "C"
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
-
-    // FFmpeg's allocator prefix keeps decoder-owned buffers out of the small heap.
-    void *slopfin_av_malloc(std::size_t size)
-    {
-        if (size > 256u * 1024u * 1024u)
-            return nullptr;
-        return slopfin::bigalloc::allocate(size);
-    }
-    void *slopfin_av_realloc(void *p, std::size_t size)
-    {
-        if (size > 256u * 1024u * 1024u)
-            return nullptr;
-        if (!size)
-        {
-            slopfin::bigalloc::release(p);
-            return nullptr;
-        }
-        return slopfin::bigalloc::reallocate(p, size);
-    }
-    void slopfin_av_free(void *p)
-    {
-        slopfin::bigalloc::release(p);
-    }
 }
 
 namespace slopfin::software_audio
