@@ -13,6 +13,7 @@
 
 #include "../src/audio.hpp"
 #include "../src/audiocaps.hpp"
+#include "../src/av_capture.hpp"
 #include "../src/bitstream_probe.hpp"
 #include "../src/bigalloc.hpp"
 #include "../src/config.hpp"
@@ -399,3 +400,12 @@ void start(const char *) noexcept
 {
 }
 } // namespace bitstream_probe
+
+namespace slopfin::av_capture
+{
+/* The preview has no HDMI output to ask. */
+std::string run() noexcept
+{
+    return "Display & sound checks run on the PS5.";
+}
+} // namespace slopfin::av_capture

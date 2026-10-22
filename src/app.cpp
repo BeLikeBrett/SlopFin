@@ -17,6 +17,7 @@
 #include "audiocaps.hpp"
 #include "autoplay.hpp"
 #include "bitstream_probe.hpp"
+#include "av_capture.hpp"
 #include "background.hpp"
 #include "crash.hpp"
 #include "dashboard.hpp"
@@ -377,6 +378,10 @@ struct View
     int report_leaves = 0; /* frames until the answer clears itself */
     int diagnostics_row = 0;
     int diagnostics_hold = 0;
+    /* Settings > Diagnostics > Check display & sound: frames until it runs
+       (so "Checking" is on screen first), and what it found. */
+    int av_capture_pending = 0;
+    std::string av_capture_line;
     int playback_row = 0;
     int audio_row = 0;
     std::string report_line;
@@ -5905,8 +5910,9 @@ void draw_settings(const std::string &server_name) noexcept
                                   : "Reports are written whenever SlopFin stops unexpectedly.",
                               22, Weight::regular, gfx::palette::text_dim);
         const bool can_send = diagnostics::destination(settings.report_server).valid();
-        const int row_count = can_send ? 2 : 1;
-        const char *rows[2] = {can_send ? "Send to report receiver" : "Delete the reports",
+        const int row_count = can_send ? 3 : 2;
+        const char *rows[3] = {"Check display & sound",
+                               can_send ? "Send to report receiver" : "Delete the reports",
                                "Delete the reports"};
         g_view.diagnostics_row = std::clamp(g_view.diagnostics_row, 0, row_count - 1);
         ui::focus_pill(kContentX - 28, kGridTop + 120 + g_view.diagnostics_row * 84 - 6, 620, 66,
@@ -5928,8 +5934,14 @@ void draw_settings(const std::string &server_name) noexcept
                     gfx::rounded_rect(kContentX + 360, y + 46, filled, 6, 3, gfx::palette::danger);
             }
         }
+        /* What the display check found, or that it is running. */
+        if (g_view.av_capture_pending > 0 || !g_view.av_capture_line.empty())
+            text::draw_ellipsized(
+                kContentX + 600, kGridTop + 120 + 12, kContentRight - kContentX - 600,
+                g_view.av_capture_pending > 0 ? "Checking\xE2\x80\xA6" : g_view.av_capture_line, 22,
+                Weight::regular, gfx::palette::text_dim);
         text::draw_wrapped(
-            kContentX, kGridTop + 320, 900, 2, 30,
+            kContentX, kGridTop + 120 + row_count * 84 + 40, 900, 2, 30,
             diagnostics::destination(settings.report_server).valid()
                 ? "Reports are sent only when you choose Send, to your configured report receiver."
                 : "Reports stay on this console. A separate report receiver is optional.",
@@ -8295,12 +8307,25 @@ void handle_settings_input() noexcept
     case 6:
     {
         const bool can_send = diagnostics::destination(config::current().report_server).valid();
-        const int count = can_send ? 2 : 1;
+        const int count = can_send ? 3 : 2;
         g_view.diagnostics_row = std::clamp(g_view.diagnostics_row, 0, count - 1);
-        if (pad::pressed(pad::Button::down) || pad::pressed(pad::Button::up))
+        /* The display check runs once "Checking" has been drawn. */
+        if (g_view.av_capture_pending > 0 && --g_view.av_capture_pending == 0)
+            g_view.av_capture_line = av_capture::run();
+        if (pad::pressed(pad::Button::down))
         {
             g_view.diagnostics_row = (g_view.diagnostics_row + 1) % count;
             g_view.diagnostics_hold = 0;
+        }
+        else if (pad::pressed(pad::Button::up))
+        {
+            g_view.diagnostics_row = (g_view.diagnostics_row + count - 1) % count;
+            g_view.diagnostics_hold = 0;
+        }
+        else if (g_view.diagnostics_row == 0)
+        {
+            if (pad::pressed(pad::Button::cross) && g_view.av_capture_pending == 0)
+                g_view.av_capture_pending = 2;
         }
         else if (g_view.diagnostics_row == count - 1)
         {
