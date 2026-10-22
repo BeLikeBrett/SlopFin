@@ -31,11 +31,9 @@ int main()
     auto &settings = slopfin::config::current();
     assert(!settings.device_id.empty() && !settings.signed_in());
     assert(!slopfin::diagnostics::destination(settings.report_server).valid());
-    // A new install decodes on the PS5 whatever the PS5 can decode.
-    assert(settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    // A new install sends surround sound to the TV when it lists the format.
+    assert(settings.audio_passthrough);
     settings.audio_passthrough = false;
-    settings.software_audio = true;
-    settings.dv_hdr10_base = true;
     settings.host = "https://media.example.com/jellyfin";
     settings.port = 443;
     settings.token = "test-token";
@@ -54,7 +52,7 @@ int main()
     struct stat metadata = {};
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
-    assert(!settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    assert(!settings.audio_passthrough);
     assert(settings.navigation_order ==
            (std::vector<std::string>{"library:a", "home", "discover"}));
     assert(settings.navigation_hidden == (std::vector<std::string>{"home", "discover"}));
@@ -110,28 +108,27 @@ int main()
     }
     slopfin::config::load();
     assert(settings.device_id == "legacy" && settings.port == 8096);
-    assert(settings.audio_passthrough && settings.software_audio && settings.dv_hdr10_base);
+    assert(settings.audio_passthrough);
     effective = slopfin::player::apply_preferences(request, settings, true);
     assert(effective.allow_bitstream && effective.allow_software_audio &&
            effective.allow_dv_hdr10_base);
 
-    // Saved before 1.17 with both off: turned on once, then the choice is kept.
+    // Files from 1.16 and earlier may hold the retired softwareAudio and
+    // dvHdr10Base switches; they are ignored, and decoding stays on.
     {
         std::ofstream old_choice(path);
         old_choice << R"({"deviceId":"old","softwareAudio":0,"dvHdr10Base":0})";
     }
     slopfin::config::load();
-    assert(settings.software_audio && settings.dv_hdr10_base);
+    effective = slopfin::player::apply_preferences(request, settings, true);
+    assert(effective.allow_software_audio && effective.allow_dv_hdr10_base);
+    slopfin::config::save();
     {
         std::ifstream saved(path);
         const std::string text(std::istreambuf_iterator<char>(saved), {});
-        assert(text.find("\"playbackDefaults\": 1") != std::string::npos);
+        assert(text.find("softwareAudio") == std::string::npos &&
+               text.find("dvHdr10Base") == std::string::npos);
     }
-    settings.software_audio = false;
-    settings.dv_hdr10_base = false;
-    slopfin::config::save();
-    slopfin::config::load();
-    assert(!settings.software_audio && !settings.dv_hdr10_base);
     assert(settings.report_server.empty() && settings.autoplay_series_overrides.empty());
     const auto receiver = slopfin::diagnostics::destination("http://reports.example.com:8103/base");
     assert(receiver.valid() && receiver.port == 8103 &&

@@ -2,12 +2,9 @@
 
 This optional path decodes **E-AC-3, DTS core and TrueHD** on the PS5 CPU
 and feeds the production AudioOut queue. It is compiled into the public builds
-and is enabled in **Settings → Audio/Video → Decode TrueHD / DTS / E-AC-3 on PS5**.
-It defaults to On since 1.17, and existing installs were switched on once; a
-later choice is kept. A decoder failure during a title restarts it with Jellyfin
-converting the audio. Changes apply on the next playback; no marker file is required.
-TrueHD uses this decoder when enabled and compatible, even if HDMI passthrough is on.
-Passthrough takes priority for DTS/E-AC-3.
+and is always used where the [audio route](AUDIO_ROUTE.md) chooses it: TrueHD,
+and E-AC-3 or DTS core the TV does not take. A decoder failure during a title
+restarts it with Jellyfin converting the audio.
 
 Decoding makes PCM sound. It does not re-encode audio into a new codec. Jellyfin
 performs any requested codec conversion.

@@ -128,6 +128,9 @@ bool recover() noexcept;
    and the Details sheet both go through it, so their answers cannot differ. */
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept;
 bool software_audio_available() noexcept;
+/* What the TV, receiver or headset now playing the sound accepts, in words;
+   empty when the console does not say. Not during playback. */
+std::string output_formats() noexcept;
 bool seek(double seconds) noexcept;
 
 /* Switches to a text subtitle (or off, with -1) without restarting the stream.

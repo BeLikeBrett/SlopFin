@@ -225,6 +225,11 @@ jellyfin::PlaybackRequest current_request() noexcept
     return g_request;
 }
 
+std::string output_formats() noexcept
+{
+    return {}; /* no HDMI sink on a workstation */
+}
+
 bool software_audio_available() noexcept
 {
     return false;

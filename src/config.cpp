@@ -28,10 +28,6 @@ extern "C" int sceKernelRename(const char *, const char *);
 
 namespace
 {
-/* Which revision of the playback defaults a saved file has been brought up
-   to. Raise it only to re-apply a default change to every existing install. */
-constexpr int kPlaybackDefaults = 1;
-
 /*
  * The console keeps settings in /data; a workstation has no such place, so the
  * host build follows the XDG convention. Both hold the same file, which is why
@@ -169,18 +165,6 @@ void load() noexcept
             read_categories("navigationHidden", g_settings.navigation_hidden);
             read_categories("seerrWatchedRequests", g_settings.seerr_watched_requests);
             g_settings.audio_passthrough = root->num("audioPassthrough", 1.0) != 0.0;
-            g_settings.software_audio = root->num("softwareAudio", 1.0) != 0.0;
-            g_settings.dv_hdr10_base = root->num("dvHdr10Base", 1.0) != 0.0;
-            /* 1.17 turned PS5 audio decoding and the Dolby Vision base layer on
-               for everyone, once: they were off for nearly everybody only
-               because that was the old default. A choice made after this
-               migration is kept. */
-            if (root->num("playbackDefaults", 0.0) < kPlaybackDefaults)
-            {
-                g_settings.software_audio = true;
-                g_settings.dv_hdr10_base = true;
-                migrated = true;
-            }
             g_settings.seerr_host = std::string{root->str("seerrHost")};
             g_settings.seerr_port = static_cast<int>(root->num("seerrPort", 443.0));
             if (g_settings.seerr_port < 1 || g_settings.seerr_port > 65535)
@@ -199,17 +183,6 @@ void load() noexcept
                 access("/data/slopfin-no-bitstream", F_OK) == 0)
             {
                 g_settings.audio_passthrough = false;
-                migrated = true;
-            }
-            if (root->find("softwareAudio") == nullptr &&
-                access("/data/slopfin-software-audio", F_OK) == 0)
-            {
-                g_settings.software_audio = true;
-                migrated = true;
-            }
-            if (root->find("dvHdr10Base") == nullptr && access("/data/slopfin-dv-hdr10", F_OK) == 0)
-            {
-                g_settings.dv_hdr10_base = true;
                 migrated = true;
             }
 #endif
@@ -290,9 +263,6 @@ bool save() noexcept
         "  \"triggerFeedback\": " + std::string{g_settings.trigger_feedback ? "1" : "0"} + ",\n";
     text +=
         "  \"audioPassthrough\": " + std::string{g_settings.audio_passthrough ? "1" : "0"} + ",\n";
-    text += "  \"softwareAudio\": " + std::string{g_settings.software_audio ? "1" : "0"} + ",\n";
-    text += "  \"dvHdr10Base\": " + std::string{g_settings.dv_hdr10_base ? "1" : "0"} + ",\n";
-    text += "  \"playbackDefaults\": " + std::to_string(kPlaybackDefaults) + ",\n";
     text += "  \"seerrHost\": \"" + json::escape(g_settings.seerr_host) + "\",\n";
     text += "  \"seerrPort\": " + std::to_string(g_settings.seerr_port) + ",\n";
     text += "  \"seerrApiKey\": \"" + json::escape(g_settings.seerr_api_key) + "\",\n";

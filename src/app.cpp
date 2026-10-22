@@ -383,7 +383,6 @@ struct View
     int av_capture_pending = 0;
     std::string av_capture_line;
     int playback_row = 0;
-    int audio_row = 0;
     std::string report_line;
     Screen page_shown = Screen::connecting;
     bool page_back = false; /* going back moves the other way */
@@ -1712,9 +1711,18 @@ void draw_sidebar(Screen screen, const std::vector<SidebarEntry> &entries, int c
                   float alpha = 1.0f) noexcept
 {
     const bool lit = g_view.sidebar_focused;
-    gfx::horizontal_gradient(0, 0, kSidebarWidth + 220, gfx::kHeight,
-                             gfx::rgba(0x05, 0x06, 0x0a, lit ? 0xe6 : 0xc8),
-                             gfx::rgba(0x05, 0x06, 0x0a, 0x00));
+    const gfx::Color shade = gfx::rgba(0x05, 0x06, 0x0a, lit ? 0xe6 : 0xc8);
+    if (screen == Screen::settings)
+    {
+        /* No artwork to read over: the panel ends at the sidebar, so every
+           settings page sits on the plain background. */
+        gfx::fill_rect(0, 0, kSidebarWidth, gfx::kHeight, shade);
+        gfx::horizontal_gradient(kSidebarWidth, 0, 24, gfx::kHeight, shade,
+                                 gfx::rgba(0x05, 0x06, 0x0a, 0x00));
+    }
+    else
+        gfx::horizontal_gradient(0, 0, kSidebarWidth + 220, gfx::kHeight, shade,
+                                 gfx::rgba(0x05, 0x06, 0x0a, 0x00));
     draw_wordmark(kSafeX - 8, kSafeY + 16);
 
     const bool navigable = screen == Screen::home || screen == Screen::grid ||
@@ -5566,6 +5574,14 @@ const std::vector<SubtitleRow> &subtitle_rows() noexcept
     return rows;
 }
 
+/* Circle goes back: the prompt sits bottom right, like the Cross prompts. */
+void draw_back_hint() noexcept
+{
+    const int width = 22 + 9 + text::measure("Back", 20, Weight::regular);
+    (void)ui::draw_button_hints(gfx::kWidth - kSafeX - width, gfx::kHeight - 90,
+                                {{icons::Icon::ps_circle, "Back"}});
+}
+
 void draw_subtitle_settings() noexcept
 {
     text::draw(kContentX, kSafeY + 96, "Subtitles", 38, Weight::bold, gfx::palette::text);
@@ -5635,9 +5651,9 @@ void draw_subtitle_settings() noexcept
                         kPreviewX + preview_w / 2, kPreviewY + kPreviewH);
     gfx::pop_clip();
 
-    text::draw(kContentX, gfx::kHeight - 90,
-               "Left and right to change    \xc2\xb7    Circle to go back", 20, Weight::regular,
+    text::draw(kContentX, gfx::kHeight - 90, "Left and right to change", 20, Weight::regular,
                gfx::palette::text_faint);
+    draw_back_hint();
 }
 
 /* Settings category navigation. */
@@ -5729,48 +5745,30 @@ void draw_settings(const std::string &server_name) noexcept
     case 8:
     {
         text::draw(kContentX, kSafeY + 96, "Audio/Video", 38, Weight::bold, gfx::palette::text);
-        const bool software = player::software_audio_available();
-        const char *const rows[] = {"HDMI audio passthrough", "Decode TrueHD / DTS / E-AC-3 on PS5",
-                                    "Dolby Vision HDR10 fallback"};
-        const char *const values[] = {settings.audio_passthrough ? "On" : "Off",
-                                      !software                 ? "Not included"
-                                      : settings.software_audio ? "On"
-                                                                : "Off",
-                                      settings.dv_hdr10_base ? "On" : "Off"};
-        ui::focus_pill(kContentX - 28, kGridTop + g_view.audio_row * 84 - 6, 1120, 66,
-                       ui::FocusGroup::settings, 8);
-        for (int i = 0; i < 3; ++i)
-        {
-            const int y = kGridTop + i * 84;
-            const bool focused = i == g_view.audio_row;
-            const auto colour = focused ? gfx::palette::text : gfx::palette::text_dim;
-            ui::control_label(kContentX, y - 6, 920, 66, rows[i], 30, Weight::medium, colour);
-            const std::string shown =
-                focused && (i != 1 || software)
-                    ? "\xe2\x80\xb9  " + std::string(values[i]) + "  \xe2\x80\xba"
-                    : values[i];
-            text::draw(kContentX + 1080 - text::measure(shown, 28, Weight::regular),
-                       text::centered_y(y - 6, 66, rows[i], 30, Weight::medium), shown, 28,
-                       Weight::regular, colour);
-        }
-        const char *const help[] = {
-            "Send AC-3, E-AC-3 and DTS core to your TV or receiver to decode. Turn off if it "
-            "produces silence. Receiver output still needs testing on your setup.",
-            !software
-                ? "This build has no software decoder. Install the complete public folder build."
-                : "Decode these formats on the PS5 to 48 kHz PCM instead of asking Jellyfin "
-                  "to convert the audio. Passthrough takes priority for DTS / E-AC-3. If "
-                  "decoding fails, the title restarts with Jellyfin converting the audio. "
-                  "Atmos objects, DTS:X and full 24-bit output are not preserved.",
-            "Play Dolby Vision profile 7 and 8.1 files from their HDR10 layer on the PS5 "
-            "instead of asking Jellyfin to convert the video. This does not output Dolby "
-            "Vision. If a file fails, it restarts with Jellyfin converting it."};
-        text::draw_wrapped(kContentX, kGridTop + 280, 1100, 4, 34, help[g_view.audio_row], 24,
-                           Weight::regular, gfx::palette::text_dim);
-        text::draw(kContentX, kGridTop + 470, "Changes apply when you next start playback.", 22,
-                   Weight::regular, gfx::palette::text_faint);
-        if (g_view.audio_row != 1 || software)
-            ui::draw_button_hints(kContentX, kGridTop + 530, {{icons::Icon::ps_cross, "Toggle"}});
+        /* Read when the page opens: the sound may have moved to a headset. */
+        static std::string formats;
+        static int opened_frame = -2;
+        if (g_view.frames != opened_frame + 1)
+            formats = player::output_formats();
+        opened_frame = g_view.frames;
+        const bool automatic = settings.audio_passthrough;
+        ui::focus_pill(kContentX - 28, kGridTop - 6, 1120, 66, ui::FocusGroup::settings, 8);
+        ui::control_label(kContentX, kGridTop - 6, 920, 66, "Surround sound", 30, Weight::medium,
+                          gfx::palette::text);
+        const std::string shown = std::string{"\xe2\x80\xb9  "} +
+                                  (automatic ? "Automatic" : "Decode on PS5") + "  \xe2\x80\xba";
+        text::draw(kContentX + 1080 - text::measure(shown, 28, Weight::regular),
+                   text::centered_y(kGridTop - 6, 66, "Surround sound", 30, Weight::medium), shown,
+                   28, Weight::regular, gfx::palette::text);
+        text::draw(kContentX, kGridTop + 92,
+                   automatic ? "Dolby and DTS go to your TV or receiver when it supports them."
+                             : "The PS5 decodes everything. Try this if your receiver is silent "
+                               "or out of sync.",
+                   24, Weight::regular, gfx::palette::text_dim);
+        if (!formats.empty())
+            text::draw(kContentX, kGridTop + 140, "Detected: " + formats, 22, Weight::regular,
+                       gfx::palette::text_faint);
+        ui::draw_button_hints(kContentX, kGridTop + 210, {{icons::Icon::ps_cross, "Change"}});
         break;
     }
     case 1:
@@ -6053,8 +6051,7 @@ void draw_settings(const std::string &server_name) noexcept
         return;
     }
     }
-    text::draw(kContentX, gfx::kHeight - 90, "Circle to go back", 20, Weight::regular,
-               gfx::palette::text_faint);
+    draw_back_hint();
 }
 
 /* Upload diagnostics only after explicit confirmation. */
@@ -6337,10 +6334,8 @@ void handle_keyboard_result() noexcept
         break;
     case View::Prompt::password:
         g_view.pending_password = entered;
+        /* Done fills the field; signing in is the Sign in button's job. */
         g_view.setup_index = 2;
-        /* With both entered, Done signs in. */
-        if (!g_view.pending_username.empty())
-            submit_password_login();
         break;
     case View::Prompt::search:
         g_view.search.draft = entered;
@@ -8235,21 +8230,10 @@ void handle_settings_input() noexcept
         seerr::handle_settings_input();
         return;
     case 8:
-        if (pad::pressed(pad::Button::down))
-            g_view.audio_row = (g_view.audio_row + 1) % 3;
-        else if (pad::pressed(pad::Button::up))
-            g_view.audio_row = (g_view.audio_row + 2) % 3;
-        else if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::left) ||
-                 pad::pressed(pad::Button::right))
+        if (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::left) ||
+            pad::pressed(pad::Button::right))
         {
-            if (g_view.audio_row == 0)
-                settings.audio_passthrough = !settings.audio_passthrough;
-            else if (g_view.audio_row == 1 && player::software_audio_available())
-                settings.software_audio = !settings.software_audio;
-            else if (g_view.audio_row == 2)
-                settings.dv_hdr10_base = !settings.dv_hdr10_base;
-            else
-                return;
+            settings.audio_passthrough = !settings.audio_passthrough;
             config::save();
         }
         return;

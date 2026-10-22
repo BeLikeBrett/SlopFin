@@ -112,6 +112,37 @@ inline Sink parse_monitor_info(const std::uint8_t *data, std::size_t size) noexc
     return sink;
 }
 
+/* The list as a short tag line for Settings: "AC-3 · E-AC-3 Atmos · TrueHD ·
+   DTS · DTS-HD · PCM 7.1". Empty when the console gave none. */
+inline std::string describe(const Sink &sink)
+{
+    if (!sink.known)
+        return {};
+    std::string out;
+    const auto add = [&out](const std::string &name)
+    {
+        if (out.find(name) == std::string::npos)
+            out += (out.empty() ? "" : " \xc2\xb7 ") + name;
+    };
+    for (std::size_t i = 0; i < sink.count; ++i)
+    {
+        const auto f = static_cast<Format>(sink.entries[i].format);
+        if (f == Format::ac3)
+            add("AC-3");
+        else if (f == Format::eac3)
+            add(sink.atmos() ? "E-AC-3 Atmos" : "E-AC-3");
+        else if (f == Format::mat)
+            add("TrueHD");
+        else if (f == Format::dts)
+            add("DTS");
+        else if (f == Format::dts_hd)
+            add("DTS-HD");
+    }
+    if (const Descriptor *pcm = sink.find(Format::lpcm); pcm != nullptr)
+        add(pcm->channels >= 8 ? "PCM 7.1" : pcm->channels >= 6 ? "PCM 5.1" : "Stereo PCM");
+    return out;
+}
+
 /* A track as Jellyfin describes it: codec "aac", "ac3", "eac3", "dts",
    "truehd", "flac"...; for DTS, the profile names the core or an extension. */
 struct Track
