@@ -13,6 +13,8 @@
 #include "http.hpp"
 
 #include <cstdint>
+#include "audio_route.hpp"
+
 #include <string>
 #include <vector>
 
@@ -247,6 +249,9 @@ struct PlaybackRequest
     /* Leave MKV and MP4 to the server's remux, as before direct play: the
        fallback when a file cannot be read here. */
     bool server_remux = false;
+    /* What the TV or receiver accepts, read when playback starts; unknown on
+       the host and when the console gives no list. */
+    audio_route::Sink sink;
 };
 
 struct PlaybackPlan

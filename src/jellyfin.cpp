@@ -1126,23 +1126,12 @@ PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
         const bool source_is_mp3 = plan.audio_codec == "mp3";
         const bool source_is_ac3 = plan.audio_codec == "ac3";
         const bool source_is_truehd = plan.audio_codec == "truehd";
-        // Restrict the first movie trial to the tested 48 kHz codecs/layout
-        // sizes. A user channel limit still requires server conversion.
-        const bool software_audio = request.allow_software_audio &&
-                                    plan.audio_sample_rate == 48000 && plan.audio_channels >= 1 &&
-                                    plan.audio_channels <= 8 &&
-                                    (channels <= 0 || plan.audio_channels <= channels) &&
-                                    (source_is_truehd || plan.audio_codec == "eac3" ||
-                                     (plan.audio_codec == "dts" && plan.audio_profile == "DTS"));
-        // TrueHD cannot pass through. An enabled, compatible CPU decoder takes priority
-        // over converting TrueHD to E-AC-3 on the server for HDMI passthrough.
-        const bool truehd_to_bitstream =
-            source_is_truehd && request.allow_bitstream && !software_audio;
+        /* One rule for the audio path, shared with direct play and the output. */
+        const audio_route::Route route = source_route(plan, request);
+        const bool software_audio = route.path == audio_route::Path::software;
         /* Bitstream: the TV decodes E-AC-3 itself, and DTS from its core,
            so any DTS profile can be copied, DTS-HD MA included. */
-        const bool bitstream_audio = request.allow_bitstream && plan.audio_sample_rate == 48000 &&
-                                     plan.audio_channels >= 1 && plan.audio_channels <= 8 &&
-                                     (channels <= 0 || plan.audio_channels <= channels) &&
+        const bool bitstream_audio = route.path == audio_route::Path::passthrough &&
                                      (plan.audio_codec == "eac3" || plan.audio_codec == "dts");
         const bool copy_audio = software_audio || bitstream_audio;
         /*
@@ -1150,8 +1139,10 @@ PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
          * that, and nothing else may be copied. AC-3 and E-AC-3 encoders stop
          * at 5.1. The same format as the track is simply the original.
          */
-        /* A TrueHD source with nothing chosen by hand asks for E-AC-3. */
-        if (request.audio_codec.empty() && truehd_to_bitstream)
+        /* Nothing the console plays as stored: ask for what the rule names
+           (E-AC-3 for the TV, AC-3 or AAC for the console's own decoder). */
+        if (request.audio_codec.empty() && route.path == audio_route::Path::server &&
+            !plan.audio_codec.empty())
         {
             PlaybackRequest resolved = request;
             resolved.media_source_id = plan.media_source_id;
@@ -1165,10 +1156,10 @@ PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
                 device_profile(!request.video_codec.empty() ? request.video_codec
                                : source_is_h264             ? "h264,hevc"
                                                             : "hevc,h264",
-                               "eac3", bitrate, channels > 0 ? std::min(channels, 6) : 6,
+                               route.target, bitrate, route.channels,
                                plan.dv_hdr10_base ? "SDR|HDR10|" + plan.source_video_range
                                                   : "SDR|HDR10",
-                               "", "eac3"));
+                               "", route.target == plan.audio_codec ? "" : route.target));
             if (again.ok() && read_plan(again.body, resolved, converted))
                 plan = converted;
             return plan;

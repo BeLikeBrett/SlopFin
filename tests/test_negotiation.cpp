@@ -97,12 +97,13 @@ int main()
     assert(
         cpu_profile->find("DeviceProfile")->find("DirectPlayProfiles")->at(0)->str("AudioCodec") ==
         "aac,mp3,ac3,truehd");
+    /* A stereo limit converts to AAC (docs/development/AUDIO_ROUTE.md). */
     cpu.max_audio_channels = 2;
     assert(playback_plan(cpu).valid);
     cpu_profile = slopfin::json::parse(bodies.back());
     assert(
         cpu_profile->find("DeviceProfile")->find("TranscodingProfiles")->at(0)->str("AudioCodec") ==
-        "ac3");
+        "aac");
     assert(cpu_profile->find("DeviceProfile")
                ->find("TranscodingProfiles")
                ->at(0)
@@ -117,13 +118,15 @@ int main()
     assert(
         cpu_profile->find("DeviceProfile")->find("TranscodingProfiles")->at(0)->str("AudioCodec") ==
         "dts,ac3,aac");
+    /* DTS-HD MA without passthrough: the CPU decoder takes only the core
+       profile, so the server converts the 5.1 to AC-3 for the console. */
     response_body.replace(response_body.find("\"Profile\":\"DTS\""), 15,
                           "\"Profile\":\"DTS-HD MA\"");
     assert(playback_plan(cpu).valid);
     cpu_profile = slopfin::json::parse(bodies.back());
     assert(
         cpu_profile->find("DeviceProfile")->find("TranscodingProfiles")->at(0)->str("AudioCodec") ==
-        "aac");
+        "ac3");
     // Bitstream: the TV takes the DTS core, so DTS-HD MA is copied as well.
     PlaybackRequest hdmi;
     hdmi.item_id = "hdmi";

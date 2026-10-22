@@ -9,6 +9,11 @@
 - **Automatic fallback.** If either one fails on a title, SlopFin restarts it
   where it stopped and lets Jellyfin convert that part, instead of stopping
   with an error. It stays that way for the rest of that title.
+- **Sound goes where your TV can take it.** SlopFin now reads which formats
+  your TV or receiver accepts and sends AC-3, E-AC-3 and DTS to it only when
+  it lists them. Otherwise the PS5 decodes them, or Jellyfin converts them,
+  instead of playing silence. If the HDMI port still refuses, the title
+  restarts with the sound decoded on the PS5.
 - You can still turn either setting off in **Settings → Audio/Video**; that
   choice is kept from now on.
 
