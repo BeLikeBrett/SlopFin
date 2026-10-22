@@ -1,12 +1,9 @@
 # SlopFin
 
-**Jellyfin for your PlayStation 5, built around the DualSense.**
+**An unofficial Jellyfin client for jailbroken PS5 consoles.**
 
 [![Build](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml/badge.svg)](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
-
-A native movie and TV client for **jailbroken PS5 consoles**, using the PS5's
-H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 
 [Downloads](https://github.com/BeLikeBrett/SlopFin/releases) ·
 [Install](docs/GETTING_STARTED.md) · [Controls](docs/CONTROLS.md) ·
@@ -15,104 +12,65 @@ H.264/HEVC hardware decoder. Firmware **8.20** is the tested setup.
 
 ![SlopFin Home on PS5](docs/images/home-console.png)
 
-## PS5 features and controls
+SlopFin plays movies and shows from your own Jellyfin server, using the PS5's
+video hardware. It has been tested on one console, on firmware 8.20; other
+firmware, TVs and receivers may behave differently.
 
-- **DualSense seeking:** L2/R2 tap one second, hold to scrub and press deeper to
-  move faster. Adaptive triggers add resistance; switch feedback off in Settings.
-  D-pad taps seek ten seconds; L1/R1 jump two minutes.
-- **Skip Intro:** Square skips marked intros, with or without the timeline open.
-  Jellyfin Intro segments or named chapters supply the timestamps.
-  [Server setup](docs/INTRO_SKIPPING.md).
-- **Per-series autoplay:** each show can override the global setting. Cross
-  starts the offered next episode; Circle dismisses it while controls are hidden.
-- **Discover and requests:** connect Seerr or Jellyseerr to find titles, request
-  movies or missing TV seasons, browse episode guides and follow download
-  progress. Requests made here refresh Home when Seerr reports new media available.
-  Available titles open in Jellyfin when the request server supplies
-  their library ID. Press R3 to cycle All, Movies and Shows; the right-stick
-  prompt beside the filter depresses when pressed.
-  [Connect your request server](docs/DISCOVER.md).
-- **Two tabs, Home and Discover:** L1/R1 switch between your Jellyfin library
-  and the request server. Each tab has its own sidebar and colour, and keeps
-  your place. Reorder or hide libraries, or hide Discover, in Settings.
-  Hold L2/R2 and press Up/Down to move between categories.
-  A compact hint at the bottom of the sidebar keeps the shortcut visible.
-- **Profile and server dashboard:** crop avatars with D-pad and trigger zoom.
-  Administrators can manage sessions, libraries and tasks from the controller.
-  [Controls](docs/CONTROLS.md) · [Dashboard](docs/PROFILE_AND_DASHBOARD.md).
+## Features
 
-| First launch | Sign in |
-| --- | --- |
-| ![Welcome page on PS5](docs/images/welcome-console.png) | ![Sign-in page on PS5](docs/images/signin-console.png) |
-| **Discover** | **Choose seasons and quality** |
-| ![Discover catalog](docs/images/discover-preview.png) | ![Request details](docs/images/request-preview.png) |
-| **Your requests** | **Updates** |
-| ![Requests on PS5](docs/images/requests-console.png) | ![Updates on PS5](docs/images/updates-console.png) |
+- **DualSense controls:** tap or hold L2/R2 to seek and scrub, Square to skip
+  intros, L1/R1 to switch between Home and Discover.
+- **Plays most files directly:** MKV and MP4 with H.264 or HEVC video stream
+  straight from your server, without it converting them.
+- **Sound to your TV or receiver:** Dolby and DTS go to your TV or receiver
+  when it supports them; otherwise the PS5 decodes them.
+- **Discover and requests:** connect Seerr or Jellyseerr to find and request
+  movies and shows. [Set up Discover](docs/DISCOVER.md).
+- **Autoplay, profiles and a server dashboard** for administrators.
 
+| Sign in | Discover | Requests |
+| --- | --- | --- |
+| ![Sign-in page on PS5](docs/images/signin-console.png) | ![Discover catalog](docs/images/discover-preview.png) | ![Requests on PS5](docs/images/requests-console.png) |
 
-## What plays, and where it is decoded
+## What plays
 
-**Jellyfin converts formats; SlopFin decodes them for playback.** Decoding turns
-compressed video/audio into pictures/sound. Transcoding decodes **and re-encodes**
-a stream into another format; that runs on your **Jellyfin server**, using its
-CPU or GPU. SlopFin does not transcode video or audio into another streaming codec.
+- **Video:** H.264 and HEVC, including 4K and HDR10. Dolby Vision profiles 7
+  and 8.1 play as HDR10; the PS5 does not output Dolby Vision itself.
+- **Sound:** AAC, MP3, AC-3, E-AC-3, DTS and TrueHD, decoded on the PS5 or by
+  your TV or receiver.
+- **Anything else** (other codecs, AVI and so on) is converted by your Jellyfin
+  server first, so how well it plays depends on your server.
 
-| Format / path | Who decodes it? | What reaches the display / speakers? | Evidence / limits |
-| --- | --- | --- | --- |
-| H.264, HEVC Main/Main10 video | PS5 **hardware** video decoder | Rendered video; SDR or HDR10 path | Console playback tested, including selected 4K sources. Rendering currently reduces to 1920-wide pictures. |
-| AAC, MP3, AC-3 audio | PS5 **platform audio decoder** | 48 kHz PCM sound | Console decoder path; accepted rates/layouts only. Platform API does not establish whether each codec uses dedicated hardware. |
-| E-AC-3, DTS core, TrueHD audio with PS5 decoding enabled | PS5 **CPU software** (FFmpeg) | 48 kHz, 16-bit PCM sound | Decoder fixtures and movie trials exercised. Atmos objects, DTS:X and full 24-bit output are not preserved. |
-| AC-3, E-AC-3, DTS core with HDMI passthrough | **TV / AV receiver** | Compressed audio over HDMI | Native passthrough heard on the test TV (2026-09-15); packing matches FFmpeg. Other equipment/lip sync need checks. No TrueHD / DTS-HD / DTS:X passthrough. |
-| Unsupported codec, rate, layout or selected quality | **Jellyfin server converts first**, then PS5 decodes the compatible result | Compatible stream; video can stay unchanged when only audio needs conversion | Negotiated before playback. A decoder failure during playback may require changing settings and retrying. |
-
-Use **Settings → Audio/Video** to toggle HDMI passthrough, PS5 software audio
-decoding and Dolby Vision's HDR10-compatible fallback. No marker files or config
-editing needed. TrueHD uses the CPU decoder when enabled and compatible;
-passthrough takes priority for compatible DTS/E-AC-3. Changes apply on the next playback.
-
-Native HDR10 **HDMI signalling and brightness** still need physical display
-validation. Some Dolby Vision files have a tested HDR10-compatible base-layer
-decode path; SlopFin does **not** output native Dolby Vision.
-[Compatibility and settings](docs/COMPATIBILITY.md) ·
-[What the playback stats mean](docs/PLAYBACK_STATS.md).
+Details and known limits are in [Compatibility](docs/COMPATIBILITY.md).
 
 ## Install
 
-1. Download the **folder ZIP** from [Releases](https://github.com/BeLikeBrett/SlopFin/releases).
-2. Transfer the complete `PPSA99001` folder to your homebrew loader's directory,
-   commonly `/data/homebrew/`, and let the loader register it.
-3. Open SlopFin, enter your Jellyfin server address, and sign in using Quick
-   Connect or your username and password. `media.example.com` uses HTTPS;
-   an explicit URL with a port or base path works too.
+1. Download the **folder ZIP** from
+   [Releases](https://github.com/BeLikeBrett/SlopFin/releases).
+2. Copy the `PPSA99001` folder to your homebrew loader's folder, usually
+   `/data/homebrew/`.
+3. Open SlopFin, enter your Jellyfin server address and sign in.
 
-You need a jailbroken PS5 and your own Jellyfin server. Use the folder download.
+You need a jailbroken PS5 and your own Jellyfin server.
 [Setup details](docs/GETTING_STARTED.md) · [Help](docs/TROUBLESHOOTING.md)
 
-Music, audiobooks, books/comics, photo libraries and live TV are not implemented. IPv6 and
-self-signed HTTPS certificates are unsupported. Other firmware and output
-devices need independent testing.
+## Updates
 
-## Releases
+**Settings → Updates** checks GitHub and installs new versions in the app. It
+needs ELF Loader (`elfldr`, port 9021). [Update guide](docs/UPDATES.md)
 
-[Browse all releases](https://github.com/BeLikeBrett/SlopFin/releases) for downloads
-and version-specific patch notes.
+## Not supported yet
 
-Open **Settings → Updates** to check for updates in the app. Installation needs
-**ELF Loader (`elfldr`, port 9021)**. [Update guide](docs/UPDATES.md).
-
-![Updates on PS5](docs/images/updates-console.png)
+Music, audiobooks, books, photos and live TV; IPv6; self-signed HTTPS
+certificates.
 
 ## Contribute
 
-Start with [contributing](.github/CONTRIBUTING.md) and the
-[developer guide](docs/development/README.md) for builds, architecture,
-playback internals and validation. Player instructions are in the
-[help index](docs/README.md).
+See [contributing](.github/CONTRIBUTING.md) and the
+[developer guide](docs/development/README.md).
 
-## License and credits
+## License
 
 GPL-3.0-or-later. Built on the native-app boilerplate and ProsperoTV's
-hardware-decode work. [NOTICE](NOTICE.md) records dependencies, fonts,
-artwork and their licenses.
-
-Unofficial; not affiliated with Jellyfin or Sony.
+hardware-decode work; [NOTICE](NOTICE.md) lists dependencies and their
+licenses. Not affiliated with Jellyfin or Sony.

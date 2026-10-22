@@ -42,8 +42,8 @@ straight away: approve it from a phone or computer already signed in to Jellyfin
 (Settings → Quick Connect) and SlopFin continues by itself. A code that expires
 is replaced automatically.
 
-Or fill in **Username and password** on the right. Confirming the password on
-the keyboard signs in; Triangle shows or hides it. A failed sign-in keeps your
+Or fill in **Username and password** on the right, then press **Sign in**;
+Triangle shows or hides the password. A failed sign-in keeps your
 username and leaves the Quick Connect code working. Circle returns to the server
 address.
 
@@ -60,8 +60,8 @@ Use the sidebar to choose a library. Triangle opens Search; Square opens your
 profile menu. [Controls](CONTROLS.md) explains DualSense seeking and playback
 shortcuts. [Compatibility](COMPATIBILITY.md) covers codecs and output limits.
 
-Use **Settings → Audio/Video** for optional audio decoding, HDMI passthrough
-and Dolby Vision HDR10 fallback. [Playback stats](PLAYBACK_STATS.md) explains who
+**Settings → Audio/Video → Surround sound** is Automatic: Dolby and DTS go to
+your TV or receiver when it can take them. [Playback stats](PLAYBACK_STATS.md) explains who
 decodes or converts each stream.
 
 Folder builds from 01.000.003 include **Settings → Updates**. Older public

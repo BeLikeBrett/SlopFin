@@ -2229,6 +2229,11 @@ bool g_fallback_software_audio = false;
 bool g_fallback_passthrough = false;
 bool g_fallback_dolby_vision = false;
 
+std::string output_formats() noexcept
+{
+    return audio_route::describe(audio::sink());
+}
+
 jellyfin::PlaybackRequest with_console_options(jellyfin::PlaybackRequest request) noexcept
 {
     request = apply_preferences(std::move(request), config::current(), software_audio_available());

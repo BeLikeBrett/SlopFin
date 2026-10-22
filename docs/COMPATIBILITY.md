@@ -11,7 +11,7 @@ claims. A Linux test cannot prove HDMI behaviour on a PS5.
 | H.264 | PS5 hardware decodes; PS5 CPU converts pixels for rendering | Console playback tested, including selected 4K sources | Current converted picture is usually at most 1920 pixels wide. |
 | HEVC Main / Main10 | PS5 hardware decodes; PS5 CPU converts pixels | SDR and PQ Main10 console playback tested | Decode support does not imply full-detail 4K presentation. |
 | HDR10 | PS5 renders a ten-bit HDR surface or tone maps to SDR | Surface registration and live switches tested on firmware 8.20 | HDMI metadata, brightness and different displays/receivers still need physical validation. |
-| Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Selected Profile 7 / 8.1 files exercised | **Dolby Vision HDR10 fallback** is on by default. No native Dolby Vision output. |
+| Dolby Vision with compatible PQ base layer | PS5 hardware decodes the HDR10-compatible HEVC base; SlopFin discards DV enhancement/metadata | Profile 7 / 8.1 played on firmware 8.20; stripping identical to FFmpeg's | Always on, with automatic fallback to Jellyfin. No native Dolby Vision output. |
 | Other codecs, incompatible DV, HLG or HDR10+ | Jellyfin server converts to a supported stream | Server conversion path | No validated native HLG path or HDR10+ dynamic metadata output. |
 
 MKV and MP4 files whose video and audio the console can take as stored play
@@ -31,18 +31,18 @@ conversion is rendering work, not video transcoding.
 | AC-3, E-AC-3, DTS core with HDMI passthrough | TV / AV receiver | Compressed IEC 61937 bursts | AC-3 5.1, E-AC-3 7.1 and DTS 5.1 test tones heard on the test TV (2026-09-15); DTS badge confirmed. Packing matches FFmpeg. Other equipment/lip sync need checks. DTS carries only the core. |
 | Other audio, unsupported rates/layouts or an explicit compatible conversion choice | Jellyfin server converts; PS5 then decodes the result | Negotiated compatible audio | The server uses its own CPU or GPU configuration. SlopFin does not locally re-encode to another streaming codec. |
 
-**Settings → Audio/Video** saves these choices:
+Which path a track takes is decided automatically, from the track and from the
+formats the TV, receiver or headset reports to the PS5
+([audio route](development/AUDIO_ROUTE.md)). **Settings → Audio/Video** has one
+choice:
 
-| Setting | On | Off / default |
-| --- | --- | --- |
-| HDMI audio passthrough | Send supported compressed audio for the TV/receiver to decode | Off uses local PCM decoding or Jellyfin conversion. Default **On** preserves existing behaviour. |
-| Decode TrueHD / DTS / E-AC-3 on PS5 | Use the included FFmpeg CPU decoder for compatible tracks | Default **On** since 1.17. Off requests Jellyfin conversion if there is no supported passthrough/native path. Builds without FFmpeg show **Not included**. |
-| Dolby Vision HDR10 fallback | Admit tested HDR10-compatible base layers | Default **On** since 1.17. Off asks Jellyfin to convert Dolby Vision video. |
+| Surround sound | What happens |
+| --- | --- |
+| **Automatic** (default) | AC-3, E-AC-3 and DTS go to the TV or receiver when it lists the format; otherwise the PS5 decodes them, or Jellyfin converts them. |
+| Decode on PS5 | Everything is decoded on the PS5 and sent as PCM. For receivers that play Dolby or DTS silently or out of sync. Atmos is not kept. |
 
-TrueHD cannot pass through: when compatible CPU decoding is enabled it wins over
-server TrueHD → E-AC-3 conversion. DTS/E-AC-3 passthrough takes priority when both
-settings are on. Choices apply to the next playback. Old marker choices are imported
-on the first upgrade; the saved setting then takes precedence.
+TrueHD cannot pass through; the PS5 decodes it. Dolby Vision Profiles 7 and 8.1
+always play from their HDR10 picture. Choices apply to the next playback.
 
 A format outside the advertised capabilities is negotiated with Jellyfin **before**
 playback. If PS5 audio decoding or the Dolby Vision base layer fails during a

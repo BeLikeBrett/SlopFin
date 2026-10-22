@@ -82,6 +82,28 @@ int main()
     assert(tv.find(Format::dts_hd)->rates == 0x7e);
     assert(tv.find(Format::aac)->extra == 40); /* 320 kbps */
 
+    /* In words, for Settings. */
+    assert(describe(tv) ==
+           "AC-3 \xc2\xb7 E-AC-3 Atmos \xc2\xb7 TrueHD \xc2\xb7 DTS \xc2\xb7 DTS-HD \xc2\xb7 "
+           "Stereo PCM");
+    assert(describe(Sink{}).empty());
+
+    /* With a headset the console lists only PCM: everything is decoded here. */
+    const Sink headset = parse_monitor_info(kHeadset, sizeof(kHeadset));
+    assert(headset.known && headset.count == 1 && headset.find(Format::lpcm)->channels == 8);
+    assert(!headset.find(Format::eac3) && !headset.find(Format::dts));
+    assert(describe(headset) == "PCM 7.1");
+    Options worn;
+    worn.software = true;
+    worn.sink = headset;
+    check("headset", worn,
+          {
+              {"ac3", "", 6, 48000, Path::console, "", 0},
+              {"eac3", "", 8, 48000, Path::software, "", 0},
+              {"dts", "DTS-HD MA", 8, 48000, Path::server, "ac3", 6},
+              {"truehd", "", 8, 48000, Path::software, "", 0},
+          });
+
     /* Damaged or foreign buffers are unknown, never half-read. */
     std::vector<unsigned char> broken(kBeyondTv, kBeyondTv + sizeof(kBeyondTv));
     broken[0xa0 + 8 * 3 + 1] = 9; /* nine channels */

@@ -35,28 +35,16 @@ int main()
     { return pixels[gfx::to_physical_y(y) * gfx::physical_width() + gfx::to_physical_x(x)]; };
     assert(pixel(200, 750) != gfx::palette::background);
     assert(pixel(200, 150) == gfx::palette::background);
+    /* Audio/Video has one choice, Surround sound; Cross, Left and Right flip it. */
     g_view.settings_page = 8;
-    g_view.audio_row = 0;
     assert(config::current().audio_passthrough);
     press(pad::Button::cross, handle_settings_input);
     config::load();
     assert(!config::current().audio_passthrough);
     press(pad::Button::down, handle_settings_input);
-    assert(g_view.audio_row == 1 && !player::software_audio_available());
-    // Without FFmpeg in the build the row says Not included and cannot change.
-    const bool software_before = config::current().software_audio;
-    press(pad::Button::cross, handle_settings_input);
-    assert(config::current().software_audio == software_before);
-    press(pad::Button::down, handle_settings_input);
-    const bool dv_before = config::current().dv_hdr10_base;
-    assert(dv_before); /* on by default since 1.17 */
-    press(pad::Button::right, handle_settings_input);
-    config::load();
-    assert(config::current().dv_hdr10_base == !dv_before);
-    g_view.audio_row = 0;
-    for (int row = 0; row < 3; ++row)
+    assert(!config::current().audio_passthrough); /* there is no other row */
+    for (int choice = 0; choice < 2; ++choice)
     {
-        g_view.audio_row = row;
         for (int frame = 0; frame < 90; ++frame)
         {
             ui::begin_frame(1.0f / 60.0f);
@@ -64,8 +52,11 @@ int main()
             draw_settings("Fixture");
         }
         gfx::present();
-        assert(host::write_png("build/tests/audio-settings-" + std::to_string(row) + ".png"));
+        assert(host::write_png("build/tests/audio-settings-" + std::to_string(choice) + ".png"));
+        press(pad::Button::right, handle_settings_input);
     }
+    config::load();
+    assert(!config::current().audio_passthrough); /* flipped twice */
     g_view.settings_page = 0;
     const std::vector<std::pair<std::string, int>> expected_settings = {
         {"Account", 5},     {"Subtitles", 1}, {"Playback", 2}, {"Audio/Video", 8},

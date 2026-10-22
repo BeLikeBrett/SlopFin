@@ -33,11 +33,9 @@ struct Settings
     std::vector<std::string> navigation_order;
     std::vector<std::string> navigation_hidden;
     std::vector<std::string> seerr_watched_requests;
+    /* Surround sound: true is Automatic (to the TV when it lists the format,
+       src/audio_route.hpp), false decodes everything on the PS5. */
     bool audio_passthrough = true;
-    /* Both on by default since 1.17: when the PS5 can decode a format it
-       does, and a failure falls back to Jellyfin conversion by itself. */
-    bool software_audio = true;
-    bool dv_hdr10_base = true;
     /* The request server behind Discover: a Seerr/Jellyseerr/Overseerr address,
        an API key, or a signed-in session. Empty host leaves Discover offered
        but unconfigured. */

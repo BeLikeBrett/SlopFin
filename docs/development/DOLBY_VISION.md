@@ -1,10 +1,10 @@
 # Dolby Vision base-layer fallback
 
-SlopFin does not output native Dolby Vision. An option admits selected
-**HDR10-compatible PQ base layers** for HEVC decoding. It is on by default since
-1.17 (existing installs were switched on once); a failure on a title restarts
-it with Jellyfin conversion. Change it in **Settings → Audio/Video → Dolby Vision HDR10 fallback**
-before playback; turn it off to restore normal negotiation.
+SlopFin does not output native Dolby Vision. It always plays selected
+**HDR10-compatible PQ base layers** (Profiles 7 and 8.1) with HEVC decoding; a
+failure on a title restarts it with Jellyfin conversion. The stripping is
+NAL-for-NAL identical to FFmpeg's `filter_units=remove_types=62|63` on real
+Profile 8.1 and 7 samples ([evidence](AUDIO_ROUTE.md#evidence-ledger)).
 
 The source must pass profile, base-layer compatibility, transfer, primaries
 and bit-depth checks. The selected media version remains pinned through the

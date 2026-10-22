@@ -29,7 +29,9 @@ Server conversion asks for:
 Dolby formats stop at 5.1. A format chosen in the Audio panel is always what
 the server converts to.
 
-A failure removes its row for the rest of that title, and the title restarts
+**Settings → Audio/Video → Surround sound → Decode on PS5** removes the
+passthrough rows, for receivers that take a format but play it badly; nothing
+on the console can detect that. A failure removes its row for the rest of that title, and the title restarts
 where it stopped (`player::recover()`):
 
 - an HDMI port that refuses passthrough;
@@ -79,6 +81,7 @@ Each claim is marked by how it is known.
 | The audio route table | **Proven** | Every row a unit test (`test_audio_route.cpp`) |
 | The TV capability layout | **Verified, one sample** | Field limits match CTA-861 exactly; one display captured |
 | Routes taken in practice | **Observed** | 2026-10-22, firmware 8.20, a real library, with the list read live (8 formats); see below |
+| Headset: the list becomes PCM only, and the route follows | **Observed** | Same console with a headset plugged in, 2026-10-22: one entry, 8-channel PCM at 48 kHz (second test fixture). An E-AC-3 title that went to the receiver that morning was decoded on the PS5, with no underruns |
 | Passthrough refused → automatic fallback | **Not yet observed** | Code path tested only by construction: no TV here refuses |
 | Dolby Vision stripping, Profiles 8.1 and 7 | **Proven** | NAL-for-NAL identical to FFmpeg `filter_units=remove_types=62\|63`; decodes pixel-identical to the untouched stream (real 8-second samples) |
 | Profile 5 and incompatible DV refused | **Observed** | Profile 5 title converted by the server (`VideoRangeTypeNotSupported`) |

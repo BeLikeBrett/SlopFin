@@ -40,8 +40,10 @@ for byte with FFmpeg's SPDIF muxer. Never scale, mix, reorder or PCM-capture a
 compressed burst ring. Codec rates/layouts outside the implemented path need
 server fallback. DTS-HD lossless, DTS:X and TrueHD passthrough are unavailable.
 
-**Settings → Audio/Video → HDMI audio passthrough** enables or disables
-this path for the next playback. Old marker preferences migrate once on upgrade.
+The path is used when the TV or receiver lists the format
+([audio route](AUDIO_ROUTE.md)). **Settings → Audio/Video → Surround sound →
+Decode on PS5** turns it off for the next playback. Old marker preferences
+migrate once on upgrade.
 
 ## Optional CPU decoding
 
