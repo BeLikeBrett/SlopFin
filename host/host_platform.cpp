@@ -55,10 +55,12 @@ struct Display
     SDL_Renderer *renderer = nullptr;
     SDL_Texture *texture = nullptr;
     bool headless = false;
+    bool allow_arbitrary_surface = false;
     bool quit = false;
 
     int width = 0;
     int height = 0;
+    int output_width = 1920, output_height = 1080;
     unsigned blocks_across = 0;
     unsigned block_rows = 0;
 
@@ -185,6 +187,9 @@ namespace slopfin::host
 bool open_display(const Options &options) noexcept
 {
     g_display.headless = options.headless;
+    g_display.allow_arbitrary_surface = options.allow_arbitrary_surface;
+    g_display.output_width = options.output_width;
+    g_display.output_height = options.output_height;
     g_display.fixed_step = options.fixed_step;
     if (options.headless)
         return true;
@@ -502,6 +507,13 @@ extern "C"
         /* Generous, and only ever compared against what the frames need. */
         return std::size_t{5} * 1024 * 1024 * 1024;
     }
+    int sceKernelAvailableDirectMemorySize(std::int64_t, std::int64_t, std::size_t,
+                                           std::int64_t *physical_address, std::size_t *size)
+    {
+        *physical_address = 0;
+        *size = sceKernelGetDirectMemorySize();
+        return 0;
+    }
 
     namespace
     {
@@ -686,10 +698,10 @@ extern "C"
     int sceVideoOutGetResolutionStatus(std::int32_t /*handle*/, void *status)
     {
         auto *words = static_cast<std::uint32_t *>(status);
-        words[0] = 1920;
-        words[1] = 1080;
-        words[2] = 1920;
-        words[3] = 1080;
+        words[0] = g_display.output_width;
+        words[1] = g_display.output_height;
+        words[2] = g_display.output_width;
+        words[3] = g_display.output_height;
         const std::uint64_t refresh = 60;
         std::memcpy(words + 4, &refresh, sizeof(refresh));
         return 0;
@@ -721,7 +733,8 @@ extern "C"
         /* The HDR formats the console refuses are refused here too, so the host
            exercises the same fallback the console takes. Only 1920x1080 and
            3840x2160 register, as measured on the console. */
-        if (!((g_display.width == 1920 && g_display.height == 1080) ||
+        if (!g_display.allow_arbitrary_surface &&
+            !((g_display.width == 1920 && g_display.height == 1080) ||
               (g_display.width == 3840 && g_display.height == 2160)))
             return -1;
         auto *list = static_cast<VideoBuffer *>(buffers);

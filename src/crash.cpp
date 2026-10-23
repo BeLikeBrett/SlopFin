@@ -12,6 +12,7 @@
 #include <atomic>
 #include <csignal>
 #include <exception>
+#include <mutex>
 #ifndef SLOPFIN_HOST
 #include <sys/ucontext.h>
 #endif
@@ -116,6 +117,9 @@ char g_phase[kPhraseBytes] = "starting";
 char g_detail[kPhraseBytes] = "";
 std::atomic<bool> g_dirty{true};
 std::atomic<bool> g_beating{false};
+std::atomic<bool> g_finishing{false};
+std::atomic<bool> g_close_requested{false};
+std::mutex g_session_mutex;
 Notes g_notes;
 std::atomic<int> g_frames{0};
 std::atomic<bool> g_reported{false};
@@ -294,6 +298,9 @@ template <typename Sink> void write_trace_tail(Sink &out, int lines) noexcept
 
 void write_session_file() noexcept
 {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    if (g_finishing.load(std::memory_order_acquire))
+        return;
     Report out(kSession, false);
     if (!out.good())
         return;
@@ -451,27 +458,38 @@ void write_fault(int number, siginfo_t *info, void *context) noexcept
     }
 }
 
+[[noreturn]] void stop_faulted_process() noexcept
+{
+#ifdef SLOPFIN_HOST
+    _exit(1);
+#else
+    /* Native sandbox exit is forbidden. Keep the report intact and park;
+       the system menu can remove the failed title without a recursive SIGSYS. */
+    for (;;)
+        (void)sceKernelUsleep(1000000);
+#endif
+}
+
 void fatal_handler(int number, siginfo_t *info, void *context) noexcept
 {
     /* A second fault inside the handler must not spin: report once, then go. */
     if (g_reported.exchange(true, std::memory_order_acq_rel))
-        _exit(1);
+        stop_faulted_process();
     write_fault(number, info, context);
     (void)unlink(kSession);
-    _exit(1);
+    stop_faulted_process();
 }
 
 /*
  * ShellCore closes an application with an ordinary termination signal when the
- * user chooses Close Game. That is not a crash. Remove the heartbeat file
- * before leaving so the next launch does not turn a deliberate close into an
+ * user chooses Close Game. That is not a crash. Ask the render loop to close
+ * its output and helper handoff before leaving, rather than making an
  * "unclean exit" report. A hard kill (SIGKILL, GPU/process death, etc.) cannot
  * run this handler, so those still leave the session behind for diagnosis.
  */
 void clean_exit_handler(int) noexcept
 {
-    (void)unlink(kSession);
-    _exit(0);
+    g_close_requested.store(true, std::memory_order_release);
 }
 
 void terminate_handler() noexcept
@@ -496,7 +514,7 @@ void terminate_handler() noexcept
         }
     }
     (void)unlink(kSession);
-    _exit(1);
+    stop_faulted_process();
 }
 
 void start_heartbeat(std::uint64_t cores) noexcept;
@@ -514,6 +532,8 @@ void *heartbeat(void *) noexcept
     for (unsigned tick = 0;; ++tick)
     {
         (void)sceKernelUsleep(1000u * 1000u);
+        if (g_finishing.load(std::memory_order_acquire))
+            return nullptr;
         if (g_dirty.exchange(false, std::memory_order_acq_rel) || (tick % 15) == 0)
             write_session_file();
     }
@@ -656,7 +676,14 @@ void frame(int frames) noexcept
 
 void finish() noexcept
 {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    g_finishing.store(true, std::memory_order_release);
     (void)unlink(kSession);
+}
+
+bool close_requested() noexcept
+{
+    return g_close_requested.load(std::memory_order_acquire);
 }
 
 /* ---------------------------------------------------------------- sending */

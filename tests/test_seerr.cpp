@@ -1,5 +1,6 @@
 /* Copyright (C) 2026 Brett
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "fake_voice_search.hpp"
 #include <cassert>
 #include <deque>
 #include <functional>
@@ -11,9 +12,13 @@ slopfin::config::Settings settings;
 std::deque<std::function<void()>> jobs;
 int saved = 0, calls = 0;
 bool cancelled = false;
+bool keyboard_open = false, allow_keyboard = false;
+int keyboard_requests = 0;
+std::string keyboard_title;
 float scroll_axis_value = 0.0f;
 int image_scale = 1;
 slopfin::pad::Button pressed_button = slopfin::pad::Button::count;
+slopfin::pad::Button held_button = slopfin::pad::Button::count;
 std::string last_post;
 std::function<slopfin::http::Response(std::string_view, std::string_view,
                                       const std::vector<std::string> &, std::string_view)>
@@ -55,11 +60,14 @@ namespace slopfin::ime
 {
 bool busy() noexcept
 {
-    return false;
+    return keyboard_open;
 }
-void request(const std::string &, const std::string &, const std::string &, Mode, int) noexcept
+void request(const std::string &, const std::string &title, const std::string &, Mode) noexcept
 {
-    assert(false && "Unexpected keyboard request");
+    assert(allow_keyboard && "Unexpected keyboard request");
+    ++keyboard_requests;
+    keyboard_title = title;
+    keyboard_open = true;
 }
 bool take_result(std::string &) noexcept
 {
@@ -81,6 +89,10 @@ float scroll_axis() noexcept
 bool pressed(Button button) noexcept
 {
     return button == pressed_button;
+}
+bool held(Button button) noexcept
+{
+    return button == held_button;
 }
 } // namespace slopfin::pad
 namespace slopfin::gfx
@@ -783,4 +795,172 @@ int main()
     assert(poster_url_for("/fixture.jpg", 396).find("/w342/") != std::string::npos);
     image_scale = 2;
     assert(poster_url_for("/fixture.jpg", 278).find("/w500/") != std::string::npos);
+
+    // Triangle enters Search without opening a keyboard. Its scope is the
+    // filter selected beforehand, and cannot change while Search is open.
+    g_view.sheet_open = false;
+    g_view.mode = 0;
+    g_view.media_filter = 2;
+    g_view.query.clear();
+    g_view.search_open = false;
+    g_view.field_focused = false;
+    g_view.ime_guard = 0;
+    pressed_button = pad::Button::triangle;
+    assert(handle_input());
+    assert(catalog_search_open() && g_view.field_focused && g_view.media_filter == 2 &&
+           keyboard_requests == 0 && g_field == Field::none);
+    for (auto button : {pad::Button::left, pad::Button::right})
+    {
+        pressed_button = button;
+        assert(handle_input());
+        assert(g_view.media_filter == 2 && keyboard_requests == 0);
+    }
+    pressed_button = pad::Button::r3;
+    assert(handle_input() && g_view.voice_owned && voice_search::starts == 1 &&
+           g_view.media_filter == 2 && keyboard_requests == 0);
+    pressed_button = pad::Button::circle;
+    assert(handle_input() && catalog_search_open() && !g_view.voice_owned &&
+           voice_search::cancellations == 1);
+    allow_keyboard = true;
+    pressed_button = pad::Button::cross;
+    assert(handle_input());
+    assert(keyboard_requests == 1 && keyboard_open && g_field == Field::query &&
+           keyboard_title == "Search shows");
+    pressed_button = pad::Button::circle;
+    assert(handle_input() && catalog_search_open()); /* IME owns this press */
+    keyboard_open = false;
+    cancelled = true;
+    held_button = pad::Button::circle;
+    settings.seerr_watched_requests.clear();
+    poll();
+    assert(g_field == Field::none && g_view.ime_guard == 2 && catalog_search_open());
+    for (int frame = 0; frame < 8; ++frame)
+    {
+        advance_ime_guard();
+        assert(handle_input() && catalog_search_open() && g_view.ime_guard == 2);
+    }
+    held_button = pressed_button = pad::Button::count;
+    advance_ime_guard();
+    advance_ime_guard();
+    assert(g_view.ime_guard == 0 && catalog_search_open() && g_view.media_filter == 2);
+    pressed_button = pad::Button::circle;
+    assert(handle_input());
+    assert(!catalog_search_open() && !g_view.field_focused && g_view.media_filter == 2);
+
+    // A populated Search has the same fixed scope, including from the result
+    // grid, and selecting a category cleanly returns to browsing its filter.
+    g_view.query = "Lost";
+    g_view.search_open = true;
+    g_view.field_focused = false;
+    pressed_button = pad::Button::r3;
+    assert(handle_input() && g_view.media_filter == 2 && g_view.voice_owned);
+    pressed_button = pad::Button::count;
+    set_section(1);
+    assert(!catalog_search_open() && g_view.query.empty() && g_view.media_filter == 2);
+
+    // Discover owns only the recording it starts. Speech uses the same query
+    // submission and preselected scope as typing, without cycling that scope.
+    jobs.clear();
+    g_view.mode = 0;
+    g_view.ime_guard = 0;
+    g_field = Field::none;
+    keyboard_open = false;
+    for (int filter : {0, 1, 2})
+    {
+        g_view.search_open = true;
+        g_view.query = "Previous title";
+        g_view.media_filter = filter;
+        g_view.sort = 0;
+        g_view.page = g_view.pages = 1;
+        g_view.field_focused = false;
+        g_view.grid_index = 4;
+        g_view.grid_scroll.jump(185.0f);
+        Title match;
+        match.tmdb_id = 300 + filter;
+        match.media_type = filter == 2 ? "tv" : "movie";
+        match.name = "Dragon Ball Super: Beerus";
+        g_model.catalogs[catalog_key(match.name, filter, 0)] =
+            Model::CachedCatalog{{match}, 1, 1, std::chrono::steady_clock::now()};
+        const int previous_starts = voice_search::starts;
+        pressed_button = pad::Button::r3;
+        assert(handle_input() && g_view.voice_owned && g_view.media_filter == filter &&
+               voice_search::starts == previous_starts + 1);
+        for (auto button : {pad::Button::right, pad::Button::down})
+        {
+            pressed_button = button;
+            assert(handle_input());
+            assert(g_view.grid_index == 4 && g_view.media_filter == filter);
+        }
+        const int previous_finishes = voice_search::finishes;
+        pressed_button = filter == 1 ? pad::Button::cross : pad::Button::r3;
+        assert(handle_input() && voice_search::finishes == previous_finishes + 1 &&
+               voice_search::fake_snapshot.phase == voice_search::Phase::processing);
+        pressed_button = pad::Button::r3;
+        assert(handle_input() && voice_search::starts == previous_starts + 1);
+        voice_search::fake_snapshot.phase = voice_search::Phase::complete;
+        voice_search::fake_result = match.name;
+        pressed_button = pad::Button::count;
+        const auto wanted = g_model.search_wanted;
+        const int delivered = voice_search::deliveries;
+        assert(handle_input());
+        assert(g_view.query == match.name && g_view.media_filter == filter && !g_view.voice_owned &&
+               g_view.grid_index == 0 && g_view.grid_scroll.value() == 0.0f &&
+               !g_view.field_focused && g_model.search_wanted == wanted + 1 &&
+               voice_search::deliveries == delivered + 1);
+        assert(g_model.results.size() == 1 && g_model.results[0].tmdb_id == match.tmdb_id);
+        assert(handle_input() && g_model.search_wanted == wanted + 1 &&
+               voice_search::deliveries == delivered + 1);
+    }
+
+    // Switching to the keyboard cancels owned capture and preserves the query.
+    pressed_button = pad::Button::r3;
+    assert(handle_input() && g_view.voice_owned);
+    const auto previous_cancels = voice_search::cancellations;
+    pressed_button = pad::Button::triangle;
+    assert(handle_input() && keyboard_open && g_field == Field::query && !g_view.voice_owned &&
+           g_view.search_open && voice_search::cancellations == previous_cancels + 1);
+    keyboard_open = false;
+    g_field = Field::none;
+
+    // Tab/section/modal exits discard an unconsumed result, while leaving
+    // another tab's voice state untouched when Discover does not own it.
+    for (int destination : {0, 1, 2})
+    {
+        g_view.mode = 0;
+        g_view.search_open = true;
+        g_view.sheet_open = false;
+        g_view.field_focused = false;
+        g_view.results = {focus};
+        g_view.media_filter = 1;
+        pressed_button = pad::Button::r3;
+        assert(handle_input() && g_view.voice_owned);
+        voice_search::fake_snapshot.phase = voice_search::Phase::complete;
+        voice_search::fake_result = "Must not reach Home";
+        if (destination == 0)
+            leave();
+        else if (destination == 1)
+            set_section(2);
+        else
+            open_sheet_for_result(0);
+        std::string discarded;
+        assert(!g_view.voice_owned && !voice_search::take_result(discarded));
+    }
+    g_view.sheet_open = false;
+    g_view.search_open = true;
+    g_view.field_focused = true;
+    pressed_button = pad::Button::count;
+    voice_search::fake_snapshot.phase = voice_search::Phase::complete;
+    voice_search::fake_result = "Home owns this";
+    const auto deliveries = voice_search::deliveries;
+    assert(handle_input() && voice_search::fake_result == "Home owns this" &&
+           voice_search::deliveries == deliveries);
+    leave();
+    assert(voice_search::fake_result == "Home owns this");
+    voice_search::cancel();
+    voice_search::fail_start = true;
+    pressed_button = pad::Button::r3;
+    assert(handle_input() && g_view.voice_owned &&
+           catalog_voice_state().phase == voice_search::Phase::error);
+    voice_search::fail_start = false;
+    leave();
 }

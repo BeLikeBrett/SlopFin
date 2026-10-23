@@ -1,6 +1,6 @@
 # SlopFin compatibility
 
-Updated 2026-10-20. Console evidence comes mainly from PS5 firmware 8.20.
+Updated 2026-10-23. Console evidence comes mainly from PS5 firmware 8.20.
 **Implemented**, **decoder-tested** and **verified physical output** are different
 claims. A Linux test cannot prove HDMI behaviour on a PS5.
 
@@ -60,7 +60,7 @@ a real TrueHD/Atmos movie sample. They did not establish working TrueHD passthro
 | Media libraries | Movies, series and episodes | Music albums, audiobooks, books/comics, photos and live TV are not implemented. |
 | Connection | IPv4, DNS, verified HTTPS, ports and server base paths | No IPv6 or self-signed certificates. Hostnames default to HTTPS/443; bare IPv4 to HTTP/8096. |
 | Sign-in | Quick Connect and username/password; saved account | Quick Connect requires server approval. |
-| Subtitles | Text styling/timing; server burn-in for picture subtitles | Burning subtitles can force server video transcoding. |
+| Subtitles | Native-resolution text; six font families, separate text/outline/background colours and timing; picture size/placement; PS5 PGS/VobSub overlays for embedded MKV tracks in decoder-enabled builds | External picture tracks, other delivery paths and decoder failures use server burn-in, which can force video transcoding. |
 | Skip Intro | Jellyfin Intro segments or validated named chapters; **Square** skips | Needs timestamps on the server. Open track/quality panels hide the button. |
 | Avatar editor | Circular crop, movement, zoom and JPEG export | USB/console gallery needs the sandbox helper and elfldr. New-editor upload was not exercised against the production server. |
 | Discover / requests | Seerr/Jellyseerr search, requests and download tracking; shared UI and live API checked on Linux | Native catalog, own-request list, saved profiles and context-aware actions checked on firmware 8.20. Request creation/removal uses fixture tests; production request records were preserved. Requires a separate request server. [Setup](DISCOVER.md). |

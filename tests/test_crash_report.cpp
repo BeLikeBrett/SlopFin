@@ -94,7 +94,9 @@ int main()
             slopfin::crash::install();
             slopfin::crash::phase("home");
             raise(SIGTERM);
-            _exit(99);
+            check(slopfin::crash::close_requested(), "termination is handed to the render loop");
+            slopfin::crash::finish();
+            _exit(g_failures ? 99 : 0);
         }
         int status = 0;
         (void)waitpid(child, &status, 0);
@@ -153,7 +155,10 @@ int main()
     check(slopfin::crash::report_available(), "an unfinished run stays available for diagnostics");
     check(!slopfin::crash::report_waiting(),
           "an unfinished run alone does not claim the app crashed");
+    slopfin::crash::watch(0);
+    slopfin::crash::phase("finishing");
     slopfin::crash::finish();
+    usleep(1200000);
     check(slurp("slopfin-session.txt").empty(), "a clean finish leaves no session behind");
 
     if (g_failures == 0)

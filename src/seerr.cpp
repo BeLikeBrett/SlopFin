@@ -21,6 +21,7 @@
 #include "server_address.hpp"
 #include "text.hpp"
 #include "ui_common.hpp"
+#include "voice_search.hpp"
 
 #include <algorithm>
 #include <array>
@@ -161,6 +162,8 @@ struct View
     int mode = 0;                /* 0 search, 1 requests */
     bool field_focused = true;
     std::string query;
+    bool search_open = false;
+    bool voice_owned = false; /* only this tab may consume its captured result */
     int grid_index = 0;
     motion::Spring grid_scroll;
     motion::StickGlide grid_glide;
@@ -1504,10 +1507,54 @@ std::string search_label() noexcept
                                       : "Search movies and shows";
 }
 
+bool catalog_search_open() noexcept
+{
+    return g_view.search_open || !g_view.query.empty() || g_field == Field::query;
+}
+
+voice_search::Snapshot catalog_voice_state() noexcept
+{
+    return g_view.voice_owned ? voice_search::snapshot() : voice_search::Snapshot{};
+}
+
+void cancel_catalog_voice() noexcept
+{
+    if (!g_view.voice_owned)
+        return;
+    voice_search::cancel();
+    g_view.voice_owned = false;
+}
+
+void submit_catalog_query(const std::string &query) noexcept
+{
+    g_view.query = query;
+    g_view.search_open = true;
+    g_view.mode = 0;
+    g_view.field_focused = false;
+    g_view.grid_index = 0;
+    g_view.grid_scroll.jump(0.0f);
+    g_view.grid_glide.stop();
+    start_search(query);
+}
+
+void advance_ime_guard() noexcept
+{
+    if (g_view.ime_guard == 0)
+        return;
+    for (int i = 0; i < static_cast<int>(pad::Button::count); ++i)
+        if (pad::held(static_cast<pad::Button>(i)))
+        {
+            g_view.ime_guard = 2;
+            return;
+        }
+    --g_view.ime_guard;
+}
+
 void open_keyboard(Field field) noexcept
 {
     if (g_field != Field::none || ime::busy())
         return;
+    cancel_catalog_voice();
     std::string initial;
     std::string title;
     std::string placeholder;
@@ -1547,8 +1594,7 @@ void open_keyboard(Field field) noexcept
         return;
     }
     g_field = field;
-    ime::request(initial, title, placeholder, mode,
-                 field == Field::query ? ui::kSearchKeyboardY : kFieldY + 64 + 16);
+    ime::request(initial, title, placeholder, mode);
 }
 
 void apply_keyboard(const std::string &entered) noexcept
@@ -1558,14 +1604,7 @@ void apply_keyboard(const std::string &entered) noexcept
     switch (field)
     {
     case Field::query:
-        g_view.query = entered;
-        {
-            g_view.mode = 0;
-            g_view.field_focused = false;
-            g_view.grid_index = 0;
-            g_view.grid_scroll.jump(0.0f);
-            start_search(entered);
-        }
+        submit_catalog_query(entered);
         break;
     case Field::host:
     {
@@ -2051,6 +2090,7 @@ void open_sheet_for_result(int index) noexcept
 {
     if (index < 0 || index >= results_size())
         return;
+    cancel_catalog_voice();
     g_view.sheet =
         g_view
             .results[static_cast<std::size_t>(visible_results()[static_cast<std::size_t>(index)])];
@@ -2064,6 +2104,7 @@ void open_sheet_for_result(int index) noexcept
 
 void open_sheet_for_request(const Request &request) noexcept
 {
+    cancel_catalog_voice();
     Title title;
     title.tmdb_id = request.tmdb_id;
     title.media_type = request.media_type;
@@ -2105,6 +2146,17 @@ void reload_catalog() noexcept
 }
 
 constexpr int kCatalogViewport = gfx::kHeight - kGridY - 50;
+int catalog_grid_top() noexcept
+{
+    return kGridY + (catalog_search_open() ? 44 : 0) +
+           (ui::voice_search_status_visible(catalog_voice_state().phase)
+                ? ui::kVoiceSearchStatusHeight
+                : 0);
+}
+int catalog_viewport() noexcept
+{
+    return kCatalogViewport - (catalog_grid_top() - kGridY);
+}
 constexpr int kRequestRow = 152;
 constexpr int kRequestViewport = gfx::kHeight - kListY - 20;
 
@@ -2162,11 +2214,12 @@ void draw_scroll_fade(int y, int scroll) noexcept
                            ui::page_at(ui::kDiscoverTheme, y),
                            gfx::with_alpha(ui::page_at(ui::kDiscoverTheme, y + kFade), 0));
 }
-void draw_scrollbar(float position, float limit, int total_height, int viewport) noexcept
+void draw_scrollbar(float position, float limit, int total_height, int viewport,
+                    int top = kGridY) noexcept
 {
     if (limit <= 0.0f)
         return;
-    const int x = ui::kContentRight + 12, y = kGridY;
+    const int x = ui::kContentRight + 12, y = top;
     const int thumb = std::max(30, viewport * viewport / total_height);
     gfx::rounded_rect(x, y, 3, viewport, 1, gfx::palette::control_border);
     gfx::rounded_rect(x - 1, y + static_cast<int>((viewport - thumb) * position / limit), 5, thumb,
@@ -2176,7 +2229,47 @@ void draw_scrollbar(float position, float limit, int total_height, int viewport)
 bool search_input(float dt) noexcept
 {
     const int count = results_size();
+    if (catalog_search_open() && g_view.voice_owned)
+    {
+        std::string spoken;
+        if (voice_search::take_result(spoken))
+        {
+            g_view.voice_owned = false;
+            submit_catalog_query(spoken);
+            return true;
+        }
+        const auto voice = catalog_voice_state();
+        if (ui::voice_search_active(voice.phase))
+        {
+            if (pad::pressed(pad::Button::circle))
+                cancel_catalog_voice();
+            else if (pad::pressed(pad::Button::triangle))
+                open_keyboard(Field::query);
+            else if (voice.phase == voice_search::Phase::listening &&
+                     (pad::pressed(pad::Button::r3) || pad::pressed(pad::Button::cross)))
+                voice_search::finish();
+            return true;
+        }
+    }
     if (pad::pressed(pad::Button::triangle))
+    {
+        if (catalog_search_open())
+        {
+            open_keyboard(Field::query);
+            return true;
+        }
+        g_view.search_open = true;
+        g_view.field_focused = true;
+        return true;
+    }
+    if (catalog_search_open() && pad::pressed(pad::Button::r3))
+    {
+        if (voice_search::start() || voice_search::snapshot().phase == voice_search::Phase::error)
+            g_view.voice_owned = true;
+        return true;
+    }
+    if (catalog_search_open() && pad::pressed(pad::Button::cross) &&
+        (g_view.field_focused || g_view.query.empty()))
     {
         open_keyboard(Field::query);
         return true;
@@ -2192,20 +2285,31 @@ bool search_input(float dt) noexcept
             start_search(g_view.query, g_view.page + 1, true);
     };
     if (scroll_with_stick(g_view.grid_scroll, g_view.grid_glide, g_view.grid_index, count,
-                          grid_columns(), kCardStepY, kCatalogViewport, dt))
+                          grid_columns(), kCardStepY, catalog_viewport(), dt))
     {
         load_more();
         return true;
     }
     /* A search in progress is left with Circle, back to the category. */
-    if (pad::pressed(pad::Button::circle) && !g_view.query.empty())
+    if (pad::pressed(pad::Button::circle) && catalog_search_open())
     {
+        cancel_catalog_voice();
+        const bool had_query = !g_view.query.empty();
+        g_view.search_open = false;
         g_view.query.clear();
-        reload_catalog();
+        g_view.field_focused = false;
+        if (had_query)
+            reload_catalog();
         return true;
     }
     if (g_view.field_focused)
     {
+        if (catalog_search_open())
+        {
+            if (pad::pressed(pad::Button::down) && count > 0 && !g_view.query.empty())
+                g_view.field_focused = false;
+            return true;
+        }
         /* The media filter: left and right choose, so there is nothing to
            confirm. Off its left end is the sidebar. */
         if (pad::pressed(pad::Button::right) && g_view.media_filter < 2)
@@ -2252,7 +2356,7 @@ bool search_input(float dt) noexcept
     if (count > 0)
     {
         reveal_selection(g_view.grid_scroll, g_view.grid_index, count, columns, kCardStepY,
-                         kCatalogViewport);
+                         catalog_viewport());
         load_more();
     }
     return true;
@@ -2468,7 +2572,6 @@ void draw_poster(const std::string &path, int x, int y, int w, int h, int radius
         return;
     }
     gfx::rounded_rect(x, y, w, h, radius, gfx::rgba(0xff, 0xff, 0xff, 0x0a));
-    gfx::stroke_rounded_rect(x, y, w, h, radius, 1, gfx::rgba(0xff, 0xff, 0xff, 0x16));
     std::string initial = "?";
     if (!name.empty())
     {
@@ -2509,7 +2612,7 @@ void draw_header() noexcept
     }
     const bool requests = g_view.mode == 1;
     const bool typing = g_field == Field::query && ime::busy();
-    const bool searching = !requests && (!g_view.query.empty() || typing);
+    const bool searching = !requests && catalog_search_open();
     const int count = requests ? static_cast<int>(g_view.requests.size()) : results_size();
     if (searching)
     {
@@ -2523,11 +2626,18 @@ void draw_header() noexcept
         field.typing = typing;
         if (typing)
             field.note.clear();
-        else if (g_view.search_loading && count == 0)
-            field.note = "Searching";
-        else
-            field.note = count == 0 ? "No matches" : std::to_string(count) + " results";
+        else if (!g_view.query.empty())
+            field.note = g_view.search_loading && count == 0 ? "Searching"
+                         : count == 0
+                             ? "No matches"
+                             : std::to_string(count) + (count == 1 ? " result" : " results");
+        const auto voice = catalog_voice_state();
+        ui::apply_voice_search_state(field, voice);
         ui::draw_search_field(ui::kContentX, ui::kSearchFieldY, kSearchFieldW, field);
+        if (g_view.query.empty() && !typing && !field.voice && field.note.empty())
+            ui::draw_search_prompt(ui::kContentX + 28, ui::kSearchFieldY + ui::kSearchFieldH + 12);
+        ui::draw_voice_search_status(ui::kContentX, ui::kSearchFieldY + ui::kSearchFieldH + 54,
+                                     voice);
     }
     else
     {
@@ -2541,7 +2651,7 @@ void draw_header() noexcept
             text::draw(ui::kContentX + title_w + 18, kHeaderY + 16, std::to_string(count), 22,
                        Weight::regular, gfx::rgba(0xff, 0xff, 0xff, 0x66));
     }
-    if (requests)
+    if (requests || searching)
         return;
     const ui::Segmented filter{{"All", "Movies", "Shows"}};
     const int width = ui::segmented_width(filter);
@@ -2566,8 +2676,6 @@ void draw_result_card(const Title &title, int x, int y, bool focused) noexcept
     /* The chosen poster lifts a little off the page, ringed in white as the
        library's cards are, so both tabs mean the same thing by "here". */
     const int lift = focused ? 8 : 0;
-    if (focused)
-        gfx::drop_shadow(x, y - lift, kCardW, kCardH, 12, 22, 0x90);
     draw_poster(title.poster_path, x, y - lift, kCardW, kCardH, 12, title.name);
     if (focused)
         gfx::stroke_rounded_rect(x - 5, y - lift - 5, kCardW + 10, kCardH + 10, 16, 3,
@@ -2618,15 +2726,19 @@ void draw_results() noexcept
                           Weight::medium, gfx::palette::text);
         return;
     }
+    if (catalog_search_open() && g_view.query.empty())
+        return;
+    const int top = catalog_grid_top();
+    const int viewport = catalog_viewport();
     if (g_view.search_loading && g_view.results.empty())
     {
-        text::draw(ui::kContentX, kGridY + 20, "Searching\xE2\x80\xA6", 26, Weight::regular,
+        text::draw(ui::kContentX, top + 20, "Searching\xE2\x80\xA6", 26, Weight::regular,
                    gfx::palette::text_dim);
         return;
     }
     if (!g_view.search_error.empty() && g_view.results.empty())
     {
-        text::draw(ui::kContentX, kGridY + 20, g_view.search_error, 26, Weight::regular,
+        text::draw(ui::kContentX, top + 20, g_view.search_error, 26, Weight::regular,
                    gfx::palette::danger);
         return;
     }
@@ -2637,27 +2749,25 @@ void draw_results() noexcept
         const std::string message = g_view.query.empty()
                                         ? "No titles on this page. Try another category or search."
                                         : "Nothing matched \"" + g_view.query + "\".";
-        text::draw(ui::kContentX, kGridY + 20, message, 26, Weight::regular,
-                   gfx::palette::text_dim);
+        text::draw(ui::kContentX, top + 20, message, 26, Weight::regular, gfx::palette::text_dim);
         return;
     }
 
     const int columns = grid_columns();
     const int rows = (count + columns - 1) / columns;
-    const float limit = scroll_limit(count, columns, kCardStepY, kCatalogViewport);
+    const float limit = scroll_limit(count, columns, kCardStepY, viewport);
     const int scroll = static_cast<int>(std::clamp(g_view.grid_scroll.value(), 0.0f, limit));
     const int first = scroll / kCardStepY;
-    const int last = std::min(rows, 1 + (scroll + kCatalogViewport) / kCardStepY);
+    const int last = std::min(rows, 1 + (scroll + viewport) / kCardStepY);
 
     /* Room above the first row for a poster lifted by the focus, and its ring. */
-    gfx::push_clip(ui::kContentX - 24, kGridY - 24, ui::kContentWidth + 48,
-                   gfx::kHeight - kGridY - 26);
+    gfx::push_clip(ui::kContentX - 24, top - 24, ui::kContentWidth + 48, gfx::kHeight - top - 26);
     const auto draw_card = [&](int i)
     {
         const int row = i / columns, column = i % columns;
         draw_result_card(
             g_view.results[static_cast<std::size_t>(visible[static_cast<std::size_t>(i)])],
-            ui::kContentX + column * kCardStepX, kGridY + row * kCardStepY - scroll,
+            ui::kContentX + column * kCardStepX, top + row * kCardStepY - scroll,
             i == g_view.grid_index && !g_view.field_focused && g_view.content_focused);
     };
     for (int i = first * columns; i < std::min(count, last * columns); ++i)
@@ -2681,8 +2791,8 @@ void draw_results() noexcept
                                      images::Kind::remote, kCardH);
             }
     gfx::pop_clip();
-    draw_scroll_fade(kGridY - 24, scroll);
-    draw_scrollbar(static_cast<float>(scroll), limit, rows * kCardStepY, kCatalogViewport);
+    draw_scroll_fade(top - 24, scroll);
+    draw_scrollbar(static_cast<float>(scroll), limit, rows * kCardStepY, viewport, top);
     /* The next page arriving under what is already here. */
     if (g_view.search_loading)
     {
@@ -3127,6 +3237,7 @@ void draw_toast() noexcept
 
 void open() noexcept
 {
+    cancel_catalog_voice();
     g_view.entered = true;
     g_view.mode = 0;
     g_view.field_focused = false;
@@ -3158,6 +3269,11 @@ void enter() noexcept
         start_search(g_view.query);
 }
 
+void leave() noexcept
+{
+    cancel_catalog_voice();
+}
+
 const char *section_label(int section) noexcept
 {
     return kSectionLabels[static_cast<std::size_t>(std::clamp(section, 0, kSectionCount - 1))];
@@ -3170,6 +3286,7 @@ int section() noexcept
 
 void set_section(int section) noexcept
 {
+    cancel_catalog_voice();
     section = std::clamp(section, 0, kSectionCount - 1);
     g_view.entered = true;
     g_view.sheet_open = false;
@@ -3187,6 +3304,7 @@ void set_section(int section) noexcept
     }
     const bool same = g_view.mode == 0 && g_view.sort == section && g_view.query.empty();
     g_view.mode = 0;
+    g_view.search_open = false;
     g_view.field_focused = false;
     if (same && !g_view.results.empty())
         return;
@@ -3203,7 +3321,9 @@ std::string server_label() noexcept
 #ifdef SLOPFIN_HOST
 void preview_search(const std::string &query) noexcept
 {
+    cancel_catalog_voice();
     g_view.query = query;
+    g_view.search_open = true;
     g_view.mode = 0;
     g_view.field_focused = false;
     g_view.grid_index = 0;
@@ -3253,13 +3373,13 @@ bool handle_input(float elapsed) noexcept
             g_wants_settings = true;
         return !pad::pressed(pad::Button::circle) && !pad::pressed(pad::Button::left);
     }
-    if (g_view.ime_guard > 0)
+    if (g_view.ime_guard > 0 || g_field != Field::none || ime::busy())
         return true;
     if (g_view.sheet_open)
         return sheet_input();
-    /* R3 cycles the media filter from anywhere on the page. The sidebar
-       chooses the category; L1 and R1 belong to the tabs. */
-    if (g_view.mode == 0 && pad::pressed(pad::Button::r3))
+    /* Choose the catalogue filter before Search; its scope stays fixed while
+       entering a query or navigating the matching titles. */
+    if (g_view.mode == 0 && !catalog_search_open() && pad::pressed(pad::Button::r3))
     {
         g_view.media_filter = (g_view.media_filter + 1) % 3;
         g_view.filter_changed_frame = g_view.frames;
@@ -3297,7 +3417,11 @@ void draw(bool content_focused) noexcept
     if (g_view.mode == 0)
     {
         if (!ime::busy())
+        {
             draw_results();
+            if (catalog_search_open())
+                ui::draw_search_close_hint(catalog_voice_state());
+        }
     }
     else
         draw_requests();
@@ -3306,8 +3430,9 @@ void draw(bool content_focused) noexcept
 
 void poll() noexcept
 {
-    if (g_view.ime_guard > 0)
-        --g_view.ime_guard;
+    if (g_view.voice_owned && (!catalog_search_open() || g_view.mode != 0 || g_view.sheet_open))
+        cancel_catalog_voice();
+    advance_ime_guard();
     if (g_field != Field::none)
     {
         std::string entered;
@@ -3465,6 +3590,7 @@ const char *settings_row_hint(Setting row) noexcept
 
 void open_settings() noexcept
 {
+    cancel_catalog_voice();
     if (!config::current().seerr_host.empty())
         refresh_server();
 }

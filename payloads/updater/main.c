@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 Brett
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../src/update/transaction.h"
+#include "../../src/update/close.h"
 #include <ps5/kernel.h>
 #include <signal.h>
 #include <time.h>
@@ -91,9 +92,13 @@ int main(void)
         unlink(lock);
         return 1;
     }
-    sf_update_transaction *t = calloc(1, sizeof(*t));
-    if (!t || sf_update_prepare(t, "/data/slopfin/update/staged", "/data/homebrew/PPSA99001",
-                                "/data/slopfin/update/backup") < 0)
+    const int close_only = sf_update_pid_marker("/data/slopfin/update/close-only", app_pid);
+    if (!close_only)
+        unlink("/data/slopfin/update/closed");
+    sf_update_transaction *t = close_only ? NULL : calloc(1, sizeof(*t));
+    if (!close_only &&
+        (!t || sf_update_prepare(t, "/data/slopfin/update/staged", "/data/homebrew/PPSA99001",
+                                 "/data/slopfin/update/backup") < 0))
     {
         result(!t ? "Not enough memory to prepare the update. Your app was not changed."
                   : "Could not verify the update files or save a backup. Download the update "
@@ -103,11 +108,16 @@ int main(void)
         return 1;
     }
     sceUserServiceInitialize(NULL);
-    result("ready");
+    if (!close_only)
+        result("ready");
     /* The app closes its decoder and VideoOut before any installed file changes. */
     int stopped = 0;
+    int close_requested = 0;
     for (unsigned i = 0; i < 60; ++i)
     {
+        if (!close_requested &&
+            sf_update_close_stopped(app_pid, "PPSA99001", "/data/slopfin/update/closed") >= 0)
+            close_requested = 1;
         if (kill((pid_t)app_pid, 0) < 0 && errno == ESRCH && sceLncUtilGetAppId("PPSA99001") <= 0)
         {
             stopped = 1;
@@ -123,6 +133,14 @@ int main(void)
         unlink(lock);
         sceUserServiceTerminate();
         return 1;
+    }
+    unlink("/data/slopfin/update/closed");
+    unlink("/data/slopfin/update/close-only");
+    if (close_only)
+    {
+        unlink(lock);
+        sceUserServiceTerminate();
+        return 0;
     }
     const int applied = sf_update_apply(t, -1);
     free(t);

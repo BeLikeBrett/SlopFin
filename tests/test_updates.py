@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "build/tests/update_package_tests"
 TRANSACTION = ROOT / "build/tests/update_transaction_tests"
+VERIFY_RELEASE = runpy.run_path(str(ROOT / "tools/verify-release.py"))["verify"]
 
 class Updates(unittest.TestCase):
     def setUp(self):
@@ -54,6 +56,26 @@ class Updates(unittest.TestCase):
         archive = self.archive({"sce_sys/param.json": metadata,
                                 "assets/ca-certificates.pem": (ROOT / "assets/ca-certificates.pem").read_bytes()})
         self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+
+    def test_shipped_release_gate_checks_version_size_and_actual_stager(self):
+        self.files |= {
+            "sce_sys/param.json": json.dumps({"titleId": "PPSA99001", "contentVersion": "02.000.000"}).encode(),
+            "assets/ca-certificates.pem": (ROOT / "assets/ca-certificates.pem").read_bytes(),
+        }
+        archive = self.archive().rename(self.root / "SlopFin-2.00-folder.zip")
+        VERIFY_RELEASE(archive, PACKAGE)
+        wrong_name = archive.rename(self.root / "SlopFin-1.17-folder.zip")
+        with self.assertRaises(ValueError):
+            VERIFY_RELEASE(wrong_name, PACKAGE)
+        archive = wrong_name.rename(archive)
+        self.files["eboot.bin"] = b"too small"
+        self.archive().replace(archive)
+        with self.assertRaises(subprocess.CalledProcessError):
+            VERIFY_RELEASE(archive, PACKAGE)
+        with archive.open("wb") as output:
+            output.truncate(32 * 1024 * 1024 + 1)
+        with self.assertRaises(ValueError):
+            VERIFY_RELEASE(archive, PACKAGE)
 
     def test_reject_path_escape(self):
         for name in ("../escape", "assets/../../escape", "assets/evil\\file", "config.json", "assets/a\0evil"):
@@ -150,6 +172,38 @@ class Updates(unittest.TestCase):
         for name, data in old.items():
             self.assertEqual((self.root / "backup" / name).read_bytes(), data)
         self.assertEqual(config.read_bytes(), b"unchanged account preferences")
+
+    def test_major_upgrade_and_rollback_at_every_file(self):
+        self.files |= {
+            "sce_sys/param.json": json.dumps({"titleId": "PPSA99001", "contentVersion": "02.000.000"}).encode(),
+            "assets/ca-certificates.pem": (ROOT / "assets/ca-certificates.pem").read_bytes(),
+            "assets/font-readable-regular.ttf": b"r" * 1024,
+            "assets/font-readable-bold.ttf": b"b" * 1024,
+            "assets/slopfin-storage.bin": b"h" * 1024,
+        }
+        for fail_after in range(len(self.files) + 1):
+            with self.subTest(fail_after=fail_after), tempfile.TemporaryDirectory() as folder:
+                self.root = Path(folder)
+                archive = self.archive()
+                staged = subprocess.run([PACKAGE, archive, self.root / "staged", "02.000.000"], capture_output=True)
+                self.assertEqual(staged.returncode, 0, staged.stderr)
+                target = self.root / "installed"
+                old = {"eboot.bin": b"old executable", "sce_module/libc.prx": b"old runtime",
+                       "sce_sys/param.json": b'{"contentVersion":"01.000.017"}'}
+                for name, data in old.items():
+                    path = target / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                config = self.root / "config.json"
+                preferences = b'{"token":"keep-token","deviceId":"keep-device","subtitleOffsets":{"episode":1.5}}'
+                config.write_bytes(preferences)
+                success = fail_after == len(self.files)
+                self.assertEqual(self.install(target, fail_after).returncode, 0 if success else 4)
+                expected = self.files if success else old
+                self.assertEqual({str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()}, set(expected))
+                for name, data in expected.items():
+                    self.assertEqual((target / name).read_bytes(), data)
+                self.assertEqual(config.read_bytes(), preferences)
 
     def test_rollback_after_partial_install(self):
         target, old, config = self.prepare_install()

@@ -33,8 +33,18 @@ void begin(const Session &session, double position) noexcept;
    when the pause state changes. Cheap enough to call every frame. */
 void update(double position, bool paused) noexcept;
 
-/* The session ended at `position`; also flushes anything still queued. */
+/* Queue the final position immediately. Never waits on the network. */
 void end(double position) noexcept;
+
+/* Wait for events queued before this call, including an in-flight request.
+ * Call only on a background worker or during shutdown, never on the render
+ * thread while navigating back. False preserves local progress until retry. */
+bool flush(unsigned timeout_ms) noexcept;
+
+/* Call before changing/signing out of a Jellyfin identity. Pending requests
+ * and retries are discarded; a request already in flight retains its captured
+ * original credentials and can never acquire the next account's token. */
+void invalidate() noexcept;
 
 } // namespace slopfin::reporter
 

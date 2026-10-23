@@ -36,8 +36,9 @@ struct Track
     long long bitrate = 0; /* bits per second, when the server knows it */
     bool is_default = false;
     bool is_forced = false;
-    bool is_text = false; /* text can be drawn by the app; images are burned in */
+    bool is_text = false; /* text or native picture overlay, depending on codec/container */
     bool is_external = false;
+    bool is_hearing_impaired = false;
 };
 
 struct MediaSource
@@ -110,6 +111,11 @@ struct Item
     int index_number = 0;        /* Episode number */
     int parent_index_number = 0; /* Season number */
     int runtime_minutes = 0;
+    double runtime_seconds = 0.0; /* Exact runtime; minutes are display-only. */
+    [[nodiscard]] double duration_seconds() const noexcept
+    {
+        return runtime_seconds > 0.0 ? runtime_seconds : runtime_minutes * 60.0;
+    }
     double community_rating = 0.0; /* TMDB audience score, out of 10 */
     double critic_rating = 0.0;    /* Rotten Tomatoes Tomatometer, out of 100 */
     double played_percentage = 0.0;
@@ -177,12 +183,22 @@ bool probe(const std::string &host, int port, std::string &server_name) noexcept
 void sign_out() noexcept;
 
 /* Marks an item watched, which is how it leaves Continue Watching. */
-bool mark_played(const std::string &item_id, bool played = true) noexcept;
+struct UserProgress
+{
+    bool played = false;
+    double resume_ticks = 0.0;
+    double played_percentage = 0.0;
+};
+/* The server returns the resulting UserData, including the cleared resume
+   position. Callers must update progress as well as the watched check mark. */
+bool mark_played(const std::string &item_id, bool played = true,
+                 UserProgress *updated = nullptr) noexcept;
 
 std::vector<Library> libraries() noexcept;
 
 /* Newest items across the whole account, for the home rows. */
-std::vector<Item> latest(const std::string &library_id, int limit) noexcept;
+std::vector<Item> latest(const std::string &library_id, int limit,
+                         const std::string &collection_type = {}) noexcept;
 std::vector<Item> resume(int limit) noexcept;
 std::vector<Item> next_up(int limit) noexcept;
 /* The one episode Next Up holds for a single series, or none.  */
@@ -249,6 +265,7 @@ struct PlaybackRequest
     /* Leave MKV and MP4 to the server's remux, as before direct play: the
        fallback when a file cannot be read here. */
     bool server_remux = false;
+    bool burn_picture_subtitles = false; /* retry after local subtitle failure */
     /* What the TV or receiver accepts, read when playback starts; unknown on
        the host and when the console gives no list. */
     audio_route::Sink sink;
@@ -274,6 +291,9 @@ struct PlaybackPlan
     int width = 0, height = 0; /* source picture; sizes the decoder, 0 when unknown */
     double frame_rate = 0.0;   /* the source video's rate, for display cadence */
     std::string media_source_id;
+    bool subtitle_bitmap = false;
+    int subtitle_ordinal = -1;
+    std::string subtitle_codec;
     std::string subtitle_url;         /* SubRip to fetch and draw; empty when none */
     bool subtitle_burned = false;     /* the server draws it into the picture */
     bool absolute_timestamps = false; /* stream time equals title time */

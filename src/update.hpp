@@ -30,4 +30,7 @@ void check() noexcept;
 void download() noexcept;
 void install() noexcept;
 bool restart_requested() noexcept;
+/* After all app-owned outputs are released: let the privileged helper remove
+   the process. Native app sandboxes forbid a direct exit syscall. */
+bool finish_close() noexcept;
 } // namespace slopfin::update

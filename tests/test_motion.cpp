@@ -225,6 +225,12 @@ int main()
             (void)reverse.step(-1.0f, kFrame);
         check(reverse.velocity() < 0.0f && reverse.velocity() > -StickGlide::kTop + 0.5f,
               "reversing starts the ramp again");
+        reverse.stop();
+        check(!reverse.moving() && reverse.velocity() == 0.0f,
+              "a d-pad takeover stops both motion and the previous stick direction");
+        (void)reverse.step(-1.0f, kFrame);
+        check(std::fabs(reverse.velocity()) < StickGlide::kCruise,
+              "a stopped stick starts again from rest");
     }
 
     if (g_failures == 0)

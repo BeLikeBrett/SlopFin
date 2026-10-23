@@ -37,13 +37,20 @@ struct Source
     std::uint64_t size = 0;
     int audio_ordinal = -1;  /* -1: play without audio */
     std::string audio_codec; /* as Jellyfin names it, to check against the file */
+    int subtitle_ordinal = -1;
+    std::string subtitle_codec;
 };
 
 struct Opened
 {
     std::unique_ptr<media::Demuxer> demuxer;
     std::uint64_t offset = 0; /* where the media stream must start */
-    std::string why;          /* when opening failed */
+    std::string subtitle_codec;
+    int subtitle_compression = -1;
+    std::vector<std::uint8_t> subtitle_compression_settings;
+    std::vector<std::uint8_t> subtitle_private;
+    int subtitle_width = 0, subtitle_height = 0;
+    std::string why; /* when opening failed */
 };
 
 /*

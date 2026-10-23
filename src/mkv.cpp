@@ -42,6 +42,7 @@ enum : std::uint32_t
     kSimpleBlock = 0xA3,
     kBlockGroup = 0xA0,
     kBlock = 0xA1,
+    kBlockDuration = 0x9B,
     kReferenceBlock = 0xFB,
     kAttachments = 0x1941A469,
     kChapters = 0x1043A770,
@@ -114,6 +115,57 @@ void parse_info(const std::uint8_t *data, std::size_t size, Info &info)
         info.timestamp_scale = 1000000;
 }
 
+void parse_encodings(const std::uint8_t *data, std::size_t size, Track &track)
+{
+    track.encoded = true;
+    unsigned count = 0;
+    bool valid = true;
+    int algorithm = -1;
+    const bool parsed = each_child(
+        data, size,
+        [&](std::uint32_t id, const std::uint8_t *body, std::size_t bytes)
+        {
+            if (id != 0x6240)
+            {
+                valid = false;
+                return;
+            } // ContentEncoding
+            ++count;
+            std::uint64_t order = 0, scope = 1, type = 0;
+            valid &= each_child(
+                body, bytes,
+                [&](std::uint32_t field, const std::uint8_t *p, std::size_t n)
+                {
+                    if (field == 0x5031)
+                        order = uint_value(p, n);
+                    else if (field == 0x5032)
+                        scope = uint_value(p, n);
+                    else if (field == 0x5033)
+                        type = uint_value(p, n);
+                    else if (field == 0x5034) // ContentCompression; zlib is the default
+                    {
+                        algorithm = 0;
+                        valid &= each_child(
+                            p, n,
+                            [&](std::uint32_t c, const std::uint8_t *v, std::size_t length)
+                            {
+                                if (c == 0x4254)
+                                    algorithm = static_cast<int>(uint_value(v, length));
+                                else if (c == 0x4255 && length <= 1024u * 1024u)
+                                    track.compression_settings.assign(v, v + length);
+                                else
+                                    valid = false;
+                            });
+                    }
+                    else
+                        valid = false;
+                });
+            valid &= order == 0 && scope == 1 && type == 0;
+        });
+    if (parsed && valid && count == 1 && (algorithm == 0 || algorithm == 3))
+        track.compression = algorithm;
+}
+
 void parse_tracks(const std::uint8_t *data, std::size_t size, Info &info)
 {
     info.tracks.clear();
@@ -139,7 +191,7 @@ void parse_tracks(const std::uint8_t *data, std::size_t size, Info &info)
                     else if (field == kCodecPrivate)
                         track.codec_private.assign(value, value + bytes);
                     else if (field == kContentEncodings)
-                        track.encoded = true;
+                        parse_encodings(value, bytes, track);
                     else if (field == kCodecDelay)
                         track.codec_delay = uint_value(value, bytes);
                     else if (field == kVideo)
@@ -396,8 +448,16 @@ ts::Codec codec_of(const Track &track) noexcept
     return ts::Codec::unknown;
 }
 
-bool Demuxer::configure(const Info &info, const Track &video, const Track *audio)
+bool Demuxer::configure(const Info &info, const Track &video, const Track *audio,
+                        const Track *subtitle)
 {
+    if (subtitle)
+    {
+        if ((subtitle->encoded && subtitle->compression < 0) ||
+            (subtitle->codec_id != "S_HDMV/PGS" && subtitle->codec_id != "S_VOBSUB"))
+            return false;
+        subtitle_number_ = subtitle->number;
+    }
     scale_ = info.timestamp_scale;
     video_number_ = video.number;
     video_codec_ = codec_of(video);
@@ -538,6 +598,7 @@ void Demuxer::block_group(const std::uint8_t *data, std::size_t size) noexcept
     const std::uint8_t *payload = nullptr;
     std::size_t length = 0;
     bool referenced = false;
+    std::uint64_t duration = 0;
     (void)each_child(data, size,
                      [&](std::uint32_t id, const std::uint8_t *body, std::size_t bytes)
                      {
@@ -546,14 +607,17 @@ void Demuxer::block_group(const std::uint8_t *data, std::size_t size) noexcept
                              payload = body;
                              length = bytes;
                          }
+                         else if (id == kBlockDuration)
+                             duration = uint_value(body, bytes);
                          else if (id == kReferenceBlock)
                              referenced = true;
                      });
     if (payload != nullptr)
-        block(payload, length, false, !referenced);
+        block(payload, length, false, !referenced, duration);
 }
 
-void Demuxer::block(const std::uint8_t *data, std::size_t size, bool simple, bool keyframe) noexcept
+void Demuxer::block(const std::uint8_t *data, std::size_t size, bool simple, bool keyframe,
+                    std::uint64_t duration) noexcept
 {
     /* Track number: a size-style variable integer. */
     if (size < 4)
@@ -567,7 +631,8 @@ void Demuxer::block(const std::uint8_t *data, std::size_t size, bool simple, boo
     for (int i = 1; i < width; ++i)
         number = number << 8 | data[i];
     const bool video = number == video_number_;
-    if (!video && (audio_number_ == 0 || number != audio_number_))
+    const bool subtitle = subtitle_number_ != 0 && number == subtitle_number_;
+    if (!video && !subtitle && (audio_number_ == 0 || number != audio_number_))
         return;
     const auto relative = static_cast<std::int16_t>(data[width] << 8 | data[width + 1]);
     const std::uint8_t flags = data[width + 2];
@@ -648,6 +713,16 @@ void Demuxer::block(const std::uint8_t *data, std::size_t size, bool simple, boo
     ts::AccessUnit unit;
     unit.pts = time * static_cast<std::int64_t>(scale_) * 9 / 100000; /* ns to 90 kHz */
     unit.video = video;
+    if (subtitle)
+    {
+        if (sizes.size() != 1 || duration > 86400000000000ull / scale_)
+            return;
+        unit.subtitle = true;
+        unit.duration = static_cast<std::int64_t>(duration * scale_ * 9 / 100000);
+        unit.data.assign(data + at, data + at + sizes[0]);
+        ready_.push_back(std::move(unit));
+        return;
+    }
     if (video)
     {
         /* Decoding starts at a keyframe; anything before one cannot be shown. */

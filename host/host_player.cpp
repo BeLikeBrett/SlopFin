@@ -202,6 +202,8 @@ bool start(const jellyfin::PlaybackRequest &request, const std::string &title,
 void stop(bool) noexcept
 {
     std::lock_guard<std::mutex> guard(g_mutex);
+    g_status.position_seconds = position_now();
+    g_run_origin = g_status.position_seconds;
     g_status.state = State::idle;
 }
 

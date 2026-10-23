@@ -54,17 +54,17 @@ int draw_top_chip(int x, int y, icons::Icon icon, const std::string &label) noex
     return width;
 }
 
-int button_chip_width(const std::string &label) noexcept
+int button_chip_width(const std::string &label, icons::Icon icon) noexcept
 {
-    return 18 + 24 + 10 + text::measure(label, 21, Weight::medium) + 18;
+    const int glyph = icon == icons::Icon::r3 ? 32 : 24;
+    return 18 + glyph + 10 + text::measure(label, 21, Weight::medium) + 18;
 }
 
 int draw_button_chip(int x, int y, icons::Icon icon, const std::string &label, bool lit) noexcept
 {
-    constexpr int kGlyph = 24;
+    const int kGlyph = icon == icons::Icon::r3 ? 32 : 24;
     constexpr int kHeight = 44;
-    const int text_w = text::measure(label, 21, Weight::medium);
-    const int width = 18 + kGlyph + 10 + text_w + 18;
+    const int width = button_chip_width(label, icon);
 
     gfx::rounded_rect(x, y, width, kHeight, kHeight / 2,
                       lit ? gfx::with_alpha(icons::button::triangle, 0x33)
@@ -74,6 +74,15 @@ int draw_button_chip(int x, int y, icons::Icon icon, const std::string &label, b
                                  : gfx::rgba(0xff, 0xff, 0xff, 0x1e));
     icons::draw(icon, x + 18, y + (kHeight - kGlyph) / 2, kGlyph,
                 lit ? hint_colour(icon) : gfx::with_alpha(hint_colour(icon), 0xcc));
+    if (icon == icons::Icon::r3)
+    {
+        // Keep the stick silhouette, with a quiet label on its cap.
+        constexpr int size = 12;
+        const int cap_y = y + (kHeight - kGlyph) / 2 + 3;
+        text::draw(x + 18 + (kGlyph - text::measure("R3", size, Weight::bold)) / 2,
+                   text::centered_y(cap_y, 18, "R3", size, Weight::bold), "R3", size, Weight::bold,
+                   gfx::rgba(0x14, 0x1c, 0x27, 0xee));
+    }
     text::draw(x + 18 + kGlyph + 10, text::centered_y(y, kHeight, label, 21, Weight::medium), label,
                21, Weight::medium, lit ? gfx::palette::text : gfx::rgba(0xff, 0xff, 0xff, 0xc4));
     return width;
@@ -253,7 +262,6 @@ int draw_segmented(int x, int y, const Segmented &control, float chosen, const T
         const int pill_w =
             lerp(widths[static_cast<std::size_t>(low)], widths[static_cast<std::size_t>(high)]);
         const int pill_h = h - kSegmentInset * 2;
-        gfx::drop_shadow(pill_x, y + kSegmentInset, pill_w, pill_h, pill_h / 2, 10, 0x50);
         gfx::rounded_horizontal_gradient(pill_x, y + kSegmentInset, pill_w, pill_h, pill_h / 2,
                                          theme.accent_from, theme.accent_to);
     }
@@ -277,25 +285,22 @@ int draw_segmented(int x, int y, const Segmented &control, float chosen, const T
 
 void panel(int x, int y, int w, int h) noexcept
 {
-    gfx::rounded_rect(x + 6, y + 10, w, h, 20, gfx::rgba(0x00, 0x00, 0x00, 0x66));
     gfx::rounded_rect(x, y, w, h, 20, gfx::palette::surface);
 }
 
 void draw_search_field(int x, int y, int w, const SearchField &field) noexcept
 {
     const int h = kSearchFieldH;
-    const bool active = field.typing;
+    const bool active = field.typing || field.voice;
 
     /* The field stays legible behind the native keyboard. */
-    if (!active)
-        gfx::drop_shadow(x, y, w, h, h / 2, 18, 0x70);
     gfx::rounded_rect(x, y, w, h, h / 2, gfx::rgba(0xff, 0xff, 0xff, active ? 0x16 : 0x10));
     gfx::stroke_rounded_rect(x, y, w, h, h / 2, 2,
                              active ? gfx::rgba(0xff, 0xff, 0xff, 0x8c)
                                     : gfx::rgba(0xff, 0xff, 0xff, 0x24));
 
-    icons::draw(icons::Icon::search, x + 26, y + (h - 30) / 2, 30,
-                gfx::rgba(0xff, 0xff, 0xff, active ? 0xdd : 0x88));
+    icons::draw(field.voice ? icons::Icon::microphone : icons::Icon::search, x + 26,
+                y + (h - 30) / 2, 30, gfx::rgba(0xff, 0xff, 0xff, active ? 0xdd : 0x88));
 
     const int text_x = x + 70;
     const int text_w = w - 70 - 210;
@@ -313,12 +318,81 @@ void draw_search_field(int x, int y, int w, const SearchField &field) noexcept
                    20, text::Weight::medium, gfx::rgba(0xff, 0xff, 0xff, 0xb4));
     }
 
-    /* Triangle edits the existing search without clearing its results. */
-    const int chip_w = draw_button_chip(x + w + 26, y + (h - 44) / 2, icons::Icon::ps_triangle,
-                                        active ? "Typing" : "Edit", active);
+    if (field.voice_available)
+        draw_button_chip(x + w + 26, y + (h - 44) / 2,
+                         field.listening ? icons::Icon::ps_cross : icons::Icon::r3,
+                         field.listening ? "Finish" : "Speak", field.voice);
     if (!field.note.empty())
-        text::draw(x + w + 26 + chip_w + 22, y + 24, field.note, 22, text::Weight::regular,
+        text::draw(x + 28, y + h + 12, field.note, 20, text::Weight::regular,
                    gfx::palette::text_dim);
+}
+
+void apply_voice_search_state(SearchField &field, const voice_search::Snapshot &voice) noexcept
+{
+    field.voice = voice_search_active(voice.phase);
+    field.listening = voice.phase == voice_search::Phase::listening;
+    if (field.voice || voice.phase == voice_search::Phase::error)
+        field.note.clear();
+    if (voice.phase == voice_search::Phase::downloading)
+        field.note =
+            "One-time download · " +
+            std::to_string(static_cast<int>(std::clamp(voice.progress, 0.0f, 1.0f) * 100)) + "%";
+    else if (voice.phase == voice_search::Phase::listening ||
+             voice.phase == voice_search::Phase::error)
+        field.note = voice.message;
+}
+
+void draw_search_prompt(int x, int y, bool voice_available) noexcept
+{
+    constexpr const char *lead = "Press";
+    text::draw(x, y, lead, 20, Weight::regular, gfx::palette::text_dim);
+    x += text::measure(lead, 20, Weight::regular) + 9;
+    icons::draw(icons::Icon::ps_cross, x, y - 1, 22, icons::button::cross);
+    text::draw(x + 31, y, voice_available ? "to search or say a movie with R3" : "to search", 20,
+               Weight::regular, gfx::palette::text_dim);
+}
+
+void draw_voice_search_status(int x, int y, const voice_search::Snapshot &voice) noexcept
+{
+    if (!voice_search_status_visible(voice.phase))
+        return;
+    constexpr gfx::Color ink = gfx::rgb(0x7c, 0xd7, 0xe8);
+    const bool listening = voice.phase == voice_search::Phase::listening;
+    icons::draw(icons::Icon::microphone, x + 14, y + 12, 38,
+                voice.muted ? gfx::rgb(0xf0, 0x9b, 0x68) : ink);
+    const char *title = listening ? (voice.muted ? "Microphone is muted" : "Say a title")
+                        : voice.phase == voice_search::Phase::processing
+                            ? "Recognising speech"
+                            : "Downloading voice search";
+    text::draw(x + 72, y + 10, title, 28, Weight::medium, gfx::palette::text);
+    if (listening)
+    {
+        const float level = voice.muted ? 0.0f : std::clamp(voice.level, 0.0f, 1.0f);
+        for (int i = 0; i < 15; ++i)
+        {
+            const int height = 5 + static_cast<int>(level * (18 - std::abs(7 - i)) * 3);
+            gfx::rounded_rect(x + 610 + i * 10, y + 38 - height / 2, 4, height, 2,
+                              i < static_cast<int>(level * 15) ? ink
+                                                               : gfx::rgba(0xff, 0xff, 0xff, 0x30));
+        }
+    }
+    else if (voice.phase == voice_search::Phase::downloading)
+    {
+        gfx::rounded_rect(x + 72, y + 91, 420, 4, 2, gfx::rgba(0xff, 0xff, 0xff, 0x30));
+        const int progress = static_cast<int>(420 * std::clamp(voice.progress, 0.0f, 1.0f));
+        if (progress > 0)
+            gfx::rounded_rect(x + 72, y + 91, progress, 4, 2, ink);
+    }
+}
+
+void draw_search_close_hint(const voice_search::Snapshot &voice) noexcept
+{
+    if (voice_search_active(voice.phase))
+        return;
+    const char *label = "Close";
+    const int width = 22 + 9 + text::measure(label, 20, Weight::regular);
+    draw_button_hints(gfx::kWidth - kSafeX - width, gfx::kHeight - 48,
+                      {{icons::Icon::ps_circle, label}});
 }
 
 } // namespace slopfin::ui

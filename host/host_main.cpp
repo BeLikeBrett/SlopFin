@@ -16,8 +16,11 @@
 #include "../src/gfx.hpp"
 #include "../src/icons.hpp"
 #include "../src/pad.hpp"
+#include "../src/player.hpp"
+#include "../src/reporter.hpp"
 #include "../src/text.hpp"
 #include "../src/trace.hpp"
+#include "../src/voice_search.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -194,9 +197,10 @@ void draw_icon_sheet() noexcept
     constexpr int kCell = 200;
     constexpr int kColumns = 8;
     static const char *names[] = {
-        "play",   "pause", "skip_back", "skip_forward", "subtitles", "audio",     "quality",
-        "info",   "check", "jellyfin",  "triangle",     "circle",    "cross",     "square",
-        "search", "r2",    "chev_left", "chev_right",   "chev_up",   "chev_down", "R3 stick",
+        "play",    "pause",     "skip_back", "skip_forward", "subtitles", "audio",
+        "quality", "info",      "check",     "jellyfin",     "triangle",  "circle",
+        "cross",   "square",    "search",    "r2",           "chev_left", "chev_right",
+        "chev_up", "chev_down", "R3 stick",  "series",
     };
     const int count = static_cast<int>(icons::Icon::count);
     for (int i = 0; i < count; ++i)
@@ -218,6 +222,7 @@ void usage() noexcept
     std::fputs("slopfin (Linux preview)\n"
                "  --headless            draw without a window; use with --script\n"
                "  --scale PERCENT       window size relative to 1920x1080 (default 70)\n"
+               "  --output WIDTHxHEIGHT simulate 720p, 1080p, 1440p or 4K output\n"
                "  --no-vsync            do not wait for the host's refresh\n"
                "  --script \"...\"        drive the interface: wait N; down x3; cross; shot a.png\n"
                "  --out DIR             where shot steps write (default captures/)\n"
@@ -258,6 +263,21 @@ int main(int argc, char **argv)
             shot_every = std::atoi(argv[++i]);
         else if (argument == "--scale" && i + 1 < argc)
             options.scale_percent = std::atoi(argv[++i]);
+        else if (argument == "--output" && i + 1 < argc)
+        {
+            int width = 0, height = 0;
+            char trailing = 0;
+            if (std::sscanf(argv[++i], "%dx%d%c", &width, &height, &trailing) != 2 ||
+                (width != 1280 && width != 1920 && width != 2560 && width != 3840) ||
+                height != width * 9 / 16)
+            {
+                usage();
+                return 2;
+            }
+            options.output_width = width;
+            options.output_height = height;
+            options.allow_arbitrary_surface = true;
+        }
         else if (argument == "--script" && i + 1 < argc)
             script = argv[++i];
         else if (argument == "--out" && i + 1 < argc)
@@ -393,6 +413,9 @@ int main(int argc, char **argv)
         }
     }
 
+    slopfin::voice_search::shutdown();
+    slopfin::player::stop();
+    (void)slopfin::reporter::flush(2000);
     slopfin::gfx::shutdown();
     slopfin::host::close_display();
 

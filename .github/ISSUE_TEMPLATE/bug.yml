@@ -11,7 +11,7 @@ body:
     id: build
     attributes:
       label: SlopFin version and installation method
-      placeholder: "01.000.000, folder ZIP or native PKG"
+      placeholder: "2.00, folder ZIP or native PKG"
     validations:
       required: true
   - type: input

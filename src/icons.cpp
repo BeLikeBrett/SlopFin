@@ -156,6 +156,14 @@ float field(Icon icon, Vec p) noexcept
         const float bar = capsule(p, {0.5f, 0.47f}, {0.5f, 0.70f}, 0.045f);
         return std::min({ring, dot, bar});
     }
+    case Icon::microphone:
+    {
+        const float body = rounded_box(p, {0.5f, 0.35f}, {0.13f, 0.25f}, 0.13f);
+        const float bowl = arc(p, {0.5f, 0.46f}, 0.27f, 0.032f, 3.1415927f, 6.2831853f);
+        const float stem = capsule(p, {0.5f, 0.74f}, {0.5f, 0.88f}, 0.032f);
+        const float foot = capsule(p, {0.36f, 0.90f}, {0.64f, 0.90f}, 0.032f);
+        return std::min({body, bowl, stem, foot});
+    }
     case Icon::check:
         return std::min(capsule(p, {0.20f, 0.52f}, {0.41f, 0.73f}, 0.06f),
                         capsule(p, {0.41f, 0.73f}, {0.82f, 0.28f}, 0.06f));
@@ -225,6 +233,14 @@ float field(Icon icon, Vec p) noexcept
                                     capsule(p, {0.68f, 0.62f}, {0.68f, 0.80f}, 0.025f));
         return std::min({cap, base, stem});
     }
+    case Icon::series:
+    {
+        const float front =
+            std::fabs(rounded_box(p, {0.50f, 0.61f}, {0.37f, 0.24f}, 0.055f)) - 0.032f;
+        const float back = std::min(capsule(p, {0.22f, 0.25f}, {0.78f, 0.25f}, 0.032f),
+                                    capsule(p, {0.30f, 0.12f}, {0.70f, 0.12f}, 0.032f));
+        return std::min(front, back);
+    }
     case Icon::count:
         break;
     }
@@ -278,13 +294,20 @@ const unsigned char *mask(Icon icon, int size) noexcept
     return g_cache.back().coverage.data();
 }
 
+/* An icon's mask follows from which icon and its size. */
+static std::uint64_t mask_id(Icon icon, int pixels) noexcept
+{
+    return (std::uint64_t{0x4b} << 56) | (static_cast<std::uint64_t>(icon) << 32) |
+           static_cast<std::uint32_t>(pixels);
+}
+
 void draw(Icon icon, int x, int y, int size, gfx::Color color) noexcept
 {
     /* Built at the surface's pixel size, so the curves stay clean at 4K. */
     const int pixels = std::max(1, gfx::to_physical_size(size));
     if (const unsigned char *coverage = mask(icon, pixels); coverage != nullptr)
         gfx::blend_mask_physical(gfx::to_physical_x(x), gfx::to_physical_y(y), pixels, pixels,
-                                 coverage, color);
+                                 coverage, color, mask_id(icon, pixels));
 }
 
 void draw_gradient(Icon icon, int x, int y, int size, gfx::Color from, gfx::Color to) noexcept
@@ -292,7 +315,7 @@ void draw_gradient(Icon icon, int x, int y, int size, gfx::Color from, gfx::Colo
     const int pixels = std::max(1, gfx::to_physical_size(size));
     if (const unsigned char *coverage = mask(icon, pixels); coverage != nullptr)
         gfx::blend_mask_gradient_physical(gfx::to_physical_x(x), gfx::to_physical_y(y), pixels,
-                                          pixels, coverage, from, to);
+                                          pixels, coverage, from, to, mask_id(icon, pixels));
 }
 
 } // namespace slopfin::icons

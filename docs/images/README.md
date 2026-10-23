@@ -1,6 +1,17 @@
 # Public interface captures
 
-`home-console.png`, `requests-console.png`, `welcome-console.png` and
+`home-console.png` and `media-console.png` are direct SlopFin 2.00 candidate
+captures from PS5 firmware 8.20 on 2026-10-23, at 1920×1080 from the native 4K
+render surface. They show the updated GPU interface and transparent resting
+media actions. The media capture includes the approved Resume progress ring.
+Account, server and library names are published with the
+owner's existing permission. No credentials are visible.
+
+`subtitles-preview.png` uses the actual Linux application renderer and packaged
+fonts from the same candidate. It shows independent text, outline and
+background colour settings. It contains no media or account data.
+
+`requests-console.png`, `welcome-console.png` and
 `signin-console.png` are direct SlopFin 1.14 captures from a PS5 running
 firmware 8.20 on 2026-10-18, converted from the console's JPEG XR screenshots and
 scaled to 1920x1080. They show the developer's real Jellyfin Home, request list

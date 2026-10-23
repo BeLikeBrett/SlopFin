@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,8 @@
 
 namespace
 {
-constexpr std::size_t kFaceCount = 5; /* the Weight values; the glyph key holds three bits of it */
+constexpr std::size_t kFaceCount = 13;
+static_assert(kFaceCount <= 16, "GPU glyph identities reserve four bits per face");
 constexpr int kCacheSlots = 1024;
 
 struct Face
@@ -33,10 +35,16 @@ struct Face
     bool ready = false;
 };
 
+struct EdgeMask
+{
+    int width_quarters = -1;
+    std::vector<unsigned char> coverage;
+};
+
 /* One rasterised glyph at one pixel size. */
 struct Glyph
 {
-    std::uint32_t key = 0; /* codepoint | size << 21 | weight << 29 */
+    std::uint64_t key = 0; /* codepoint | physical size << 21 | face << 37 */
     bool used = false;
     int width = 0;
     int height = 0;
@@ -44,10 +52,30 @@ struct Glyph
     int offset_y = 0;
     int advance = 0;
     std::vector<unsigned char> coverage;
+    int distance_width = 0;
+    int distance_height = 0;
+    int distance_x = 0;
+    int distance_y = 0;
+    float distance_scale = 1.0f;
+    std::vector<unsigned char> distance;
+    std::array<EdgeMask, 2> edges;
 };
 
 std::array<Face, kFaceCount> g_faces{};
 std::array<Glyph, kCacheSlots> g_cache{};
+struct LineEdge
+{
+    std::string text;
+    int size = 0;
+    slopfin::text::Weight weight = slopfin::text::Weight::regular;
+    int quarters = 0;
+    bool shadow = false;
+    int x = 0, y = 0, width = 0, height = 0;
+    std::uint64_t used = 0, id = 0;
+    std::vector<unsigned char> coverage;
+};
+std::array<LineEdge, 12> g_line_edges{};
+std::uint64_t g_edge_clock = 0, g_edge_id = 0;
 bool g_ready = false;
 
 bool load_face(Face &face, const char *path) noexcept
@@ -136,17 +164,22 @@ std::uint32_t next_codepoint(std::string_view text, std::size_t &cursor) noexcep
     return value;
 }
 
-std::uint32_t cache_key(std::uint32_t codepoint, int pixel_size,
+std::uint64_t cache_key(std::uint32_t codepoint, int pixel_size,
                         slopfin::text::Weight weight) noexcept
 {
-    return (codepoint & 0x1fffffu) | (static_cast<std::uint32_t>(pixel_size & 0xff) << 21) |
-           (static_cast<std::uint32_t>(weight) << 29);
+    return (codepoint & 0x1fffffu) | (static_cast<std::uint64_t>(pixel_size & 0xffff) << 21) |
+           (static_cast<std::uint64_t>(weight) << 37);
 }
 
-const Glyph *acquire(std::uint32_t codepoint, int pixel_size, slopfin::text::Weight weight) noexcept
+Glyph *acquire(std::uint32_t codepoint, int pixel_size, slopfin::text::Weight weight) noexcept
 {
-    const std::uint32_t key = cache_key(codepoint, pixel_size, weight);
-    const std::size_t slot = (key * 2654435761u) % kCacheSlots;
+    const std::uint64_t key = cache_key(codepoint, pixel_size, weight);
+    /* Mix the face and size into the slot too. Otherwise every face of the
+       same letter competes for the same eight slots. */
+    std::uint64_t hash = key;
+    hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
+    const std::size_t slot = (hash ^ (hash >> 31)) % kCacheSlots;
 
     /* Linear probe a short run; on failure evict the first probed slot. */
     for (std::size_t i = 0; i < 8; ++i)
@@ -201,6 +234,121 @@ const Glyph *acquire(std::uint32_t codepoint, int pixel_size, slopfin::text::Wei
     return &g_cache[target];
 }
 
+const EdgeMask *acquire_edge(Glyph &glyph, std::uint32_t codepoint, int size,
+                             slopfin::text::Weight weight, int quarters, bool shadow) noexcept
+{
+    if (glyph.width <= 0 || glyph.height <= 0)
+        return nullptr;
+    if (glyph.distance.empty())
+    {
+        Face &face = face_for(weight);
+        /* Enough room for the heaviest offered outline at this font size.
+           Keep this geometry across thickness/opacity changes in Settings. */
+        const int padding = std::max(8, size / 6 + 3);
+        glyph.distance_scale = 128.0f / static_cast<float>(padding);
+        auto *distance = stbtt_GetCodepointSDF(
+            &face.info, stbtt_ScaleForPixelHeight(&face.info, static_cast<float>(size)),
+            static_cast<int>(codepoint), padding, 128, glyph.distance_scale, &glyph.distance_width,
+            &glyph.distance_height, &glyph.distance_x, &glyph.distance_y);
+        if (distance == nullptr)
+            return nullptr;
+        glyph.distance.assign(distance, distance + glyph.distance_width * glyph.distance_height);
+        stbtt_FreeSDF(distance, face.info.userdata);
+    }
+    EdgeMask &edge = glyph.edges[shadow ? 1 : 0];
+    if (edge.width_quarters != quarters)
+    {
+        const float radius = quarters * 0.25f;
+        edge.coverage.resize(glyph.distance.size());
+        for (std::size_t i = 0; i < edge.coverage.size(); ++i)
+        {
+            const float distance =
+                (static_cast<int>(glyph.distance[i]) - 128) / glyph.distance_scale;
+            float alpha;
+            if (shadow)
+            {
+                /* A feathered contour, rather than an offset hard-edged copy. */
+                const float feather = std::max(1.0f, radius);
+                alpha = std::clamp((distance + feather) / (2.0f * feather), 0.0f, 1.0f);
+                alpha = alpha * alpha * (3.0f - 2.0f * alpha);
+            }
+            else
+                alpha = std::clamp(distance + radius + 0.5f, 0.0f, 1.0f);
+            edge.coverage[i] = static_cast<unsigned char>(alpha * 255.0f + 0.5f);
+        }
+        edge.width_quarters = quarters;
+    }
+    return &edge;
+}
+
+const LineEdge *acquire_line_edge(std::string_view utf8, int size, slopfin::text::Weight weight,
+                                  int quarters, bool shadow) noexcept
+{
+    for (auto &line : g_line_edges)
+        if (line.used && line.size == size && line.weight == weight && line.quarters == quarters &&
+            line.shadow == shadow && line.text == utf8)
+        {
+            line.used = ++g_edge_clock;
+            return &line;
+        }
+    int left = 0, top = 0, right = 0, bottom = 0, pen = 0;
+    std::size_t cursor = 0;
+    while (cursor < utf8.size())
+    {
+        const auto codepoint = next_codepoint(utf8, cursor);
+        Glyph *glyph = acquire(codepoint, size, weight);
+        if (!glyph)
+            continue;
+        if (acquire_edge(*glyph, codepoint, size, weight, quarters, shadow))
+        {
+            left = std::min(left, pen + glyph->distance_x);
+            top = std::min(top, glyph->distance_y);
+            right = std::max(right, pen + glyph->distance_x + glyph->distance_width);
+            bottom = std::max(bottom, glyph->distance_y + glyph->distance_height);
+        }
+        pen += glyph->advance;
+        if (pen > 32768)
+            return nullptr;
+    }
+    const int width = right - left, height = bottom - top;
+    if (width <= 0 || height <= 0 || static_cast<std::size_t>(width) * height > 4 * 1024 * 1024)
+        return nullptr;
+    auto &line = *std::min_element(g_line_edges.begin(), g_line_edges.end(),
+                                   [](const auto &a, const auto &b) { return a.used < b.used; });
+    line.text = utf8;
+    line.size = size;
+    line.weight = weight;
+    line.quarters = quarters;
+    line.shadow = shadow;
+    line.x = left;
+    line.y = top;
+    line.width = width;
+    line.height = height;
+    line.used = ++g_edge_clock;
+    line.id = (std::uint64_t{0x56} << 56) | ++g_edge_id;
+    line.coverage.assign(static_cast<std::size_t>(width) * height, 0);
+    pen = 0;
+    cursor = 0;
+    while (cursor < utf8.size())
+    {
+        const auto codepoint = next_codepoint(utf8, cursor);
+        Glyph *glyph = acquire(codepoint, size, weight);
+        if (!glyph)
+            continue;
+        if (const auto *edge = acquire_edge(*glyph, codepoint, size, weight, quarters, shadow))
+            for (int y = 0; y < glyph->distance_height; ++y)
+            {
+                auto *destination = line.coverage.data() + (y + glyph->distance_y - top) * width +
+                                    pen + glyph->distance_x - left;
+                const auto *source = edge->coverage.data() + y * glyph->distance_width;
+                for (int x = 0; x < glyph->distance_width; ++x)
+                    destination[x] = std::max(destination[x], source[x]);
+            }
+        pen += glyph->advance;
+    }
+    return &line;
+}
+
 /* Ascent in pixels, so callers can treat y as the top of the line box. */
 int ascent_for(int pixel_size, slopfin::text::Weight weight) noexcept
 {
@@ -234,6 +382,12 @@ bool initialize() noexcept
     (void)load_face(g_faces[2], (assets + "font-bold.ttf").c_str());
     (void)load_face(g_faces[3], (assets + "font-readable-regular.ttf").c_str());
     (void)load_face(g_faces[4], (assets + "font-readable-bold.ttf").c_str());
+    constexpr const char *extra[] = {"font-roboto-regular.ttf", "font-roboto-bold.ttf",
+                                     "font-lato-regular.ttf",   "font-lato-bold.ttf",
+                                     "font-serif-regular.ttf",  "font-serif-bold.ttf",
+                                     "font-mono-regular.ttf",   "font-mono-bold.ttf"};
+    for (std::size_t i = 0; i < std::size(extra); ++i)
+        (void)load_face(g_faces[i + 5], (assets + extra[i]).c_str());
     return g_ready;
 }
 
@@ -312,11 +466,92 @@ void draw(int x, int y, std::string_view utf8, int pixel_size, Weight weight,
             continue;
         if (glyph->width > 0 && glyph->height > 0)
         {
+            /* A glyph's pixels follow from its character, size and weight. */
+            const std::uint64_t id = (std::uint64_t{0x54} << 56) |
+                                     (static_cast<std::uint64_t>(weight) << 40) |
+                                     (static_cast<std::uint64_t>(size) << 24) | codepoint;
             gfx::blend_mask_physical(pen + glyph->offset_x, baseline + glyph->offset_y,
-                                     glyph->width, glyph->height, glyph->coverage.data(), color);
+                                     glyph->width, glyph->height, glyph->coverage.data(), color,
+                                     id);
         }
         pen += glyph->advance;
     }
+}
+
+void prepare_edges(int pixel_size, Weight weight) noexcept
+{
+    if (!g_ready)
+        return;
+    const int size = std::max(1, gfx::to_physical_size(pixel_size));
+    for (std::uint32_t codepoint = 33; codepoint < 127; ++codepoint)
+        if (Glyph *glyph = acquire(codepoint, size, weight))
+            (void)acquire_edge(*glyph, codepoint, size, weight, 4, false);
+}
+
+void draw_edge(int x, int y, std::string_view utf8, int pixel_size, Weight weight, gfx::Color color,
+               float width, bool shadow) noexcept
+{
+    if (!g_ready || width <= 0.0f || (color >> 24) == 0)
+        return;
+    const int size = std::max(1, gfx::to_physical_size(pixel_size));
+    const float scale = static_cast<float>(gfx::physical_height()) / gfx::kHeight;
+    const int quarters = std::clamp(static_cast<int>(width * scale * 4.0f + 0.5f), 1, 255);
+    const int offset = shadow ? std::max(1, (quarters + 4) / 4) : 0;
+    const int baseline = gfx::to_physical_y(y) + ascent_for(size, weight) + offset;
+    if (const auto *line = acquire_line_edge(utf8, size, weight, quarters, shadow))
+    {
+        /* Union letter coverage first. Blending each letter separately makes
+           overlapping translucent outlines develop dark seams. */
+        gfx::blend_mask_physical(gfx::to_physical_x(x) + offset + line->x, baseline + line->y,
+                                 line->width, line->height, line->coverage.data(), color, line->id);
+    }
+}
+
+std::vector<std::string> wrap_lines(std::string_view utf8, int max_width, int pixel_size,
+                                    Weight weight)
+{
+    std::vector<std::string> lines;
+    max_width = std::max(1, max_width);
+    for (std::size_t paragraph = 0; paragraph <= utf8.size();)
+    {
+        const std::size_t newline = utf8.find('\n', paragraph);
+        const std::size_t stop = newline == std::string_view::npos ? utf8.size() : newline;
+        std::size_t start = paragraph;
+        if (start == stop)
+            lines.emplace_back();
+        while (start < stop)
+        {
+            std::size_t cursor = start, previous = start, space = std::string_view::npos;
+            while (cursor < stop)
+            {
+                previous = cursor;
+                if (utf8[cursor] == ' ' || utf8[cursor] == '\t')
+                    space = cursor;
+                (void)next_codepoint(utf8, cursor);
+                cursor = std::min(cursor, stop);
+                if (measure(utf8.substr(start, cursor - start), pixel_size, weight) > max_width)
+                {
+                    if (space != std::string_view::npos && space > start)
+                        cursor = space;
+                    else if (previous > start)
+                        cursor = previous;
+                    break;
+                }
+            }
+            std::size_t end = cursor;
+            while (end > start &&
+                   (utf8[end - 1] == ' ' || utf8[end - 1] == '\t' || utf8[end - 1] == '\r'))
+                --end;
+            lines.emplace_back(utf8.substr(start, end - start));
+            start = cursor;
+            while (start < stop && (utf8[start] == ' ' || utf8[start] == '\t'))
+                ++start;
+        }
+        if (newline == std::string_view::npos)
+            break;
+        paragraph = newline + 1;
+    }
+    return lines;
 }
 
 void draw_ellipsized(int x, int y, int max_width, std::string_view utf8, int pixel_size,

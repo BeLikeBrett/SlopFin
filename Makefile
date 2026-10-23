@@ -15,8 +15,34 @@ APP_STATIC_ARCHIVES ?=
 APP_STATIC_ARCHIVES += .deps/native/cxx/libcxx.a .deps/native/cxx/libcxxabi.a .deps/native/cxx/libunwind.a
 APP_RUNTIME_MODULES ?=
 SOFTWARE_AUDIO ?= 0
+BITMAP_SUBTITLES ?= $(SOFTWARE_AUDIO)
+GPU_MENU ?= 0
+VOICE_SEARCH ?= $(GPU_MENU)
+HOST_VOICE_SEARCH ?= 1
+export GPU_MENU
+ifeq ($(GPU_MENU),1)
+APP_DEFINITIONS += SLOPFIN_GPU_MENU
+APP_INCLUDE_PATHS += .deps/gpu/radv-release/include build/gpu
+endif
 ifeq ($(SOFTWARE_AUDIO),1)
 APP_DEFINITIONS += SLOPFIN_SOFTWARE_AUDIO
+endif
+VOICE_ARCHIVES := libwhisper.a libggml.a libggml-cpu.a libggml-base.a
+ifeq ($(VOICE_SEARCH),1)
+APP_DEFINITIONS += SLOPFIN_VOICE_SEARCH
+APP_INCLUDE_PATHS += .deps/voice/install-ps5/include
+APP_STATIC_ARCHIVES += $(addprefix .deps/voice/install-ps5/lib/,$(VOICE_ARCHIVES))
+VOICE_NATIVE_DEPS := .deps/voice/install-ps5/lib/libwhisper.a
+endif
+ifeq ($(HOST_VOICE_SEARCH),1)
+VOICE_HOST_DEPS := .deps/voice/install-host/lib/libwhisper.a
+VOICE_HOST_FLAGS := -DSLOPFIN_VOICE_SEARCH -I.deps/voice/install-host/include
+VOICE_HOST_LIBS := $(addprefix .deps/voice/install-host/lib/,$(VOICE_ARCHIVES))
+endif
+ifeq ($(BITMAP_SUBTITLES),1)
+APP_DEFINITIONS += SLOPFIN_BITMAP_SUBTITLES
+endif
+ifneq ($(filter 1,$(SOFTWARE_AUDIO) $(BITMAP_SUBTITLES)),)
 APP_INCLUDE_PATHS += .deps/audio/install/include
 APP_STATIC_ARCHIVES += .deps/audio/install/lib/libavcodec.a .deps/audio/install/lib/libswresample.a .deps/audio/install/lib/libavutil.a
 endif
@@ -53,12 +79,14 @@ HOST_BIN := build/host/slopfin
 HOST_SRC := \
 	host/host_main.cpp host/host_platform.cpp host/host_player.cpp \
 	src/app.cpp src/gfx.cpp src/text.cpp src/icons.cpp src/images.cpp \
-	src/ime.cpp src/http.cpp src/web_transport.cpp src/jellyfin.cpp src/json.cpp src/pad.cpp \
-	src/bigalloc.cpp src/config.cpp src/subtitles.cpp src/telemetry.cpp \
+	src/ime.cpp src/voice_search.cpp src/http.cpp src/web_transport.cpp src/jellyfin.cpp src/json.cpp src/pad.cpp \
+	src/bigalloc.cpp src/config.cpp src/bitmap_subtitles.cpp src/subtitles.cpp src/telemetry.cpp \
 	src/reporter.cpp src/trace.cpp src/crash.cpp src/warm.cpp src/ui_common.cpp src/account.cpp src/background.cpp src/dashboard.cpp src/seerr.cpp src/update.cpp src/update_package.cpp
 HOST_CXXFLAGS ?= -std=c++20 -O2 -g -DSLOPFIN_HOST -Wall -Wextra \
 	-Wno-unused-parameter -pthread $(shell pkg-config --cflags sdl2)
 HOST_LDFLAGS ?= -pthread $(shell pkg-config --libs sdl2 libcurl) -lz
+HOST_CXXFLAGS += $(VOICE_HOST_FLAGS)
+HOST_LDFLAGS += $(VOICE_HOST_LIBS)
 
 RUNTIME := runtime/libc.prx
 RUNTIME_INPUTS := tools/rebuild-libc.sh \
@@ -80,7 +108,7 @@ doctor:
 
 host: $(HOST_BIN)
 
-$(HOST_BIN): $(HOST_SRC) $(wildcard src/*.hpp host/*.hpp)
+$(HOST_BIN): $(HOST_SRC) $(wildcard src/*.hpp host/*.hpp) $(VOICE_HOST_DEPS)
 	@printf '%s\n' '==> [host] Building the Linux preview'
 	@mkdir -p -- $(@D)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $(HOST_SRC) $(HOST_LDFLAGS) -o $@
@@ -91,8 +119,10 @@ host-run: $(HOST_BIN)
 test: test-unit test-integration test-server-network
 
 .PHONY: test-playback test-updates
-test-playback: test-updates test-services
+test-playback: test-updates test-services $(VOICE_HOST_DEPS)
 	@mkdir -p build/tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -DSLOPFIN_HOST -Isrc tests/test_app_shutdown.cpp $(HOST_TEST_LDFLAGS) -o build/tests/app_shutdown_tests
+	@build/tests/app_shutdown_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -DSLOPFIN_HOST -Isrc tests/test_config.cpp src/config.cpp src/json.cpp -o build/tests/config_tests
 	@build/tests/config_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_icons.cpp src/icons.cpp -o build/tests/icon_tests
@@ -113,6 +143,8 @@ test-playback: test-updates test-services
 	@build/tests/media_bitrate_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_telemetry.cpp -o build/tests/telemetry_tests
 	@build/tests/telemetry_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_reporter.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/reporter_tests
+	@build/tests/reporter_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_negotiation.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/negotiation_tests
 	@build/tests/negotiation_tests
 	@mkdir -p build/tests
@@ -150,6 +182,14 @@ test-playback: test-updates test-services
 	@build/tests/server_address_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_search_sections.cpp -o build/tests/search_sections_tests
 	@build/tests/search_sections_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_voice_search.cpp -o build/tests/voice_search_tests
+	@build/tests/voice_search_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(VOICE_HOST_FLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_voice_search_backend.cpp src/config.cpp src/json.cpp src/web_transport.cpp src/trace.cpp src/crash.cpp host/host_platform.cpp $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/voice_search_backend_tests
+	@build/tests/voice_search_backend_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_voice_search_ui.cpp $(filter-out src/app.cpp host/host_main.cpp src/voice_search.cpp src/ime.cpp,$(HOST_SRC)) $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/voice_search_ui_tests
+	@SLOPFIN_DATA="$(CURDIR)/build/tests/voice-ui-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/voice_search_ui_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_seerr_search_ui.cpp $(filter-out src/app.cpp host/host_main.cpp src/seerr.cpp src/voice_search.cpp src/ime.cpp,$(HOST_SRC)) $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/seerr_search_ui_tests
+	@SLOPFIN_DATA="$(CURDIR)/build/tests/discover-ui-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/seerr_search_ui_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Isrc tests/test_web_native.cpp src/web_transport.cpp -o build/tests/web_native_tests
 	@build/tests/web_native_tests
 	@build/tests/web_native_tests fail-certificates
@@ -169,6 +209,10 @@ test-playback: test-updates test-services
 	@build/tests/autoplay_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_subtitle_style.cpp -o build/tests/subtitle_style_tests
 	@build/tests/subtitle_style_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_picture_subtitle_layout.cpp -o build/tests/picture_subtitle_layout_tests
+	@build/tests/picture_subtitle_layout_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_subtitle_render.cpp src/gfx.cpp src/text.cpp src/bigalloc.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2) -lz -o build/tests/subtitle_render_tests
+	@SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/subtitle_render_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_intro_metadata.cpp src/json.cpp -o build/tests/intro_metadata_tests
 	@build/tests/intro_metadata_tests
 
@@ -182,7 +226,7 @@ test-playback: test-updates test-services
 	@SLOPFIN_DATA="$(CURDIR)/build/tests/avatar-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/avatar_editor_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_session.cpp src/jellyfin.cpp src/http.cpp src/web_transport.cpp src/json.cpp src/config.cpp src/trace.cpp src/crash.cpp host/host_platform.cpp $(shell pkg-config --libs sdl2 libcurl) -lz $(HOST_TEST_LDFLAGS) -o build/tests/session_tests
 	@build/tests/session_tests
-	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_player_controls.cpp $(filter-out src/app.cpp host/host_main.cpp,$(HOST_SRC)) $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/player_controls_tests
+	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) $(VOICE_HOST_FLAGS) -Wno-unused-function -Wno-unused-parameter -pthread -DSLOPFIN_HOST $(shell pkg-config --cflags sdl2) -Isrc tests/test_player_controls.cpp $(filter-out src/app.cpp host/host_main.cpp,$(HOST_SRC)) $(HOST_LDFLAGS) $(HOST_TEST_LDFLAGS) -o build/tests/player_controls_tests
 	@rm -rf build/tests/player-controls-config
 	@SLOPFIN_DATA="$(CURDIR)/build/tests/player-controls-config" SLOPFIN_ASSETS="$(CURDIR)/assets" build/tests/player_controls_tests
 
@@ -194,6 +238,8 @@ test-updates:
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Isrc tests/test_update_package.cpp src/update_package.cpp src/json.cpp -o build/tests/update_package_tests
 	@build/tests/update_package_tests
 	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_update_transaction.c -o build/tests/update_transaction_tests
+	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_update_close.c -o build/tests/update_close_tests
+	@build/tests/update_close_tests
 
 test-integration: test-updates test-native-tools
 	@printf '%s\n' '==> [test-integration] Running host tooling integration tests'
@@ -262,19 +308,25 @@ $(STORAGE_ELF): payloads/storage/main.c $(wildcard src/update/*.h)
 	@PS5_PAYLOAD_SDK=$(CURDIR)/.deps/native/ps5-payload-sdk $(MAKE) -s -C payloads/storage slopfin-storage.elf
 	@cp payloads/storage/slopfin-storage.elf $@
 
-app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
+.deps/voice/install-ps5/lib/libwhisper.a: tools/build-voice-search.sh tools/prepare-voice-search.py | sdk-archives
+	@bash tools/build-voice-search.sh ps5
+
+.deps/voice/install-host/lib/libwhisper.a: tools/build-voice-search.sh
+	@bash tools/build-voice-search.sh host
+
+app: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF) $(VOICE_NATIVE_DEPS)
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
-ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
+ffpkg: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF) $(VOICE_NATIVE_DEPS)
 	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
 	@bash tools/build.sh Ffpkg
 
-ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
+ffpfsc: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF) $(VOICE_NATIVE_DEPS)
 	@printf '%s\n' '==> [ffpfsc] Building the app folder and compressed image'
 	@bash tools/build.sh Ffpfsc
 
-packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF)
+packages: sdk-archives $(RUNTIME) $(SANDBOX_ELF) $(UPDATE_ELF) $(PKG_UPDATE_ELF) $(STORAGE_ELF) $(VOICE_NATIVE_DEPS)
 	@printf '%s\n' '==> [packages] Building the app folder and both package formats'
 	@bash tools/build.sh All
 
@@ -383,3 +435,7 @@ test-services:
 	@build/tests/update_state_tests
 	$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -Wno-unused-function -pthread -Isrc tests/test_seerr.cpp src/json.cpp $(HOST_TEST_LDFLAGS) -o build/tests/seerr_tests
 	@build/tests/seerr_tests
+
+.PHONY: test-bitmap-subtitles
+test-bitmap-subtitles:
+	@bash tools/test-bitmap-subtitles.sh

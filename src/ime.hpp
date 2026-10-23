@@ -29,9 +29,15 @@ enum class Mode : std::uint8_t
 bool initialize() noexcept;
 void shutdown() noexcept;
 
-/* Queues a keyboard. Ignored while one is already open. */
+/* Search uses one fixed placement below the field on Home and Discover.
+   These are IME dialog coordinates; PS5 scales its panel for the output. */
+inline constexpr float kSearchKeyboardX = 1080.0f;
+inline constexpr float kSearchKeyboardY = 244.0f;
+
+/* Queues a keyboard. Ignored while one is already open. Search placement is
+   reapplied for every opening rather than supplied separately by each page. */
 void request(const std::string &initial, const std::string &title, const std::string &placeholder,
-             Mode mode, int search_top = 244) noexcept;
+             Mode mode) noexcept;
 
 /* Drives the dialog; call once per frame. */
 void poll() noexcept;

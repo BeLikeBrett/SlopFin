@@ -39,6 +39,7 @@ int main()
     check(before.colour == 0xffffffffu, "default colour is white");
     check(before.edge == Edge::outline && before.edge_px == 2,
           "default edge is the old 2 px outline");
+    check(before.edge_alpha == 0xcc, "existing edge opacity is the default");
     check(before.box_alpha == 0, "no box by default");
     check(before.bottom_margin == 132, "default height is the old 132 px");
 
@@ -53,15 +54,51 @@ int main()
     check(large.box_alpha == 0xf0, "solid box");
     check(large.bottom_margin > before.bottom_margin, "higher sits higher");
 
+    for (int edge = 0; edge < 4; ++edge)
+        for (int size = 0; size < 5; ++size)
+        {
+            Choices c;
+            c.edge = edge;
+            c.size = size;
+            c.edge_width = 0;
+            const auto fine = resolve(c);
+            c.edge_width = 2;
+            c.edge_opacity = 2;
+            const auto strong = resolve(c);
+            check(fine.edge_px > 0 && fine.edge_px < strong.edge_px,
+                  "every size offers distinct positive edge thicknesses");
+            check(strong.edge_alpha == 255, "solid edges retain full opacity");
+        }
+    Choices top;
+    top.position = 3;
+    check(resolve(top).near_top && !before.near_top, "Near the top uses a top anchor");
+
+    check(before.edge_colour == 0xff000000u && before.box_colour == 0xff0c0c10u,
+          "new colour controls preserve original edge and box tints");
+    for (int i = 0; i < kColourCount; ++i)
+    {
+        Choices c;
+        c.colour = i;
+        c.edge_colour = (i + 1) % kEffectColourCount;
+        c.background_colour = (i + 2) % kEffectColourCount;
+        c.font = i % kFontCount;
+        const auto s = resolve(c);
+        check(s.colour == kColours[i] && s.edge_colour == kEffectColours[c.edge_colour] &&
+                  s.box_colour == (c.background_colour == 0 ? 0xff0c0c10u
+                                                            : kEffectColours[c.background_colour]),
+              "text, edge and box colours resolve independently");
+        check(static_cast<int>(s.font) == c.font, "all font families resolve");
+    }
+
     /* Stored values from an older or corrupted file must still land on a real choice. */
     Choices odd;
     odd.size = 9;
     odd.colour = -1;
     const Style safe = resolve(odd);
     check(safe.pixel_size == kSizes[4], "out-of-range size wraps to a real one");
-    check(safe.colour == kColours[5], "negative colour wraps to a real one");
+    check(safe.colour == kColours[kColourCount - 1], "negative colour wraps to a real one");
 
-    check(summary(Choices{}) == "Medium  \xc2\xb7  Standard  \xc2\xb7  White  \xc2\xb7  Outline",
+    check(summary(Choices{}) == "Medium  \xc2\xb7  Noto Sans  \xc2\xb7  White  \xc2\xb7  Outline",
           "default summary");
     check(summary(big).find("Solid") != std::string::npos, "a box is mentioned when on");
 

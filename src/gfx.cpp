@@ -8,13 +8,20 @@
  */
 
 #include "gfx.hpp"
+#include "gpu_menu.hpp"
 #include "hdr.hpp"
 #include "video_scale.hpp"
+#include "video_scale_simd.hpp"
+#include "bitmap_sample.hpp"
 
 #include "bigalloc.hpp"
 #include "trace.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -27,6 +34,9 @@
 extern "C"
 {
     std::size_t sceKernelGetDirectMemorySize();
+    int sceKernelAvailableDirectMemorySize(std::int64_t search_start, std::int64_t search_end,
+                                           std::size_t alignment, std::int64_t *physical_address,
+                                           std::size_t *size);
     int sceKernelAllocateDirectMemory(std::int64_t search_start, std::int64_t search_end,
                                       std::size_t length, std::size_t alignment, int memory_type,
                                       std::int64_t *physical_address);
@@ -116,7 +126,9 @@ constexpr std::uint64_t kPixelFormatRgba8Srgb = UINT64_C(0x8000000022000000);
 constexpr int kMemoryTypeWcGarlic = 3;
 constexpr int kMapProtection = 0x33;
 constexpr std::size_t kAlignment = 0x200000;
-constexpr std::size_t kFrameCount = 2;
+/* Three, so menus can have one on screen, one waiting to flip and one being
+   written, all at once (see the flip thread). */
+constexpr std::size_t kFrameCount = 3;
 /* Nothing larger is attempted, whatever the console reports. */
 constexpr int kMaxWidth = 3840;
 constexpr int kMaxHeight = 2160;
@@ -159,6 +171,14 @@ slopfin::hdr::Compositor g_hdr_compositor;
 int g_phys_w = slopfin::gfx::kWidth;
 int g_phys_h = slopfin::gfx::kHeight;
 void *g_flip_queue = nullptr;
+/*
+ * A flip submitted but not yet seen to complete. In menus the wait for it is
+ * deferred until the next frame is about to write a display buffer, so the CPU
+ * and GPU build that frame while the display is still taking the last one.
+ * Playback keeps waiting right after each flip, as its timing was validated.
+ */
+bool g_flip_pending = false;
+std::uint64_t g_flip_wait_us = 0; /* for the frame-cost trace */
 std::int64_t g_flip_sequence = 0;
 std::array<std::uint32_t *, kFrameCount> g_frames{};
 std::size_t g_back = 0;
@@ -167,12 +187,41 @@ std::uint64_t g_surface_version = 0;
 std::array<std::uint64_t, kFrameCount> g_frame_versions{};
 
 /*
+ * Menu frames are flipped by a thread of their own. This console starts GPU
+ * work about a refresh after it is submitted (measured: 1.7 ms of work at 4K,
+ * done 16.9 ms after submission), so waiting for it here, then for the flip,
+ * cost two refreshes a frame. Instead the render thread hands each frame to
+ * the flip thread and goes on to build the next; that thread waits for the
+ * GPU, flips, and waits for the flip to show. Playback and everything else
+ * that touches the display call wait_for_flip() first, which empties it.
+ */
+struct FlipJob
+{
+    int buffer;
+    int slot; /* the GPU submission to wait for, or -1 */
+};
+std::mutex g_flips_mutex;
+std::condition_variable g_flips_changed;
+std::deque<FlipJob> g_flip_jobs;
+bool g_flipper_busy = false;
+bool g_flipper_stop = false;
+bool g_flipper_started = false;
+pthread_t g_flipper{};
+/* Buffers waiting to flip or on screen, which nothing may write. */
+std::array<bool, kFrameCount> g_buffer_held{};
+int g_on_screen = -1;
+/* The flip thread owns the display (render thread only). */
+bool g_async_flips = false;
+
+/*
  * Drawing happens in ordinary cached memory. Video memory is write-combined,
  * so reading it back to alpha-blend would be crippling; the finished frame is
  * copied out once per present, in tile order, which is the access pattern
  * write-combining is built for.
  */
 std::uint32_t *g_staging = nullptr;
+std::uint32_t *g_video_horizontal = nullptr;
+std::size_t g_video_horizontal_bytes = 0;
 /*
  * Where drawing goes. Normally the staging buffer; while a caller is composing
  * something it means to keep, a buffer of its own. Every primitive strides by
@@ -220,17 +269,33 @@ void copy_slice(std::uint32_t *frame, unsigned first_row, unsigned stride) noexc
                 frame + (static_cast<std::size_t>(by) * g_blocks_across + bx) * kTileWords;
             const unsigned origin_x = bx * kTile;
             const unsigned origin_y = by * kTile;
-            for (std::size_t word = 0; word < kTileWords; ++word)
+            for (std::size_t word = 0; word < kTileWords; word += 4)
             {
                 const unsigned x = origin_x + g_tile_x[word];
                 const unsigned y = origin_y + g_tile_y[word];
-                out[word] =
-                    (x < static_cast<unsigned>(g_phys_w) && y < static_cast<unsigned>(g_phys_h))
-                        ? (g_render_hdr
-                               ? g_staging[static_cast<std::size_t>(y) * g_phys_w + x]
-                               : slopfin::gfx::scanout_pixel(
-                                     g_staging[static_cast<std::size_t>(y) * g_phys_w + x]))
-                        : (g_render_hdr ? slopfin::hdr::pack(0, 0, 0) : 0xff000000u);
+                if (x + 3 < static_cast<unsigned>(g_phys_w) && y < static_cast<unsigned>(g_phys_h))
+                {
+                    const auto *source = g_staging + static_cast<std::size_t>(y) * g_phys_w + x;
+                    auto pixel = _mm_loadu_si128(reinterpret_cast<const __m128i *>(source));
+                    if (!g_render_hdr)
+                        pixel = _mm_or_si128(
+                            _mm_and_si128(pixel, _mm_set1_epi32(0xff00ff00u)),
+                            _mm_or_si128(
+                                _mm_slli_epi32(_mm_and_si128(pixel, _mm_set1_epi32(0xff)), 16),
+                                _mm_and_si128(_mm_srli_epi32(pixel, 16), _mm_set1_epi32(0xff))));
+                    _mm_store_si128(reinterpret_cast<__m128i *>(out + word), pixel);
+                }
+                else
+                    for (unsigned i = 0; i < 4; ++i)
+                    {
+                        const unsigned px = x + i;
+                        const auto value =
+                            px < static_cast<unsigned>(g_phys_w) &&
+                                    y < static_cast<unsigned>(g_phys_h)
+                                ? g_staging[static_cast<std::size_t>(y) * g_phys_w + px]
+                                : (g_render_hdr ? slopfin::hdr::pack(0, 0, 0) : 0xff000000u);
+                        out[word + i] = g_render_hdr ? value : slopfin::gfx::scanout_pixel(value);
+                    }
             }
         }
     }
@@ -529,6 +594,52 @@ inline std::uint32_t sample_bilinear(const slopfin::gfx::Bitmap &src, std::int64
 
 namespace slopfin::gfx
 {
+namespace
+{
+bool gpu_drawing() noexcept
+{
+    return g_target == nullptr && !g_render_hdr && gpu_menu::active();
+}
+gpu_menu::Command gpu_command(int x, int y, int w, int h, gpu_menu::Kind kind) noexcept
+{
+    gpu_menu::Command p{};
+    const auto &c = clip();
+    p.clip[0] = std::max(x, c.x0);
+    p.clip[1] = std::max(y, c.y0);
+    p.clip[2] = std::min(x + w, c.x1);
+    p.clip[3] = std::min(y + h, c.y1);
+    p.rect[0] = x;
+    p.rect[1] = y;
+    p.rect[2] = w;
+    p.rect[3] = h;
+    p.info[0] = kind;
+    p.colours[2] = 255;
+    return p;
+}
+void cpu_drawing() noexcept
+{
+    if (g_target == nullptr && gpu_menu::active())
+        gpu_menu::cpu_access(g_staging);
+}
+bool gpu_image(const Bitmap &src, int x, int y, int w, int h, int radius, std::uint8_t alpha,
+               double u, double v, double sx, double sy) noexcept
+{
+    if (!gpu_drawing() || src.hdr10)
+        return false;
+    auto p = gpu_command(x, y, w, h, gpu_menu::image);
+    p.info[2] = radius;
+    p.colours[2] = alpha;
+    p.source[0] = static_cast<float>(u);
+    p.source[1] = static_cast<float>(v);
+    p.source[2] = static_cast<float>(sx);
+    p.source[3] = static_cast<float>(sy);
+    p.texture[0] = src.width;
+    p.texture[1] = src.height;
+    return gpu_menu::draw(p, src.pixels, static_cast<std::size_t>(src.width) * src.height * 4,
+                          src.id);
+}
+} // namespace
+
 bool hdr_output() noexcept
 {
     return g_hdr_output.load(std::memory_order_acquire);
@@ -627,10 +738,16 @@ bool initialize() noexcept
      * it settles. A marker file overrides it, which is how the cost of each
      * resolution was measured.
      */
-    /* Read console output dimensions; image-sized buffers must use flexible memory. */
-    /* Render the UI at 1920x1080 to limit CPU blit bandwidth; logical layout remains unchanged. */
     g_phys_w = slopfin::gfx::kWidth;
     g_phys_h = slopfin::gfx::kHeight;
+    int output_width = 0, output_height = 0;
+    double output_hz = 0.0;
+    if (output_mode(output_width, output_height, output_hz) && output_width >= 640 &&
+        output_height >= 360 && output_width <= kMaxWidth && output_height <= kMaxHeight)
+    {
+        g_phys_w = output_width;
+        g_phys_h = output_height;
+    }
     if (std::FILE *choice = std::fopen("/data/slopfin-res", "rb"); choice != nullptr)
     {
         int w = 0;
@@ -646,8 +763,14 @@ bool initialize() noexcept
     g_blocks_across = (static_cast<unsigned>(g_phys_w) + kTile - 1) / kTile;
     g_block_rows = (static_cast<unsigned>(g_phys_h) + kTile - 1) / kTile;
     /* Each frame starts on the allocation alignment, so round its size up. */
-    const std::size_t tiled = static_cast<std::size_t>(g_blocks_across) * g_block_rows *
-                              kTileWords * sizeof(std::uint32_t);
+    // Registration may fall back from a small/unusual output to 1080p. Reserve
+    // enough space for that surface before handing the addresses to VideoOut.
+    const std::size_t fallback_words =
+        ((kWidth + kTile - 1) / kTile) * ((kHeight + kTile - 1) / kTile) * kTileWords;
+    const std::size_t tiled =
+        std::max(static_cast<std::size_t>(g_blocks_across) * g_block_rows * kTileWords,
+                 fallback_words) *
+        sizeof(std::uint32_t);
     g_frame_bytes = ((tiled + kAlignment - 1) / kAlignment) * kAlignment;
     const std::size_t memory_bytes = g_frame_bytes * kFrameCount;
     slopfin::trace::mark("gfx: surface " + std::to_string(g_phys_w) + "x" +
@@ -799,11 +922,47 @@ bool initialize() noexcept
         slopfin::trace::mark("gfx: frame " + std::to_string(i) + " cleared");
     }
     start_pool();
+    step("GPU compositor init");
+    if (!gpu_menu::initialize(g_phys_w, g_phys_h))
+    {
+        gpu_menu::shutdown();
+        trace::mark("GPU menu: unavailable, using CPU renderer");
+    }
     step("initialize done");
     g_back = 0;
     g_clip_stack[0] = Clip{0, 0, g_phys_w, g_phys_h};
     g_clip_depth = 0;
     return true;
+}
+
+void wait_for_flip() noexcept;
+
+void set_menu_acceleration(bool enabled) noexcept
+{
+    if (!enabled)
+    {
+        /* Playback takes the display back from the flip thread first. */
+        wait_for_flip();
+        gpu_menu::finish(g_staging);
+        /* What the decoder has to work with, once per playback. */
+        if (gpu_menu::active())
+        {
+            std::int64_t at = 0;
+            std::size_t largest = 0;
+            (void)sceKernelAvailableDirectMemorySize(
+                0, static_cast<std::int64_t>(sceKernelGetDirectMemorySize()), 64 * 1024, &at,
+                &largest);
+            slopfin::trace::mark("gfx: playback takes the display; largest free direct block " +
+                                 std::to_string(largest >> 20) + " MiB of " +
+                                 std::to_string(sceKernelGetDirectMemorySize() >> 20));
+        }
+    }
+    gpu_menu::enable(enabled);
+}
+
+bool menu_accelerated() noexcept
+{
+    return gpu_menu::active();
 }
 
 int physical_width() noexcept
@@ -869,8 +1028,8 @@ void rounded_rect(int x, int y, int w, int h, int radius, Color color) noexcept
 }
 
 /* Render a fading arc for the loading indicator. */
-void arc(int lcx, int lcy, int lradius, int lthickness, float from, float sweep,
-         Color color) noexcept
+void arc(int lcx, int lcy, int lradius, int lthickness, float from, float sweep, Color color,
+         bool fade_tail) noexcept
 {
     const int cx = to_physical_x(lcx);
     const int cy = to_physical_y(lcy);
@@ -888,6 +1047,21 @@ void arc(int lcx, int lcy, int lradius, int lthickness, float from, float sweep,
     if (x0 >= x1 || y0 >= y1)
         return;
 
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x0, y0, x1 - x0, y1 - y0, gpu_menu::arc);
+        p.colours[0] = color;
+        p.source[0] = from;
+        p.source[1] = sweep;
+        p.source[2] = fade_tail ? 0.0f : 1.0f;
+        p.effect[0] = static_cast<float>(cx);
+        p.effect[1] = static_cast<float>(cy);
+        p.effect[2] = radius;
+        p.effect[3] = half;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     const auto strength = static_cast<float>(color >> 24);
     std::uint32_t *frame = back_buffer();
     for (int py = y0; py < y1; ++py)
@@ -917,7 +1091,8 @@ void arc(int lcx, int lcy, int lradius, int lthickness, float from, float sweep,
                 behind -= std::floor(behind);
                 if (behind > sweep)
                     continue;
-                fade = 1.0f - behind / sweep;
+                if (fade_tail)
+                    fade = 1.0f - behind / sweep;
             }
             const auto alpha = static_cast<std::uint8_t>(strength * coverage * fade + 0.5f);
             if (alpha == 0)
@@ -956,6 +1131,20 @@ void drop_shadow(int lx, int ly, int lw, int lh, int radius, int spread,
     if (x0 >= x1 || y0 >= y1)
         return;
 
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x0, y0, x1 - x0, y1 - y0, gpu_menu::shadow);
+        p.rect[0] = x;
+        p.rect[1] = y;
+        p.rect[2] = w;
+        p.rect[3] = h;
+        p.info[2] = to_physical_size(radius);
+        p.effect[0] = static_cast<float>(reach);
+        p.colours[2] = strength;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     std::uint32_t *frame = back_buffer();
     for (int py = y0; py < y1; ++py)
     {
@@ -1006,7 +1195,7 @@ void stroke_rounded_rect(int x, int y, int w, int h, int radius, int thickness,
  * blit_cover, which crops to fill: a show's lettering has to arrive complete
  * or it is not its lettering any more.
  */
-void blit_scaled(const Bitmap &src, int lx, int ly, int lw, int lh) noexcept
+void blit_scaled(const Bitmap &src, int lx, int ly, int lw, int lh, bool alpha_correct) noexcept
 {
     if (!src.valid() || lw <= 0 || lh <= 0)
         return;
@@ -1027,6 +1216,12 @@ void blit_scaled(const Bitmap &src, int lx, int ly, int lw, int lh) noexcept
 
     const std::int64_t step_x = (static_cast<std::int64_t>(src.width) << 16) / w;
     const std::int64_t step_y = (static_cast<std::int64_t>(src.height) << 16) / h;
+    if (!alpha_correct &&
+        gpu_image(src, x, y, w, h, 0, 255, static_cast<double>(step_x) / 131072.0 - .5,
+                  static_cast<double>(step_y) / 131072.0 - .5,
+                  static_cast<double>(step_x) / 65536.0, static_cast<double>(step_y) / 65536.0))
+        return;
+    cpu_drawing();
     std::uint32_t *frame = back_buffer();
     for (int py = y0; py < y1; ++py)
     {
@@ -1034,7 +1229,9 @@ void blit_scaled(const Bitmap &src, int lx, int ly, int lw, int lh) noexcept
         const std::int64_t v = static_cast<std::int64_t>(py - y) * step_y + step_y / 2 - 32768;
         std::int64_t u = static_cast<std::int64_t>(x0 - x) * step_x + step_x / 2 - 32768;
         for (int px = x0; px < x1; ++px, u += step_x)
-            blend_pixel(row + px, sample_bilinear(src, u, v));
+            blend_pixel(row + px, alpha_correct ? bitmap_sample::alpha_bilinear(
+                                                      src.pixels, src.width, src.height, u, v)
+                                                : sample_bilinear(src, u, v));
     }
 }
 
@@ -1060,15 +1257,24 @@ void blit_video(const Bitmap &src, int x, int y, int w, int h) noexcept
  * left the HDMI output in HDR while the app went on sending 8-bit sRGB, which
  * shows on the television as a washed-out blue cast.
  */
+void wait_for_flip() noexcept;
+void stop_flipper() noexcept;
+
 void shutdown() noexcept
 {
     /* Before the frames are unregistered, so no worker is still writing into
        them. */
     stop_pool();
+    stop_flipper();
+    gpu_menu::shutdown();
+    slopfin::bigalloc::release(g_video_horizontal);
+    g_video_horizontal = nullptr;
+    g_video_horizontal_bytes = 0;
     if (g_video < 0)
         return;
     if (g_flip_queue != nullptr)
     {
+        wait_for_flip();
         (void)sceVideoOutDeleteFlipEvent(g_flip_queue, g_video);
         (void)sceKernelDeleteEqueue(g_flip_queue);
         g_flip_queue = nullptr;
@@ -1096,10 +1302,15 @@ void pop_target() noexcept
     g_target = nullptr;
 }
 
-void blit_surface_height(const std::uint32_t *pixels, int logical_height) noexcept
+void blit_surface_height(const std::uint32_t *pixels, int logical_height, std::uint64_t id) noexcept
 {
     if (pixels == nullptr)
         return;
+    const int rows = std::clamp(to_physical_y(logical_height), 0, g_phys_h);
+    if (gpu_image(Bitmap{const_cast<std::uint32_t *>(pixels), g_phys_w, rows, false, id}, 0, 0,
+                  g_phys_w, rows, 0, 255, 0, 0, 1, 1))
+        return;
+    cpu_drawing();
     struct SurfaceJob
     {
         const std::uint32_t *source;
@@ -1119,9 +1330,9 @@ void blit_surface_height(const std::uint32_t *pixels, int logical_height) noexce
         &job);
 }
 
-void blit_surface(const std::uint32_t *pixels) noexcept
+void blit_surface(const std::uint32_t *pixels, std::uint64_t id) noexcept
 {
-    blit_surface_height(pixels, kHeight);
+    blit_surface_height(pixels, kHeight, id);
 }
 
 std::size_t surface_words() noexcept
@@ -1137,14 +1348,196 @@ void reuse_frame() noexcept
     g_reuse_frame = true;
 }
 
+/* Waits for VideoOut to report a flip shown. */
+void wait_flip_event() noexcept
+{
+    alignas(8) std::uint8_t event[32]{}; // FreeBSD kevent
+    int received = 0;
+    while (sceKernelWaitEqueue(g_flip_queue, event, 1, &received, nullptr) != 0 || received != 1)
+        (void)sceVideoOutWaitVblank(g_video);
+}
+
+void *flipper(void *) noexcept
+{
+    std::unique_lock<std::mutex> lock(g_flips_mutex);
+    for (;;)
+    {
+        g_flips_changed.wait(lock, [] { return g_flipper_stop || !g_flip_jobs.empty(); });
+        if (g_flip_jobs.empty())
+            break;
+        const FlipJob job = g_flip_jobs.front();
+        g_flip_jobs.pop_front();
+        g_flipper_busy = true;
+        lock.unlock();
+        gpu_menu::wait_submission(job.slot);
+        const int submitted = sceVideoOutSubmitFlip(g_video, job.buffer, 1, ++g_flip_sequence);
+        if (submitted == 0)
+            wait_flip_event();
+        lock.lock();
+        if (submitted == 0)
+        {
+            /* What was on screen is free once this one shows. */
+            if (g_on_screen >= 0 && g_on_screen != job.buffer)
+                g_buffer_held[static_cast<std::size_t>(g_on_screen)] = false;
+            g_on_screen = job.buffer;
+        }
+        else
+            g_buffer_held[static_cast<std::size_t>(job.buffer)] = false;
+        g_flipper_busy = false;
+        g_flips_changed.notify_all();
+    }
+    return nullptr;
+}
+
+bool flipper_ready() noexcept
+{
+    if (!g_flipper_started && g_flip_queue != nullptr)
+    {
+        g_flipper_stop = false;
+        g_flipper_started = pthread_create(&g_flipper, nullptr, flipper, nullptr) == 0;
+        slopfin::trace::mark(g_flipper_started ? "gfx: flip thread started"
+                                               : "gfx: flip thread failed; flipping inline");
+    }
+    return g_flipper_started;
+}
+
+/* Lets the flip thread finish everything handed to it; the display is the
+   render thread's again. */
+void drain_flips() noexcept
+{
+    if (!g_async_flips)
+        return;
+    std::unique_lock<std::mutex> lock(g_flips_mutex);
+    g_flips_changed.wait(lock, [] { return g_flip_jobs.empty() && !g_flipper_busy; });
+    g_async_flips = false;
+}
+
+void stop_flipper() noexcept
+{
+    drain_flips();
+    if (!g_flipper_started)
+        return;
+    {
+        std::lock_guard<std::mutex> guard(g_flips_mutex);
+        g_flipper_stop = true;
+    }
+    g_flips_changed.notify_all();
+    (void)pthread_join(g_flipper, nullptr);
+    g_flipper_started = false;
+}
+
+/* Waits for the outstanding flip, if any, so no display buffer is in use. */
+void wait_for_flip() noexcept
+{
+    drain_flips();
+    if (!g_flip_pending)
+        return;
+    const auto began = std::chrono::steady_clock::now();
+    wait_flip_event();
+    g_flip_pending = false;
+    g_flip_wait_us +=
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                       std::chrono::steady_clock::now() - began)
+                                       .count());
+}
+
 void present() noexcept
 {
     if (!g_reuse_frame)
         ++g_surface_version;
     g_reuse_frame = false;
+    static std::uint64_t present_gpu_us = 0, present_flip_us = 0, present_frames = 0;
+    const auto clock_us = []
+    {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now().time_since_epoch())
+                                              .count());
+    };
+    static std::uint64_t window_began = clock_us();
+    /* Every two seconds, where a menu frame's time went (milliseconds and
+       megabytes per frame), so FPS work is measured rather than guessed. */
+    const auto account = [&]
+    {
+        if (++present_frames < 120)
+            return;
+        const gpu_menu::Stats stats = gpu_menu::take_stats();
+        const double n = static_cast<double>(present_frames);
+        const std::uint64_t now = clock_us();
+        const double fps =
+            n * 1e6 / static_cast<double>(std::max<std::uint64_t>(1, now - window_began));
+        window_began = now;
+        char line[400];
+        (void)std::snprintf(
+            line, sizeof(line),
+            "frame cost: %.1f fps, present %.1f ms, buffer wait %.1f ms, gpu busy %.1f ms, gpu "
+            "start-to-finish %.1f ms, cpu wait for gpu %.1f ms, %.0f dispatches, %.0f glyphs, "
+            "%.0f barriers, %.1f submits, %.2f cpu syncs, hashed %.1f MB, uploaded %.1f MB, read "
+            "back %.1f MB",
+            fps, present_gpu_us / n / 1000.0, present_flip_us / n / 1000.0,
+            stats.gpu_busy_us / n / 1000.0,
+            stats.latency_samples ? stats.gpu_latency_us / 1000.0 / stats.latency_samples : 0.0,
+            stats.gpu_wait_us / n / 1000.0, stats.dispatches / n, stats.glyphs / n,
+            stats.barriers / n, stats.submits / n, stats.cpu_syncs / n,
+            stats.hashed_bytes / n / 1e6, stats.uploaded_bytes / n / 1e6,
+            stats.readback_bytes / n / 1e6);
+        slopfin::trace::mark(line);
+        present_gpu_us = present_flip_us = present_frames = 0;
+    };
+
+    if (gpu_menu::active() && !g_capture_pending && flipper_ready())
+    {
+        if (!g_async_flips)
+        {
+            /* The flip thread takes over the display: the last flip made here
+               shows first, and only it is on screen. */
+            wait_for_flip();
+            g_buffer_held.fill(false);
+            if (g_on_screen >= 0)
+                g_buffer_held[static_cast<std::size_t>(g_on_screen)] = true;
+            g_async_flips = true;
+        }
+        const std::uint64_t waited = clock_us();
+        {
+            std::unique_lock<std::mutex> lock(g_flips_mutex);
+            g_flips_changed.wait(lock, [] { return !g_buffer_held[g_back]; });
+            g_buffer_held[g_back] = true;
+        }
+        const std::uint64_t began = clock_us();
+        present_flip_us += began - waited;
+        int slot = -1;
+        if (g_frame_versions[g_back] != g_surface_version)
+        {
+            slot = gpu_menu::present(g_frames[g_back], g_frame_bytes, false);
+            if (slot < 0)
+            {
+                gpu_menu::finish(g_staging);
+                copy_to_frame(g_frames[g_back]);
+            }
+            g_frame_versions[g_back] = g_surface_version;
+        }
+        __asm__ volatile("sfence" ::: "memory");
+        {
+            std::lock_guard<std::mutex> guard(g_flips_mutex);
+            g_flip_jobs.push_back({static_cast<int>(g_back), slot});
+        }
+        g_flips_changed.notify_all();
+        g_back = (g_back + 1) % kFrameCount;
+        present_gpu_us += clock_us() - began;
+        account();
+        return;
+    }
+
+    /* The buffer about to be written is the one on screen until the last flip
+       lands; in menus this is where that wait now happens. */
+    wait_for_flip();
+    const std::uint64_t present_began = clock_us();
     if (g_frame_versions[g_back] != g_surface_version)
     {
-        copy_to_frame(g_frames[g_back]);
+        if (gpu_menu::present(g_frames[g_back], g_frame_bytes, true) < 0)
+        {
+            gpu_menu::finish(g_staging);
+            copy_to_frame(g_frames[g_back]);
+        }
         g_frame_versions[g_back] = g_surface_version;
     }
     /* Finish write-combined stores before the display engine reads them. */
@@ -1158,6 +1551,7 @@ void present() noexcept
     if (g_capture_pending)
     {
         g_capture_pending = false;
+        gpu_menu::finish(g_staging);
         write_display(g_frames[g_back], "/data/slopfin-display.bin");
         (void)capture_region("/data/slopfin-frame.bin", g_capture_box[0], g_capture_box[1],
                              g_capture_box[2], g_capture_box[3], g_capture_shrink);
@@ -1180,13 +1574,16 @@ void present() noexcept
         (void)sceVideoOutWaitVblank(g_video);
         return;
     }
-    /* A vblank is not a completion fence. Wait for this port's actual flip
-       before advancing the back buffer, as the PS5 SDL backend does. */
-    alignas(8) std::uint8_t event[32]{}; // FreeBSD kevent
-    int received = 0;
-    while (sceKernelWaitEqueue(g_flip_queue, event, 1, &received, nullptr) != 0 || received != 1)
-        (void)sceVideoOutWaitVblank(g_video);
+    present_gpu_us += clock_us() - present_began;
+    g_flip_pending = true;
+    g_on_screen = static_cast<int>(g_back);
     g_back = (g_back + 1) % kFrameCount;
+    /* Playback: wait now, exactly as before. */
+    if (!gpu_menu::active())
+        wait_for_flip();
+    present_flip_us += g_flip_wait_us;
+    g_flip_wait_us = 0;
+    account();
 }
 
 /*
@@ -1595,6 +1992,7 @@ void apply_pending_output_mode() noexcept
     const bool desired = (request & 1) != 0 && !g_sdr_only && setting == SystemHdr::on;
     if (desired != g_render_hdr)
     {
+        wait_for_flip();
         VideoAttribute attribute{};
         sceVideoOutSetBufferAttribute2(
             &attribute, desired ? slopfin::hdr::kPixelFormat : kPixelFormatRgba8Srgb, 0,
@@ -1614,6 +2012,17 @@ void apply_pending_output_mode() noexcept
 void clear(Color color) noexcept
 {
     apply_pending_output_mode();
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(0, 0, g_phys_w, g_phys_h, gpu_menu::fill);
+        p.clip[0] = p.clip[1] = 0;
+        p.clip[2] = g_phys_w;
+        p.clip[3] = g_phys_h;
+        p.colours[0] = color | 0xff000000u;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     const std::uint32_t value =
         g_render_hdr ? g_hdr_compositor.blend(slopfin::hdr::pack(0, 0, 0), color | 0xff000000u)
                      : color | 0xff000000u;
@@ -1673,6 +2082,14 @@ constexpr long long kThreadAbove = 200000;
 
 void fill_rect_phys(int x, int y, int w, int h, Color color) noexcept
 {
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, w, h, gpu_menu::fill);
+        p.colours[0] = color;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     const Clip &c = clip();
     const int x0 = std::max(x, c.x0);
     const int y0 = std::max(y, c.y0);
@@ -1690,6 +2107,15 @@ void fill_rect_phys(int x, int y, int w, int h, Color color) noexcept
 
 void rounded_rect_phys(int x, int y, int w, int h, int radius, Color color) noexcept
 {
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, w, h, gpu_menu::fill);
+        p.colours[0] = color;
+        p.info[2] = radius;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     radius = std::min(radius, std::min(w, h) / 2);
     if (radius <= 0)
     {
@@ -1733,6 +2159,16 @@ void rounded_rect_phys(int x, int y, int w, int h, int radius, Color color) noex
 void stroke_rounded_rect_phys(int x, int y, int w, int h, int radius, int thickness,
                               Color color) noexcept
 {
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, w, h, gpu_menu::stroke);
+        p.colours[0] = color;
+        p.info[2] = radius;
+        p.info[3] = thickness;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     if (thickness <= 0 || w <= 0 || h <= 0)
         return;
     radius = std::min(radius, std::min(w, h) / 2);
@@ -1818,12 +2254,19 @@ void gradient_rows(void *context, unsigned first, unsigned stride) noexcept
         std::uint32_t *row = frame + static_cast<std::size_t>(py) * g_phys_w;
         if (job.radius > 0)
         {
+            const Color vertical =
+                job.columns == nullptr
+                    ? mix_colour(job.from, job.to, ((py - job.ramp_origin) * 255) / job.ramp_span)
+                    : 0;
             for (int px = job.x0; px < job.x1; ++px)
             {
                 const float coverage = rounded_coverage(px, py, job.rect_x, job.rect_y, job.rect_w,
                                                         job.rect_h, job.radius);
                 if (coverage > 0.0f)
-                    blend_pixel(row + px, at_coverage(job.columns[px - job.x0], coverage));
+                    blend_pixel(
+                        row + px,
+                        at_coverage(job.columns == nullptr ? vertical : job.columns[px - job.x0],
+                                    coverage));
             }
             continue;
         }
@@ -1853,6 +2296,17 @@ void gradient(int lx, int ly, int lw, int lh, Color from, Color to, bool vertica
     const int y = to_physical_y(ly);
     const int right = to_physical_x(lx + lw);
     const int bottom = to_physical_y(ly + lh);
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, right - x, bottom - y,
+                             vertical ? gpu_menu::gradient_y : gpu_menu::gradient_x);
+        p.colours[0] = from;
+        p.colours[1] = to;
+        p.info[2] = to_physical_size(radius);
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     const Clip &c = clip();
     GradientJob job{};
     job.x0 = std::max(x, c.x0);
@@ -1908,6 +2362,12 @@ void rounded_horizontal_gradient(int x, int y, int w, int h, int radius, Color l
     gradient(x, y, w, h, left, right, false, radius);
 }
 
+void rounded_vertical_gradient(int x, int y, int w, int h, int radius, Color top,
+                               Color bottom) noexcept
+{
+    gradient(x, y, w, h, top, bottom, true, radius);
+}
+
 void media_scrim(int height, Color tone, std::uint8_t base_alpha, int vertical_start,
                  int horizontal_width, std::uint8_t horizontal_alpha) noexcept
 {
@@ -1921,6 +2381,18 @@ void media_scrim(int height, Color tone, std::uint8_t base_alpha, int vertical_s
 
     const int vertical_y = to_physical_y(vertical_start);
     const int horizontal_end = std::clamp(to_physical_x(horizontal_width), 0, g_phys_w);
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(0, 0, g_phys_w, y1, gpu_menu::media_scrim);
+        p.colours[0] = tone & 0x00ffffffu;
+        p.colours[1] = base_alpha;
+        p.colours[2] = horizontal_alpha;
+        p.texture[0] = vertical_y;
+        p.texture[1] = horizontal_end;
+        if (gpu_menu::draw(p))
+            return;
+    }
+    cpu_drawing();
     const int horizontal_span = std::max(1, horizontal_end - 1);
     static std::array<std::uint8_t, kMaxWidth> horizontal{};
     for (int px = x0; px < x1; ++px)
@@ -1979,6 +2451,9 @@ void blit(const Bitmap &src, int lx, int ly, std::uint8_t alpha) noexcept
         return;
     const int x = to_physical_x(lx);
     const int y = to_physical_y(ly);
+    if (gpu_image(src, x, y, src.width, src.height, 0, alpha, 0, 0, 1, 1))
+        return;
+    cpu_drawing();
     const Clip &c = clip();
     const int x0 = std::max(x, c.x0);
     const int y0 = std::max(y, c.y0);
@@ -2005,11 +2480,22 @@ void blit(const Bitmap &src, int lx, int ly, std::uint8_t alpha) noexcept
     }
 }
 
-void blend_mask_physical(int x, int y, int w, int h, const unsigned char *coverage,
-                         Color color) noexcept
+void blend_mask_physical(int x, int y, int w, int h, const unsigned char *coverage, Color color,
+                         std::uint64_t id) noexcept
 {
     if (coverage == nullptr || w <= 0 || h <= 0)
         return;
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, w, h, gpu_menu::mask);
+        p.colours[0] = color;
+        p.texture[0] = w;
+        p.texture[1] = h;
+        p.texture[2] = 1;
+        if (gpu_menu::draw(p, coverage, static_cast<std::size_t>(w) * h, id))
+            return;
+    }
+    cpu_drawing();
     const Clip &c = clip();
     const int x0 = std::max(x, c.x0);
     const int y0 = std::max(y, c.y0);
@@ -2036,10 +2522,22 @@ void blend_mask_physical(int x, int y, int w, int h, const unsigned char *covera
 }
 
 void blend_mask_gradient_physical(int x, int y, int w, int h, const unsigned char *coverage,
-                                  Color from, Color to) noexcept
+                                  Color from, Color to, std::uint64_t id) noexcept
 {
     if (coverage == nullptr || w <= 0 || h <= 0)
         return;
+    if (gpu_drawing())
+    {
+        auto p = gpu_command(x, y, w, h, gpu_menu::mask_gradient);
+        p.colours[0] = from;
+        p.colours[1] = to;
+        p.texture[0] = w;
+        p.texture[1] = h;
+        p.texture[2] = 1;
+        if (gpu_menu::draw(p, coverage, static_cast<std::size_t>(w) * h, id))
+            return;
+    }
+    cpu_drawing();
     const Clip &c = clip();
     const int x0 = std::max(x, c.x0);
     const int y0 = std::max(y, c.y0);
@@ -2074,6 +2572,7 @@ void blend_mask_gradient_physical(int x, int y, int w, int h, const unsigned cha
 
 void blit_video_phys(const Bitmap &src, int x, int y, int w, int h) noexcept
 {
+    cpu_drawing();
     if (!src.valid() || w <= 0 || h <= 0)
         return;
     const Clip &c = clip();
@@ -2100,6 +2599,65 @@ void blit_video_phys(const Bitmap &src, int x, int y, int w, int h) noexcept
         cached_x = x;
     }
 
+    /* Compute horizontal filtering once per source row, then filter vertically.
+       This keeps 720p and other non-2x sources fast on a native 4K surface. */
+    const bool exact_double = w == 2 * src.width && h == 2 * src.height;
+    if (!exact_double && (w != src.width || h != src.height) && (w > kWidth || h > kHeight) &&
+        src.hdr10 == g_render_hdr && x0 == x && y0 == y && x1 == x + w && y1 == y + h &&
+        w <= kMaxWidth && src.height <= kMaxHeight)
+    {
+        const std::size_t bytes = static_cast<std::size_t>(w) * src.height * sizeof(std::uint32_t);
+        if (bytes > g_video_horizontal_bytes)
+        {
+            auto *larger = static_cast<std::uint32_t *>(slopfin::bigalloc::allocate(bytes));
+            if (larger)
+            {
+                slopfin::bigalloc::release(g_video_horizontal);
+                g_video_horizontal = larger;
+                g_video_horizontal_bytes = bytes;
+            }
+        }
+        if (g_video_horizontal && bytes <= g_video_horizontal_bytes)
+        {
+            struct ScaleJob
+            {
+                const Bitmap *src;
+                const video_scale::Sample *columns;
+                std::uint32_t *horizontal;
+                int x, y, w, h;
+            };
+            ScaleJob job{&src, columns.data(), g_video_horizontal, x, y, w, h};
+            run_rows(
+                [](void *context, unsigned first, unsigned stride)
+                {
+                    const auto &v = *static_cast<const ScaleJob *>(context);
+                    for (int sy = static_cast<int>(first); sy < v.src->height;
+                         sy += static_cast<int>(stride))
+                        video_scale::horizontal_line(
+                            v.src->pixels + static_cast<std::size_t>(sy) * v.src->width, v.columns,
+                            v.w, v.horizontal + static_cast<std::size_t>(sy) * v.w, v.src->hdr10);
+                },
+                &job);
+            run_rows(
+                [](void *context, unsigned first, unsigned stride)
+                {
+                    const auto &v = *static_cast<const ScaleJob *>(context);
+                    auto *frame = back_buffer();
+                    for (int py = static_cast<int>(first); py < v.h; py += static_cast<int>(stride))
+                    {
+                        const auto ys = video_scale::axis(py, v.src->height, v.h);
+                        video_scale::vertical_line(
+                            v.horizontal + static_cast<std::size_t>(ys.first) * v.w,
+                            v.horizontal + static_cast<std::size_t>(ys.second) * v.w, v.w,
+                            ys.weight, frame + static_cast<std::size_t>(py + v.y) * g_phys_w + v.x,
+                            v.src->hdr10);
+                    }
+                },
+                &job);
+            return;
+        }
+    }
+
     /*
      * A picture fills the screen, so at 4K this is eight million writes every
      * frame. Handed round the pool it is a quarter of that per core.
@@ -2116,17 +2674,53 @@ void blit_video_phys(const Bitmap &src, int x, int y, int w, int h) noexcept
         int x1;
         int y1;
         bool unscaled;
-    } job{&src, columns.data(),
-          x,    y,
-          h,    x0,
-          y0,   x1,
-          y1,   w == src.width && h == src.height && src.hdr10 == g_render_hdr};
+        bool double_size;
+    } job{&src,
+          columns.data(),
+          x,
+          y,
+          h,
+          x0,
+          y0,
+          x1,
+          y1,
+          w == src.width && h == src.height && src.hdr10 == g_render_hdr,
+          w == 2 * src.width && h == 2 * src.height && src.hdr10 == g_render_hdr && x0 == x &&
+              y0 == y && x1 == x + w && y1 == y + h};
 
     run_rows(
         [](void *context, unsigned first, unsigned stride)
         {
             const VideoJob &v = *static_cast<const VideoJob *>(context);
             std::uint32_t *frame = back_buffer();
+            if (v.double_size)
+            {
+                alignas(16) std::uint32_t top[kMaxWidth], bottom[kMaxWidth];
+                const int width = v.src->width * 2;
+                for (int sy = static_cast<int>(first); sy < v.src->height;
+                     sy += static_cast<int>(stride))
+                {
+                    video_scale::double_line(v.src->pixels +
+                                                 static_cast<std::size_t>(sy) * v.src->width,
+                                             v.src->width, top, v.src->hdr10);
+                    if (sy == 0)
+                        std::copy_n(top, width,
+                                    frame + static_cast<std::size_t>(v.y) * g_phys_w + v.x);
+                    auto *line =
+                        frame + static_cast<std::size_t>(v.y + 2 * sy + 1) * g_phys_w + v.x;
+                    if (sy + 1 == v.src->height)
+                        std::copy_n(top, width, line);
+                    else
+                    {
+                        video_scale::double_line(v.src->pixels + static_cast<std::size_t>(sy + 1) *
+                                                                     v.src->width,
+                                                 v.src->width, bottom, v.src->hdr10);
+                        video_scale::double_rows(top, bottom, width, line, line + g_phys_w,
+                                                 v.src->hdr10);
+                    }
+                }
+                return;
+            }
             for (int py = v.y0 + static_cast<int>(first); py < v.y1; py += static_cast<int>(stride))
             {
                 const auto ys = slopfin::video_scale::axis(py - v.y, v.src->height, v.h);
@@ -2269,6 +2863,12 @@ void blit_cover_phys(const Bitmap &src, int x, int y, int w, int h, int radius,
     job.origin_u = static_cast<std::int64_t>(offset_x) * job.step_x + job.step_x / 2 - 32768;
     job.origin_v = static_cast<std::int64_t>(offset_y) * job.step_y + job.step_y / 2 - 32768;
 
+    if (gpu_image(src, x, y, w, h, job.radius, alpha, static_cast<double>(job.origin_u) / 65536.0,
+                  static_cast<double>(job.origin_v) / 65536.0,
+                  static_cast<double>(job.step_x) / 65536.0,
+                  static_cast<double>(job.step_y) / 65536.0))
+        return;
+    cpu_drawing();
     /*
      * Above this many pixels the blit is handed to the row pool. The figure
      * was chosen when a poster was the only thing drawn at that size and the
@@ -2311,6 +2911,13 @@ void blit_crop(const Bitmap &src, int source_x, int source_y, int source_side, i
     job.step_y = (static_cast<std::int64_t>(source_side) << 16) / job.h;
     job.origin_u = (static_cast<std::int64_t>(source_x) << 16) + job.step_x / 2 - 32768;
     job.origin_v = (static_cast<std::int64_t>(source_y) << 16) + job.step_y / 2 - 32768;
+    if (gpu_image(src, job.x, job.y, job.w, job.h, job.radius, alpha,
+                  static_cast<double>(job.origin_u) / 65536.0,
+                  static_cast<double>(job.origin_v) / 65536.0,
+                  static_cast<double>(job.step_x) / 65536.0,
+                  static_cast<double>(job.step_y) / 65536.0))
+        return;
+    cpu_drawing();
     if (static_cast<std::int64_t>(job.x1 - job.x0) * (job.y1 - job.y0) > g_cover_thread_above)
         run_rows(cover_rows, &job);
     else
@@ -2397,6 +3004,7 @@ void benchmark(const char *path) noexcept
     const std::uint64_t cards_pooled_us = picture.pixels == nullptr ? 0 : time_it(twelve_cards);
     g_cover_thread_above = saved_threshold;
 
+    wait_for_flip();
     const std::uint64_t tiles_us = time_it([] { copy_to_frame(g_frames[g_back]); });
 
     if (picture.pixels != nullptr)

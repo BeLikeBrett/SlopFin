@@ -11,7 +11,9 @@
 #include "icons.hpp"
 #include "pad.hpp"
 #include "ime.hpp"
+#include "voice_search.hpp"
 #include "player.hpp"
+#include "reporter.hpp"
 #include "telemetry.hpp"
 #include "text.hpp"
 #include "trace.hpp"
@@ -21,7 +23,6 @@
 #include <cstdint>
 
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
-extern "C" int sceLncUtilKillLocalProcess(const char *reason);
 
 namespace
 {
@@ -116,15 +117,21 @@ int main()
         slopfin::pad::poll();
         slopfin::app::note_pad(slopfin::app::now_us() - pad_started);
         slopfin::app::frame();
-        if (slopfin::app::exit_requested())
+        if (slopfin::app::exit_requested() || slopfin::crash::close_requested())
         {
+            slopfin::voice_search::shutdown();
             slopfin::ime::shutdown();
             slopfin::player::stop();
+            (void)slopfin::reporter::flush(2000);
             slopfin::gfx::shutdown();
             slopfin::crash::finish();
             slopfin::trace::mark("app: display released, stopping process");
-            (void)sceLncUtilKillLocalProcess("SlopFin reload");
-            park(); // Termination may return before ShellCore removes the process.
+            /* Self-exit is forbidden by the sandbox, and the launcher RPC can
+               block. The privileged helper closes only this verified title,
+               after receiving our acknowledgement that output is released. */
+            if (!slopfin::update::finish_close())
+                slopfin::trace::mark("app: close helper unavailable; close from the PS5 menu");
+            park();
         }
         const std::uint64_t before = slopfin::app::now_us();
         slopfin::gfx::present();

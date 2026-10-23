@@ -77,6 +77,14 @@ fself_magic=0x1D3D154F
 bash "$root/tools/validate-assets.sh" "$root/sce_sys"
 
 sdk_root="$root/.deps/native/ps5-payload-sdk"
+if [[ ${GPU_MENU:-0} == 1 ]]; then
+    sdk_root="$root/.deps/gpu/ps5-payload-sdk"
+    [[ -x $sdk_root/bin/prospero-lld && -f $root/.deps/gpu/radv-release/lib/libvulkan_radeon.ps5.a ]] || {
+        echo "GPU dependencies missing; run tools/setup-gpu-menu.sh" >&2; exit 2;
+    }
+    mkdir -p "$root/build/gpu"
+    glslangValidator -V --target-env vulkan1.0 --vn slopfin_menu_shader "$root/shaders/menu.comp" -o "$root/build/gpu/menu_shader.hpp"
+fi
 zlib_root="$root/.deps/native/zlib/root"
 zlib_archive=$(find "$zlib_root" -type f -name libz.a -print -quit)
 cxx=${CXX:-}
@@ -222,11 +230,20 @@ for archive in "${archives[@]}"; do
     [[ $archive =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*\.a$ && -f $root/$archive ]] || {
         echo "invalid static archive: $archive" >&2; exit 2;
     }
+    if [[ ${GPU_MENU:-0} == 1 && $archive == .deps/native/cxx/* ]]; then continue; fi
     link_inputs+=("$root/$archive")
 done
 if (( ${#pacbrew_libs[@]} > 0 )); then
     link_inputs+=(--start-group "${pacbrew_libs[@]}" --end-group)
 fi
+if [[ ${GPU_MENU:-0} == 1 ]]; then
+    source "$root/tools/gpu-radv-link.sh"
+    radv_link_recipe "$root" "$sdk_root" "$root/.deps/gpu/radv-release/lib/libvulkan_radeon.ps5.a"
+    "$sdk_root/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
+        --version-script "$native/app-symbols.map" --exclude-libs=ALL -e _start \
+        -o "$build/llvm-pie.elf" "${link_inputs[@]}" "${import_stub_objects[@]}" \
+        "${radv_link_inputs[@]}" --as-needed "$sdk_root"/target/lib/*.so
+else
 # SlopFin: the SDK lib directory must be searchable so the dependent-library
 # specifiers embedded in libcxxabi.a and libunwind.a (pthread) resolve.
 "$sdk_root/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr \
@@ -234,6 +251,7 @@ fi
     -L "$sdk_root/target/lib" \
     -e _start -o "$build/llvm-pie.elf" "${link_inputs[@]}" "${import_stub_objects[@]}" \
     --as-needed "$sdk_root"/target/lib/*.so
+fi
 "$tool" link --in "$build/llvm-pie.elf" --out "$build/eboot.elf" \
     --stub-dir "$sdk_root/target/lib" --module-sdk "$module_sdk" \
     "${import_stub_args[@]}" \
@@ -251,7 +269,7 @@ for asset in icon0.png pic0.dds pic1.dds snd0.at9; do
 done
 [[ ! -d $root/assets ]] || cp -a "$root/assets" "$app/assets"
 cp "$root/LICENSE" "$root/NOTICE.md" "$app/"
-if [[ ${SOFTWARE_AUDIO:-0} == 1 || " ${APP_DEFINITIONS:-} " == *" SLOPFIN_SOFTWARE_AUDIO "* ]]; then
+if [[ ${SOFTWARE_AUDIO:-0} == 1 || " ${APP_DEFINITIONS:-} " == *" SLOPFIN_SOFTWARE_AUDIO "* || " ${APP_DEFINITIONS:-} " == *" SLOPFIN_BITMAP_SUBTITLES "* ]]; then
     audio_license="$root/.deps/audio/ffmpeg-9.0.1/COPYING.LGPLv2.1"
     [[ -f $audio_license ]] || { echo "Missing optional FFmpeg license: rebuild the software audio dependency" >&2; exit 2; }
     cp "$audio_license" "$app/assets/licenses/FFmpeg-LGPL-2.1.txt"

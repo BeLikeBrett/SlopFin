@@ -61,6 +61,8 @@ void frame(int frames) noexcept;
 
 /* The session ended the way it was meant to. */
 void finish() noexcept;
+/* A normal termination signal asks the render loop to release outputs first. */
+bool close_requested() noexcept;
 
 /* Development aid: prove the whole path end to end by faulting on purpose. */
 void self_test(int kind) noexcept;

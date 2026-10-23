@@ -33,7 +33,20 @@ and replace `/data/homebrew/PPSA99001` through your loader's normal installation
 method. Keep `/data/slopfin/config.json`; it contains your sign-in and settings.
 Future published folder releases can be installed from inside the app.
 
+Some older folder builds can stall while asking the launcher to terminate
+SlopFin. The installer then reports **The app did not close** and leaves the
+installed files unchanged. Close SlopFin using the PS5 system menu and replace
+the complete folder once, keeping `/data/slopfin/config.json`. Version 2.00
+removes the blocking termination call. An already-installed 1.x executable
+cannot gain that fix until it has been replaced.
+
 ## Release source and verification
+
+The 2.00 release keeps the existing title ID and saved-data location. Its
+release gate stages the actual download using the app's archive reader and
+checks that the ZIP still fits the limits of installed 1.x updaters. Tests
+cover discovery across the major-version change, legacy preferences and
+rollback with a simulated failure at every file replacement.
 
 The source is [BeLikeBrett/SlopFin releases](https://github.com/BeLikeBrett/SlopFin/releases).
 The checker includes public preview releases and displays their Preview label.
@@ -54,6 +67,13 @@ rejected. Compressed downloads are capped at 32 MiB, extracted contents at
 The download and staged files live under `/data/slopfin/update`. The helper
 checks that the running app matches the installed folder, verifies staged
 files again and backs up the previous files before asking the app to close.
+In **2.00**, the app acknowledges that playback and display cleanup have finished.
+The helper checks that acknowledgement against the original process ID and title
+before asking the system to close it. It still waits for the process and title
+to disappear before replacing any files. This avoids a launcher termination call
+that could block inside older apps. The same handoff handles developer-requested
+normal closure.
+
 It replaces individual files atomically, leaving the executable and version
 metadata until last. An installation error restores files already replaced.
 Sign-in, preferences, subtitle offsets and per-series autoplay settings live

@@ -125,6 +125,19 @@ int main(int argc, char **argv)
     assert(select_release(short_feed, "01.000.001").version.empty());
     assert(version_number("1.08") == version_number("01.000.008"));
     assert(version_number("1.10") > version_number("1.09"));
+    assert(display_version("02.000.000") == "2.00");
+    auto major_feed = short_feed;
+    for (auto at = major_feed.find("1.01"); at != std::string::npos; at = major_feed.find("1.01"))
+        major_feed.replace(at, 4, "2.00");
+    for (auto installed : {"01.000.008", "1.08", "1.09", "1.10", "1.11", "1.12", "1.13", "1.14",
+                           "1.15", "1.16", "1.17"})
+    {
+        const auto upgrade = select_release(major_feed, installed);
+        assert(upgrade.version == "02.000.000" &&
+               upgrade.url.ends_with("/2.00/SlopFin-2.00-folder.zip"));
+    }
+    assert(select_release(major_feed, "02.000.000").version.empty());
+    assert(select_release(major_feed, "2.01").version.empty());
     assert(select_release(feed, "Unknown").version.empty());
     auto with_notes = feed;
     with_notes.insert(

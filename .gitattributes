@@ -20,3 +20,11 @@ tooling/prospero-clang18 text eol=lf
 *.at9 binary
 *.prx binary
 *.bin binary
+
+# Third-party source should not dominate GitHub language statistics.
+vendor/** linguist-vendored
+docs/** linguist-documentation
+*.ttf binary
+
+# Preserve upstream license text, including its original line-end spacing.
+assets/OFL-*.txt whitespace=-blank-at-eol

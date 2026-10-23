@@ -71,6 +71,8 @@ void open() noexcept;
 /* Arrives on the Discover tab: opens it the first time, and afterwards keeps
    the category and position that were left, refreshing what may be stale. */
 void enter() noexcept;
+/* Release this tab's microphone/result when navigating elsewhere. */
+void leave() noexcept;
 
 /* What Discover's sidebar lists: the catalogue's categories, then requests. */
 inline constexpr int kSectionCount = 6;

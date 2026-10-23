@@ -193,12 +193,20 @@ void load() noexcept
                 c.font = static_cast<int>(look->num("font", c.font));
                 c.bold = static_cast<int>(look->num("bold", c.bold));
                 c.colour = static_cast<int>(look->num("colour", c.colour));
+                c.edge_colour = static_cast<int>(look->num("edgeColour", c.edge_colour));
+                c.background_colour =
+                    static_cast<int>(look->num("backgroundColour", c.background_colour));
                 c.edge = static_cast<int>(look->num("edge", c.edge));
+                c.edge_width = static_cast<int>(look->num("edgeWidth", c.edge_width));
+                c.edge_opacity = static_cast<int>(look->num("edgeOpacity", c.edge_opacity));
                 c.background = static_cast<int>(look->num("background", c.background));
                 c.box = static_cast<int>(look->num("box", c.box));
                 c.spacing = static_cast<int>(look->num("spacing", c.spacing));
                 c.position = static_cast<int>(look->num("position", c.position));
                 c.picture = static_cast<int>(look->num("picture", c.picture));
+                c.picture_size = static_cast<int>(look->num("pictureSize", c.picture_size));
+                c.picture_position =
+                    static_cast<int>(look->num("picturePosition", c.picture_position));
             }
             if (const json::Value *play = root->find("autoplay"); play != nullptr)
             {
@@ -275,10 +283,16 @@ bool save() noexcept
             "  \"subtitleLook\": {\"size\": " + std::to_string(c.size) +
             ", \"font\": " + std::to_string(c.font) + ", \"bold\": " + std::to_string(c.bold) +
             ", \"colour\": " + std::to_string(c.colour) + ", \"edge\": " + std::to_string(c.edge) +
+            ", \"edgeColour\": " + std::to_string(c.edge_colour) +
+            ", \"backgroundColour\": " + std::to_string(c.background_colour) +
+            ", \"edgeWidth\": " + std::to_string(c.edge_width) +
+            ", \"edgeOpacity\": " + std::to_string(c.edge_opacity) +
             ", \"background\": " + std::to_string(c.background) +
             ", \"box\": " + std::to_string(c.box) + ", \"spacing\": " + std::to_string(c.spacing) +
             ", \"position\": " + std::to_string(c.position) +
-            ", \"picture\": " + std::to_string(c.picture) + "},\n";
+            ", \"picture\": " + std::to_string(c.picture) +
+            ", \"pictureSize\": " + std::to_string(c.picture_size) +
+            ", \"picturePosition\": " + std::to_string(c.picture_position) + "},\n";
     }
     {
         const auto &c = g_settings.autoplay_look;

@@ -495,6 +495,8 @@ void install() noexcept
         {
             const std::string folder = base();
             std::string payload;
+            unlink((folder + "/close-only").c_str());
+            unlink((folder + "/closed").c_str());
             if (app_files::installed_package())
             {
                 /* The helper installs this title's package over itself. It
@@ -577,5 +579,28 @@ void install() noexcept
 bool restart_requested() noexcept
 {
     return restart.load();
+}
+bool finish_close() noexcept
+{
+#ifdef SLOPFIN_HOST
+    return true;
+#else
+    const std::string folder = base();
+    const std::string pid = std::to_string(getpid());
+    if (!save(folder + "/closed", pid + "\n"))
+        return false;
+    /* An update helper is already waiting for this acknowledgement. */
+    if (restart.load() || access((folder + "/install.lock").c_str(), F_OK) == 0)
+        return true;
+    /* Tooling's ordinary quit uses the same helper in close-only mode. */
+    char executable[65], param[65];
+    if (application_hash("eboot.bin", executable) < 0 ||
+        application_hash("sce_sys/param.json", param) < 0 ||
+        !save(folder + "/source", std::string(executable) + "\n" + param + "\n") ||
+        !save(folder + "/pid", pid) || !save(folder + "/close-only", pid + "\n"))
+        return false;
+    const auto payload = small_application_file("assets/slopfin-update.bin", 1024 * 1024);
+    return !payload.empty() && http::send_bytes("127.0.0.1", 9021, payload);
+#endif
 }
 } // namespace slopfin::update

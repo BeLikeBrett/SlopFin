@@ -76,6 +76,9 @@ struct Bitmap
     int width = 0;
     int height = 0;
     bool hdr10 = false;
+    /* Unique to one immutable picture, so the GPU cache can find it without
+       reading it; 0 means its contents identify it instead. */
+    std::uint64_t id = 0;
 
     [[nodiscard]] bool valid() const noexcept
     {
@@ -85,6 +88,9 @@ struct Bitmap
 
 /* Opens VideoOut and allocates both frames. Call once. */
 bool initialize() noexcept;
+/* Native-resolution GPU menus; playback keeps its validated compositor. */
+void set_menu_acceleration(bool enabled) noexcept;
+bool menu_accelerated() noexcept;
 
 /*
  * Every core this process may run on, as a bit mask, or 0 where that cannot be
@@ -153,9 +159,11 @@ void pop_target() noexcept;
 std::size_t surface_words() noexcept;
 
 /* Copies a whole composed surface over the frame being drawn. */
-void blit_surface(const std::uint32_t *pixels) noexcept;
+void blit_surface(const std::uint32_t *pixels, std::uint64_t id = 0) noexcept;
 /* Copy only the top `logical_height` rows of a full-stride cached surface. */
-void blit_surface_height(const std::uint32_t *pixels, int logical_height) noexcept;
+/* `id` names this exact composition of the surface (see Bitmap::id). */
+void blit_surface_height(const std::uint32_t *pixels, int logical_height,
+                         std::uint64_t id = 0) noexcept;
 
 /* Publishes the drawn frame and waits for vblank. */
 void present() noexcept;
@@ -172,7 +180,8 @@ void stroke_rounded_rect(int x, int y, int w, int h, int radius, int thickness,
  * head sits, in turns clockwise from twelve o'clock; `sweep` is how far the
  * tail runs behind it, and a sweep of one draws a plain ring.
  */
-void arc(int cx, int cy, int radius, int thickness, float from, float sweep, Color color) noexcept;
+void arc(int cx, int cy, int radius, int thickness, float from, float sweep, Color color,
+         bool fade_tail = true) noexcept;
 
 /*
  * A soft shadow under a card, built from rings that fade outward. The offset
@@ -185,6 +194,8 @@ void vertical_gradient(int x, int y, int w, int h, Color top, Color bottom) noex
 void horizontal_gradient(int x, int y, int w, int h, Color left, Color right) noexcept;
 void rounded_horizontal_gradient(int x, int y, int w, int h, int radius, Color left,
                                  Color right) noexcept;
+void rounded_vertical_gradient(int x, int y, int w, int h, int radius, Color top,
+                               Color bottom) noexcept;
 /* One-pass version of the common media-page scrim: a constant dim plus a
    vertical fade to opaque and a horizontal fade from the left, all using the
    same RGB tone. Visually equivalent to three separate source-over passes but
@@ -210,19 +221,23 @@ void blit(const Bitmap &src, int x, int y, std::uint8_t alpha) noexcept;
  * The whole image scaled into the box, alpha and all. blit_cover crops to
  * fill; this one never crops, so lettering arrives complete.
  */
-void blit_scaled(const Bitmap &src, int x, int y, int w, int h) noexcept;
+/* Alpha-correct filtering keeps light bitmap subtitle edges from darkening. */
+void blit_scaled(const Bitmap &src, int x, int y, int w, int h,
+                 bool alpha_correct = false) noexcept;
 
 /*
  * Blends a coverage mask that is already positioned and sized in physical
  * pixels. Glyphs and icons are rasterised at the surface's real size, so
- * scaling their masks again here would undo exactly that.
+ * scaling their masks again here would undo exactly that. A nonzero `id`
+ * names the mask's contents for good (a glyph at one size and weight), so the
+ * GPU uploads it once and draws it in a batch with its neighbours.
  */
-void blend_mask_physical(int x, int y, int w, int h, const unsigned char *coverage,
-                         Color color) noexcept;
+void blend_mask_physical(int x, int y, int w, int h, const unsigned char *coverage, Color color,
+                         std::uint64_t id = 0) noexcept;
 
 /* The same, with the colour swept diagonally across the mask. */
 void blend_mask_gradient_physical(int x, int y, int w, int h, const unsigned char *coverage,
-                                  Color from, Color to) noexcept;
+                                  Color from, Color to, std::uint64_t id = 0) noexcept;
 
 /*
  * Development aid: asks for a dump of the next frame: a crop in physical pixels at its true

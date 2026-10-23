@@ -1,76 +1,86 @@
 # SlopFin
 
-**An unofficial Jellyfin client for jailbroken PS5 consoles.**
+**Jellyfin on PlayStation 5.** An unofficial client for jailbroken consoles.
 
 [![Build](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml/badge.svg)](https://github.com/BeLikeBrett/SlopFin/actions/workflows/tooling.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-[Downloads](https://github.com/BeLikeBrett/SlopFin/releases) ·
-[Install](docs/GETTING_STARTED.md) · [Controls](docs/CONTROLS.md) ·
+[Download](https://github.com/BeLikeBrett/SlopFin/releases) ·
+[Get started](docs/GETTING_STARTED.md) · [Controls](docs/CONTROLS.md) ·
 [Compatibility](docs/COMPATIBILITY.md) ·
 [Report a bug](https://github.com/BeLikeBrett/SlopFin/issues/new/choose)
 
 ![SlopFin Home on PS5](docs/images/home-console.png)
 
-SlopFin plays movies and shows from your own Jellyfin server, using the PS5's
-video hardware. It has been tested on one console, on firmware 8.20; other
-firmware, TVs and receivers may behave differently.
+Browse your library, resume a movie, and move straight into the next episode
+with DualSense controls. SlopFin connects to your own Jellyfin server and uses
+the PS5's video decoder for supported H.264 and HEVC media.
 
-## Features
+## Made for the couch
 
-- **DualSense controls:** tap or hold L2/R2 to seek and scrub, Square to skip
-  intros, L1/R1 to switch between Home and Discover.
-- **Plays most files directly:** MKV and MP4 with H.264 or HEVC video stream
-  straight from your server, without it converting them.
-- **Sound to your TV or receiver:** Dolby and DTS go to your TV or receiver
-  when it supports them; otherwise the PS5 decodes them.
-- **Discover and requests:** connect Seerr or Jellyseerr to find and request
-  movies and shows. [Set up Discover](docs/DISCOVER.md).
-- **Autoplay, profiles and a server dashboard** for administrators.
+- **A native 4K interface**, with GPU-accelerated menus, smooth scrolling and
+  controller focus throughout Home, Discover, media pages and Settings.
+- **Direct playback** of supported MKV and MP4 files, including 4K and HDR10.
+  Compatible Dolby Vision sources play from their HDR10 base layer.
+- **Flexible sound.** Supported Dolby and DTS formats go to your TV or receiver;
+  the PS5 decodes other supported tracks, with Jellyfin conversion as a fallback.
+- **Subtitles you can adjust.** Six text font families, separate text, outline
+  and background colours, and native PGS/DVD overlays with size and placement
+  controls. [Subtitle settings](docs/SUBTITLES.md).
+- **Built-in autoplay and intro skipping.** Intro skipping uses standard server
+  timestamps. [Set up intro markers](docs/INTRO_SKIPPING.md).
+- **Local voice search.** Speak a title using your PS5 microphone after a one-time
+  model download, or type with the keyboard. [Voice controls](docs/VOICE_SEARCH.md).
+- **Discover and requests** through Seerr or Jellyseerr, alongside profiles,
+  progress tracking and an administrator dashboard. [Connect Discover](docs/DISCOVER.md).
 
-| Sign in | Discover | Requests |
-| --- | --- | --- |
-| ![Sign-in page on PS5](docs/images/signin-console.png) | ![Discover catalog](docs/images/discover-preview.png) | ![Requests on PS5](docs/images/requests-console.png) |
-
-## What plays
-
-- **Video:** H.264 and HEVC, including 4K and HDR10. Dolby Vision profiles 7
-  and 8.1 play as HDR10; the PS5 does not output Dolby Vision itself.
-- **Sound:** AAC, MP3, AC-3, E-AC-3, DTS and TrueHD, decoded on the PS5 or by
-  your TV or receiver.
-- **Anything else** (other codecs, AVI and so on) is converted by your Jellyfin
-  server first, so how well it plays depends on your server.
-
-Details and known limits are in [Compatibility](docs/COMPATIBILITY.md).
+![Media page with Resume progress and controller actions](docs/images/media-console.png)
 
 ## Install
 
-1. Download the **folder ZIP** from
-   [Releases](https://github.com/BeLikeBrett/SlopFin/releases).
-2. Copy the `PPSA99001` folder to your homebrew loader's folder, usually
-   `/data/homebrew/`.
-3. Open SlopFin, enter your Jellyfin server address and sign in.
+You need a jailbroken PS5, a compatible homebrew loader and a Jellyfin server.
 
-You need a jailbroken PS5 and your own Jellyfin server.
-[Setup details](docs/GETTING_STARTED.md) · [Help](docs/TROUBLESHOOTING.md)
+1. Download the **folder ZIP** from [Releases](https://github.com/BeLikeBrett/SlopFin/releases).
+2. Extract it and copy the complete `PPSA99001` folder to your loader's app
+   directory, usually `/data/homebrew/`.
+3. Open SlopFin and sign in using Quick Connect or your Jellyfin account.
 
-## Updates
+[Installation guide](docs/GETTING_STARTED.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-**Settings → Updates** checks GitHub and installs new versions in the app. It
-needs ELF Loader (`elfldr`, port 9021). [Update guide](docs/UPDATES.md)
+## Update
 
-## Not supported yet
+Open **Settings → Updates** to download and install a release. Folder updates
+require ELF Loader (`elfldr`, port 9021). Keep `/data/slopfin/config.json` when
+replacing an installation manually to preserve your account and preferences.
+[Update and recovery guide](docs/UPDATES.md).
 
-Music, audiobooks, books, photos and live TV; IPv6; self-signed HTTPS
-certificates.
+## Compatibility
 
-## Contribute
+Console testing currently centres on firmware **8.20**. Codec support,
+firmware, loaders, TVs and receivers can affect playback; see the
+[compatibility guide](docs/COMPATIBILITY.md) for tested paths and limits.
+SlopFin does not output native Dolby Vision. Unsupported media can use
+Jellyfin's conversion path.
 
-See [contributing](.github/CONTRIBUTING.md) and the
-[developer guide](docs/development/README.md).
+Music, audiobooks, books, photos and live TV are not supported. Connections
+support IPv4, DNS and verified HTTPS; IPv6 and self-signed certificates are
+not currently supported.
+
+## Development
+
+[Build for PS5](docs/development/BUILD.md) ·
+[Run the Linux preview](docs/development/HOST_BUILD.md) ·
+[Source layout](docs/development/SOURCE_LAYOUT.md) ·
+[Contribute](.github/CONTRIBUTING.md)
+
+The [developer guide](docs/development/README.md) covers architecture, testing,
+rendering, playback and packaging. The [help index](docs/README.md) covers
+installation and everyday use.
 
 ## License
 
-GPL-3.0-or-later. Built on the native-app boilerplate and ProsperoTV's
-hardware-decode work; [NOTICE](NOTICE.md) lists dependencies and their
-licenses. Not affiliated with Jellyfin or Sony.
+SlopFin is licensed under **GPL-3.0-or-later**. It builds on the native-app
+boilerplate and ProsperoTV's hardware-decode work. Third-party components and
+assets retain their original licenses; see [NOTICE](NOTICE.md).
+
+SlopFin is not affiliated with or endorsed by Jellyfin or Sony.

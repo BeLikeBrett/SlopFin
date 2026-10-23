@@ -9,6 +9,7 @@
  * process on 127.0.0.1 for as long as the install reads it, and nowhere else.
  */
 #include "../../src/update/files.h"
+#include "../../src/update/close.h"
 #include "../../src/update/pkg_request.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -172,26 +173,30 @@ static void *serve(void *arg)
         char header[512];
         int length;
         if (!ours)
-            length = snprintf(header, sizeof(header),
-                              "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            length = snprintf(
+                header, sizeof(header),
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         else if (start > end || start >= g_size)
-            length = snprintf(header, sizeof(header),
-                              "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%llu\r\n"
-                              "Content-Length: 0\r\nConnection: %s\r\n\r\n",
-                              (unsigned long long)g_size, close_after ? "close" : "keep-alive");
+            length =
+                snprintf(header, sizeof(header),
+                         "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%llu\r\n"
+                         "Content-Length: 0\r\nConnection: %s\r\n\r\n",
+                         (unsigned long long)g_size, close_after ? "close" : "keep-alive");
         else if (partial)
-            length = snprintf(header, sizeof(header),
-                              "HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\n"
-                              "Accept-Ranges: bytes\r\nContent-Length: %llu\r\n"
-                              "Content-Range: bytes %llu-%llu/%llu\r\nConnection: %s\r\n\r\n",
-                              (unsigned long long)(end - start + 1), (unsigned long long)start,
-                              (unsigned long long)end, (unsigned long long)g_size,
-                              close_after ? "close" : "keep-alive");
+            length = snprintf(
+                header, sizeof(header),
+                "HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\n"
+                "Accept-Ranges: bytes\r\nContent-Length: %llu\r\n"
+                "Content-Range: bytes %llu-%llu/%llu\r\nConnection: %s\r\n\r\n",
+                (unsigned long long)(end - start + 1), (unsigned long long)start,
+                (unsigned long long)end, (unsigned long long)g_size,
+                close_after ? "close" : "keep-alive");
         else
-            length = snprintf(header, sizeof(header),
-                              "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
-                              "Accept-Ranges: bytes\r\nContent-Length: %llu\r\nConnection: %s\r\n\r\n",
-                              (unsigned long long)g_size, close_after ? "close" : "keep-alive");
+            length =
+                snprintf(header, sizeof(header),
+                         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                         "Accept-Ranges: bytes\r\nContent-Length: %llu\r\nConnection: %s\r\n\r\n",
+                         (unsigned long long)g_size, close_after ? "close" : "keep-alive");
         if (send_all(fd, header, (size_t)length) < 0)
             break;
         if (ours && get && start <= end && start < g_size && send_range(fd, start, end) < 0)
@@ -297,9 +302,10 @@ static int installed_matches(const char *title)
     int same = 1;
     for (off_t at = 0; same && at < st.st_size; at += (off_t)sizeof(a))
     {
-        const size_t want = (size_t)(st.st_size - at < (off_t)sizeof(a) ? st.st_size - at : (off_t)sizeof(a));
-        same = pread(fd, a, want, at) == (ssize_t)want && pread(g_package, b, want, at) == (ssize_t)want &&
-               !memcmp(a, b, want);
+        const size_t want =
+            (size_t)(st.st_size - at < (off_t)sizeof(a) ? st.st_size - at : (off_t)sizeof(a));
+        same = pread(fd, a, want, at) == (ssize_t)want &&
+               pread(g_package, b, want, at) == (ssize_t)want && !memcmp(a, b, want);
     }
     close(fd);
     return same;
@@ -311,8 +317,10 @@ static int content_is(const char *title)
     snprintf(prefix, sizeof(prefix), "UP9000-%s_00-", title);
     unsigned char cnt[0x80];
     for (uint64_t at = 0x10000; at + sizeof(cnt) <= g_size; at += 0x10000)
-        if (pread(g_package, cnt, sizeof(cnt), (off_t)at) == (ssize_t)sizeof(cnt) &&
-            !memcmp(cnt, "\x7f" "CNT", 4))
+        if (pread(g_package, cnt, sizeof(cnt), (off_t)at) == (ssize_t)sizeof(cnt) && !memcmp(cnt,
+                                                                                             "\x7f"
+                                                                                             "CNT",
+                                                                                             4))
             return sf_pkg_content_matches(cnt, sizeof(cnt), prefix) == 0;
     return 0;
 }
@@ -373,11 +381,16 @@ int main(void)
         FAIL("The downloaded package is for a different app. Your app was not changed.");
 
     sceUserServiceInitialize(NULL);
+    unlink("/data/slopfin/update/closed");
     result("ready");
     /* The app releases its display and decoder, then exits. */
     int stopped = 0;
+    int close_requested = 0;
     for (unsigned i = 0; i < 60 && !stopped; ++i)
     {
+        if (!close_requested &&
+            sf_update_close_stopped(request.pid, request.title, "/data/slopfin/update/closed") >= 0)
+            close_requested = 1;
         stopped = kill((pid_t)request.pid, 0) < 0 && errno == ESRCH &&
                   sceLncUtilGetAppId(request.title) <= 0;
         if (!stopped)
@@ -465,7 +478,8 @@ int main(void)
     {
         pause_ms(1000);
         char version[11];
-        installed = g_served >= g_size - 0x10000 && installed_version(request.title, version) == 0 &&
+        installed = g_served >= g_size - 0x10000 &&
+                    installed_version(request.title, version) == 0 &&
                     !strcmp(version, request.version) && installed_matches(request.title);
     }
     g_stop = 1;

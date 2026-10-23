@@ -249,6 +249,7 @@ class StickGlide
     {
         velocity_ = 0.0f;
         held_ = 0.0f;
+        direction_ = 0.0f;
     }
 
   private:

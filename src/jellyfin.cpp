@@ -9,6 +9,7 @@
 #include "playback_url.hpp"
 #include "hevc_base_layer.hpp"
 #include "intro_metadata.hpp"
+#include "subtitle_labels.hpp"
 
 #include "config.hpp"
 #include "http.hpp"
@@ -70,6 +71,7 @@ slopfin::jellyfin::Item read_item(const slopfin::json::Value &node) noexcept
 
     /* Ticks are 100 ns units; minutes is what the UI shows. */
     const double ticks = node.num("RunTimeTicks", 0.0);
+    item.runtime_seconds = ticks / 10000000.0;
     item.runtime_minutes = static_cast<int>(ticks / 600000000.0 + 0.5);
 
     if (const slopfin::json::Value *tags = node.find("ImageTags"); tags != nullptr)
@@ -158,7 +160,8 @@ slopfin::jellyfin::Item read_item(const slopfin::json::Value &node) noexcept
                  * prefix, so it is dropped.
                  */
                 if (const std::string_view title = stream.str("Title");
-                    !title.empty() && track.label.size() > title.size() + 3 &&
+                    !title.empty() && stream.str("Type") != "Subtitle" &&
+                    track.label.size() > title.size() + 3 &&
                     track.label.compare(0, title.size(), title) == 0 &&
                     track.label.compare(title.size(), 3, " - ") == 0)
                     track.label.erase(0, title.size() + 3);
@@ -171,6 +174,7 @@ slopfin::jellyfin::Item read_item(const slopfin::json::Value &node) noexcept
                 track.is_forced = stream.flag("IsForced", false);
                 track.is_text = stream.flag("IsTextSubtitleStream", false);
                 track.is_external = stream.flag("IsExternal", false);
+                track.is_hearing_impaired = stream.flag("IsHearingImpaired", false);
                 return track;
             };
             if (const slopfin::json::Value *streams = entry->find("MediaStreams");
@@ -482,10 +486,11 @@ bool probe(const std::string &host, int port, std::string &server_name) noexcept
     return true;
 }
 
-bool mark_played(const std::string &item_id, bool played) noexcept
+bool mark_played(const std::string &item_id, bool played, UserProgress *updated) noexcept
 {
     /* Marking an item played is what removes it from Continue Watching;
        unmarking is the same address deleted. */
+    g_error.clear();
     const config::Settings &settings = config::current();
     const std::string path = "/Users/" + settings.user_id + "/PlayedItems/" + item_id;
     const http::Response response =
@@ -496,6 +501,24 @@ bool mark_played(const std::string &item_id, bool played) noexcept
         g_error = "Could not update that item (status " + std::to_string(response.status) + ").";
         return false;
     }
+    /* Both PlayedItems operations reset resume progress. Prefer the returned
+       values; a successful empty response from an older server uses those
+       endpoint defaults. Never overwrite the caller's state on failure. */
+    UserProgress progress{played, 0.0, played ? 100.0 : 0.0};
+    if (!response.body.empty())
+    {
+        const json::ValuePtr result = json::parse(response.body);
+        if (result == nullptr || result->type != json::Type::object)
+        {
+            g_error = "The watched-state reply did not parse. Try refreshing the item.";
+            return false;
+        }
+        progress.played = result->flag("Played", progress.played);
+        progress.resume_ticks = result->num("PlaybackPositionTicks", 0.0);
+        progress.played_percentage = result->num("PlayedPercentage", progress.played ? 100.0 : 0.0);
+    }
+    if (updated != nullptr)
+        *updated = progress;
     return true;
 }
 
@@ -621,19 +644,23 @@ std::vector<Library> libraries() noexcept
     return out;
 }
 
-std::vector<Item> latest(const std::string &library_id, int limit) noexcept
+std::vector<Item> latest(const std::string &library_id, int limit,
+                         const std::string &collection_type) noexcept
 {
     const config::Settings &settings = config::current();
-    /*
-     * groupItems collapses episodes into the series they belong to, which is
-     * what "latest in Dragonball" means: the show that gained an episode, not
-     * the episode. Without it a library of one show reports the same show over
-     * and over under a dozen episode titles. A library whose items are not
-     * episodes is unaffected, so films still arrive as films.
-     */
-    std::string path = "/Users/" + settings.user_id +
-                       "/Items/Latest?limit=" + std::to_string(limit) + "&groupItems=true" +
-                       "&fields=Overview,PrimaryImageAspectRatio&enableImages=true";
+    /* A show's newest episode determines its place. The Latest endpoint
+       silently inherits HidePlayedInLatest and can remove an entire watched
+       series (Beerus), or return its only episode instead of the series.
+       Query series directly, including watched ones, in last-content order. */
+    std::string path = "/Users/" + settings.user_id;
+    if (collection_type == "tvshows")
+        path += "/Items?recursive=true&includeItemTypes=Series&isVirtualItem=false&limit=" +
+                std::to_string(limit) +
+                "&sortBy=DateLastContentAdded,DateCreated,SortName&sortOrder=Descending" +
+                "&fields=Overview,PrimaryImageAspectRatio&enableImages=true";
+    else
+        path += "/Items/Latest?limit=" + std::to_string(limit) + "&groupItems=true" +
+                "&fields=Overview,PrimaryImageAspectRatio&enableImages=true";
     if (!library_id.empty())
         path += "&parentId=" + http::url_encode(library_id);
     const http::Response response = request_get(path);
@@ -792,6 +819,7 @@ std::string device_profile(const std::string &codec_order, const std::string &au
 "SubtitleProfiles":[
  {"Format":"srt","Method":"External"},
  {"Format":"subrip","Method":"External"},
+ @BITMAP@
  {"Format":"pgssub","Method":"Encode"},
  {"Format":"dvdsub","Method":"Encode"},
  {"Format":"dvbsub","Method":"Encode"}]}})";
@@ -800,6 +828,12 @@ std::string device_profile(const std::string &codec_order, const std::string &au
         for (std::size_t at = body.find(token); at != std::string::npos; at = body.find(token))
             body.replace(at, token.size(), value);
     };
+#ifdef SLOPFIN_BITMAP_SUBTITLES
+    replace("@BITMAP@", R"({"Format":"pgssub","Method":"Embed","Container":"mkv,matroska,webm"},
+ {"Format":"dvdsub","Method":"Embed","Container":"mkv,matroska,webm"},)");
+#else
+    replace("@BITMAP@", "");
+#endif
     replace("@DIRECTAUDIO@", direct_audio);
     replace("@EXTRAAUDIO@", extra_audio.empty() ? "" : "," + extra_audio);
     replace("@CODECS@", codec_order);
@@ -837,6 +871,7 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
     const int selected_audio = request.audio_index >= 0
                                    ? request.audio_index
                                    : static_cast<int>(source->num("DefaultAudioStreamIndex", -1));
+    int internal_subtitle = 0;
     int internal_audio = 0; /* audio tracks inside the file so far, in file order */
     if (const json::Value *streams = source->find("MediaStreams"); streams != nullptr)
     {
@@ -849,6 +884,8 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
             const int index = static_cast<int>(stream->num("Index", -1.0));
             if (kind == "Audio" && !stream->flag("IsExternal"))
                 ++internal_audio;
+            if (kind == "Subtitle" && !stream->flag("IsExternal"))
+                ++internal_subtitle;
             if (kind == "Video" && plan.video_codec.empty())
             {
                 plan.video_codec = std::string{stream->str("Codec")};
@@ -882,6 +919,13 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
             else if (kind == "Subtitle" && index == request.subtitle_index)
             {
                 const std::string method{stream->str("DeliveryMethod")};
+                plan.subtitle_codec = std::string{stream->str("Codec")};
+                for (char &c : plan.subtitle_codec)
+                    if (c >= 'A' && c <= 'Z')
+                        c = static_cast<char>(c + 32);
+                plan.subtitle_ordinal = stream->flag("IsExternal") ? -1 : internal_subtitle - 1;
+                plan.subtitle_bitmap = method == "Embed" && (plan.subtitle_codec == "pgssub" ||
+                                                             plan.subtitle_codec == "dvdsub");
                 if (method == "External")
                     plan.subtitle_url = std::string{stream->str("DeliveryUrl")};
                 else if (method == "Encode")
@@ -911,8 +955,9 @@ bool read_plan(const std::string &body, const PlaybackRequest &request, Playback
     const char *readable = has("mkv") || has("matroska") || has("webm") ? "mkv"
                            : has("mp4") || has("m4v") || has("mov")     ? "mp4"
                                                                         : nullptr;
-    if (readable != nullptr && source->flag("SupportsDirectPlay") && !request.server_remux &&
-        std::string{source->str("Protocol")} != "Http" && !source->flag("IsRemote"))
+    if (readable != nullptr && !plan.subtitle_burned && source->flag("SupportsDirectPlay") &&
+        !request.server_remux && std::string{source->str("Protocol")} != "Http" &&
+        !source->flag("IsRemote"))
     {
         const config::Settings &settings = config::current();
         plan.container = readable;
@@ -1075,6 +1120,14 @@ PlaybackPlan playback_plan(const PlaybackRequest &request) noexcept
         remux.server_remux = true;
         plan = negotiate(remux);
     }
+    if (plan.subtitle_bitmap &&
+        (!plan.direct || plan.container != "mkv" || plan.subtitle_ordinal < 0))
+    {
+        PlaybackRequest burned = request;
+        burned.media_source_id = plan.media_source_id;
+        burned.burn_picture_subtitles = true;
+        plan = negotiate(burned);
+    }
     return plan;
 }
 
@@ -1086,6 +1139,19 @@ PlaybackPlan negotiate(const PlaybackRequest &request) noexcept
     /* The remux fallback offers the server nothing to play directly but TS. */
     const auto request_post = [&request](const std::string &at, std::string profile)
     {
+        if (request.server_remux || request.burn_picture_subtitles)
+        {
+            /* The TS demuxer and external files do not supply picture packets. */
+            for (const char *codec : {"pgssub", "dvdsub"})
+            {
+                const std::string entry =
+                    std::string{"{\"Format\":\""} + codec +
+                    "\",\"Method\":\"Embed\",\"Container\":\"mkv,matroska,webm\"},";
+                const auto found = profile.find(entry);
+                if (found != std::string::npos)
+                    profile.erase(found, entry.size());
+            }
+        }
         if (request.server_remux)
         {
             const std::string all = "ts,mpegts,mkv,matroska,webm,mp4,m4v,mov";

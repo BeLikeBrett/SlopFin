@@ -8,8 +8,10 @@ Before opening a pull request:
 
 1. Run `make test`, `make host`, and `make lint`. Add a focused regression test
    for changed behavior rather than assertions that simply repeat the code.
-2. Build with `make PS5_CLANG=/usr/bin/clang`. Also build `SOFTWARE_AUDIO=1`
-   when changing audio integration; the setup guide explains that dependency.
+2. Build the release configuration with
+   `GPU_MENU=1 make PS5_CLANG=/usr/bin/clang SOFTWARE_AUDIO=1`. For rendering
+   changes, also run `bash tools/test-gpu-menu.sh` at all supported output sizes.
+   The build guide covers dependencies and alternative configurations.
 3. Verify zero static FSELF errors. For console changes, include firmware,
    loader, server version, media delivery details and the hardware result.
 4. Keep credentials, `.env`, generated builds, dependency archives, proprietary
@@ -25,8 +27,19 @@ JSON and binary assets are covered by `LICENSE` and `NOTICE.md`.
 Changes to `tooling/native/` need a deterministic host check and a focused
 format regression. Loader changes need hardware validation before release.
 Release tags use the display version, for example `1.08` for the PS5
-`contentVersion` `01.000.008` (without a `v` prefix). Coordinate deployments when sharing a console.
+`contentVersion` `01.000.008` (without a `v` prefix). Version 2.00 uses
+`02.000.000`. Coordinate deployments when sharing a console.
 
 For bug reports, include the build, firmware/loader, Jellyfin version, relevant
 codec/container/subtitle details and whether the server copied or transcoded
 media. Redact tokens, passwords, addresses and private media names from logs.
+
+## Commit and pull request style
+
+Use your own contributor identity. Commit subjects should describe the user
+behaviour or technical change in a short, direct sentence. Keep session links,
+transcripts and local planning notes out of commit messages and source files.
+
+Explain the problem, the resulting behaviour and relevant validation in the
+pull request. Retain existing copyright and dependency attribution. Avoid
+unrelated formatting, file moves or platform changes in a focused fix.

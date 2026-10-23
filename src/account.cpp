@@ -774,10 +774,6 @@ void draw_badge(int right, int y) noexcept
     const int avatar_x = x + 8;
     const int avatar_y = y + (kBadgeHeight - kBadgeAvatar) / 2;
     draw_avatar(user, avatar_x, avatar_y, kBadgeAvatar);
-    /* A thin ring, so the picture reads as a profile and not as artwork. */
-    gfx::stroke_rounded_rect(avatar_x - 2, avatar_y - 2, kBadgeAvatar + 4, kBadgeAvatar + 4,
-                             kBadgeAvatar / 2 + 2, 2,
-                             gfx::rgba(0xff, 0xff, 0xff, lit ? 0xcc : 0x66));
     int cursor = avatar_x + kBadgeAvatar + 16;
     text::draw(cursor, y + (kBadgeHeight - 35) / 2 + 4, name, 26, Weight::medium,
                gfx::palette::text);
@@ -942,8 +938,6 @@ void draw_menu(int right, int top) noexcept
                                         : gfx::rgba(0x14, 0x14, 0x18, alpha(0xe6));
         const gfx::Color ink = focused ? gfx::rgba(0xff, 0xff, 0xff, alpha(0xff))
                                        : gfx::rgba(0xff, 0xff, 0xff, alpha(0xd8));
-        if (focused)
-            gfx::drop_shadow(x, y, pill_w, kPillH, kPillH / 2, 16, alpha(0x70));
         gfx::rounded_rect(x, y, pill_w, kPillH, kPillH / 2, fill);
         gfx::stroke_rounded_rect(x, y, pill_w, kPillH, kPillH / 2, focused ? 2 : 1,
                                  focused ? gfx::with_alpha(gfx::palette::focus_border, alpha(0xff))

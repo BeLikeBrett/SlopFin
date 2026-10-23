@@ -24,8 +24,10 @@ namespace slopfin::host
 struct Options
 {
     bool headless = false;
-    int scale_percent = 100; /* window size relative to the 1920x1080 surface */
+    bool allow_arbitrary_surface = false; /* renderer tests, independent of console modes */
+    int scale_percent = 100;              /* window size relative to the 1920x1080 surface */
     bool vsync = true;
+    int output_width = 1920, output_height = 1080; /* simulated HDMI output for renderer tests */
     /* Use a virtual 60 Hz frame clock for deterministic capture timing; screenshot I/O must not
      * stretch animations. */
     bool fixed_step = false;

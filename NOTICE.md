@@ -31,6 +31,33 @@ Host model tests use the C++ standard library; network fixtures use Python and
 OpenSSL. The retired boilerplate renderer/GoogleTest suite is not required.
 These host libraries and test tools are not linked into PS5 artifacts.
 
+## Local voice search
+
+Voice search statically links the CPU backend of
+[whisper.cpp 1.9.5](https://github.com/ggml-org/whisper.cpp/tree/d1be6fde11ac6e0407606b4e42fe72d34add8037),
+including its ggml dependency, under the MIT license. The verified source
+archive has SHA-256
+`645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4`.
+`tools/prepare-voice-search.py` adapts the PS5 dependency copy to POSIX model
+loading, flexible-memory tensor arenas, static CPU registration and an
+unavailable debugger subprocess. The
+pristine archive remains in ignored `.deps/voice/`. Its license is packaged
+as `assets/licenses/whisper-MIT.txt`.
+
+The optional, first-use download is the multilingual OpenAI Whisper tiny model,
+quantized by whisper.cpp as `ggml-tiny-q5_1.bin`, from
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1).
+The 32,152,673-byte model is pinned to SHA-256
+`818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7`.
+OpenAI's MIT model license is packaged as
+`assets/licenses/whisper-model-MIT.txt`. The model is stored separately from
+application updates; microphone audio stays in memory on the device.
+
+The native AudioIn signatures and 16 kHz capture parameters were checked
+against BlackBearReloaded's GPL-3.0-or-later native microphone proof of concept
+and RafaelNGP's GPL-3.0-or-later PS5 AudioIn implementation. SlopFin's capture
+and recognition lifecycle are independently implemented.
+
 ## Optional PacBrew dependencies
 
 When selected through `PACBREW_*` build variables, the build downloads the prebuilt ports image
@@ -90,20 +117,22 @@ No proprietary runtime module, encryption key, or game file is included.
   (https://github.com/blackbearreloaded/ProsperoTV), copyright BlackBearReloaded,
   licensed GPL-3.0-or-later.
 
-## Optional software audio experiment
+## Optional FFmpeg audio and picture subtitle decoders
 
 `src/iec61937.hpp` follows the IEC 61937 burst layout as written by FFmpeg's
 `libavformat/spdifenc.c` (LGPL-2.1-or-later, the FFmpeg developers); it is an
 independent implementation checked byte for byte against that muxer's output.
 
-`SOFTWARE_AUDIO=1` links a minimal build of FFmpeg 9.0.1 libavcodec,
+`SOFTWARE_AUDIO=1` or `BITMAP_SUBTITLES=1` links a minimal build of FFmpeg 9.0.1 libavcodec,
 libavutil and libswresample from https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz.
 Copyright the FFmpeg developers; this configuration reports LGPL-2.1-or-later
 (no GPL/nonfree FFmpeg options enabled). Upstream license texts remain in
 `.deps/audio/ffmpeg-9.0.1/COPYING*`. `tools/build-software-audio.sh` records the
 archive SHA-256, full build configuration and two generated configuration
 corrections for unavailable runtime time functions. No upstream source is
-patched. Allocator hooks and the probe are project-authored GPL-3.0-or-later.
+patched. The build includes PGS and DVD subtitle decoders alongside the audio
+codecs; it includes no FFmpeg video decoders or encoders. Allocator hooks,
+subtitle integration and the probe are project-authored GPL-3.0-or-later.
 
 The verified release signing fingerprint is
 `FCF986EA15E6E293A5644F10B4322F04D67658D8`. This optional dependency is not used
@@ -119,11 +148,25 @@ source and license texts; preserve recipients' ability to rebuild the binary.
   1.1. It shipped without a notice before this entry; the licence text is now
   packaged as `assets/OFL-NotoSans.txt`.
 - **Atkinson Hyperlegible** (`assets/font-readable-regular.ttf`,
-  `font-readable-bold.ttf`), the "Easy to read" subtitle font: Copyright 2020
+  `font-readable-bold.ttf`): Copyright 2020
   Braille Institute of America, Inc., SIL Open Font License 1.1, from
   https://github.com/google/fonts/tree/main/ofl/atkinsonhyperlegible. Licence
   text packaged as `assets/OFL-AtkinsonHyperlegible.txt`. Unmodified.
-
+- **Roboto** (`assets/font-roboto-{regular,bold}.ttf`): Copyright 2015 Google Inc.,
+  Apache License 2.0, from https://github.com/googlefonts/roboto-2/tree/main/src/hinted.
+  Unmodified static fonts. License packaged as `assets/LICENSE-Roboto.txt`.
+- **Lato** (`assets/font-lato-{regular,bold}.ttf`): Copyright 2011–2015 tyPoland
+  Łukasz Dziedzic, SIL Open Font License 1.1 (Reserved Font Name Lato), from
+  https://github.com/google/fonts/tree/main/ofl/lato. Unmodified static fonts.
+  License packaged as `assets/OFL-Lato.txt`.
+- **Source Serif 4** (`assets/font-serif-{regular,bold}.ttf`): Copyright 2014–2023 Adobe,
+  with Reserved Font Name Source, SIL Open Font License 1.1, from
+  https://github.com/adobe-fonts/source-serif/tree/release/TTF. Unmodified static
+  fonts. License packaged as `assets/OFL-SourceSerif4.txt`.
+- **Roboto Mono** (`assets/font-mono-{regular,bold}.ttf`): Copyright 2015
+  The Roboto Mono Project Authors, SIL Open Font License 1.1, from
+  https://github.com/googlefonts/RobotoMono/tree/main/fonts/ttf. Unmodified static
+  fonts. License packaged as `assets/OFL-RobotoMono.txt`.
 
 ## Image libraries
 
@@ -161,3 +204,14 @@ The appended ISRG Root YR and Root YE certificates come from their publisher,
 identities were checked against Mozilla-trusted ISRG X1/X2. Certificate
 provenance and console evidence are in
 [UPDATE_TLS.md](docs/development/UPDATE_TLS.md). No private keys are included.
+
+### Optional native GPU menu compositor
+
+`GPU_MENU=1` links Mesa RADV/ACO from [PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa)
+at `1ba9874f478657ccf6da72ce55f0260164cc0bd0`, using the public PS5 platform port
+and integration recipe by Mihawk-99. Mesa retains its individual MIT/BSD and
+other source notices. The payload SDK fork and integration recipe are
+GPL-3.0-or-later; `tools/gpu-radv-link.sh`, the unwind linker script and AGC
+link-only stubs retain their upstream copyright headers. The build pins the
+sources in `tools/setup-gpu-menu.sh`. No Sony module is redistributed.
+The menu compute shader and compositor are SlopFin code, GPL-3.0-or-later.

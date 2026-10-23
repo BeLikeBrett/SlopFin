@@ -5,7 +5,7 @@ include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 else
 $(error PS5_PAYLOAD_SDK is undefined)
 endif
-slopfin-pkg-update.elf: main.c ../../src/update/pkg_request.h ../../src/update/files.h ../../src/update/sha256.h
+slopfin-pkg-update.elf: main.c $(wildcard ../../src/update/*.h)
 	$(CC) $(CFLAGS) -Wall -Wextra -Werror -O2 -o $@ main.c -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil -lpthread
 clean:
 	rm -f slopfin-pkg-update.elf

@@ -1,0 +1,152 @@
+// Copyright (C) 2026 Brett
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0,std430) buffer Output { uint dst[]; };
+layout(set=0,binding=1,std430) readonly buffer Source { uint src[]; };
+// One glyph or icon of a batch: clip, rect, then colour from, colour to,
+// byte offset of its coverage in the atlas, and kind (4 mask, 5 gradient).
+struct Glyph { ivec4 clip; ivec4 rect; uvec4 data; };
+layout(set=0,binding=2,std430) readonly buffer Glyphs { Glyph glyphs[]; };
+layout(push_constant) uniform Params {
+    ivec4 clip; ivec4 rect; ivec4 info; uvec4 colours;
+    vec4 source; ivec4 texture; vec4 effect;
+} p;
+uint div255(uint v) { v+=128; return (v+(v>>8))>>8; }
+uvec4 unpack(uint a) { return uvec4(a,a>>8,a>>16,a>>24)&255u; }
+uint pack(uvec4 a) { return a.x|(a.y<<8)|(a.z<<16)|(a.w<<24); }
+uint blend(uint d,uint s) {
+    uvec4 a=unpack(s),b=unpack(d); uint t=a.w;
+    uvec3 v=a.xyz*t+b.xyz*(255u-t);
+    v+=128u; v=(v+(v>>8))>>8;
+    return pack(uvec4(v,255));
+}
+// As the CPU renderer does: nothing to write when transparent, and no need
+// to read what is underneath when opaque.
+void put(ivec2 at,uint col) {
+    uint a=col>>24;
+    if(a==0u)return;
+    uint index=uint(at.y*p.info.y+at.x);
+    dst[index]=a==255u?col:blend(dst[index],col);
+}
+uint colourMix(uint a,uint b,int t) {
+    ivec4 x=ivec4(unpack(a)), y=ivec4(unpack(b));
+    return pack(uvec4(x+(y-x)*t/255));
+}
+uint coverageByte(uint i) { return (src[i>>2]>>((i&3u)*8))&255u; }
+float coverage(ivec2 at,int inset) {
+    ivec2 lo=p.rect.xy+inset, size=p.rect.zw-2*inset;
+    float r=float(max(0,p.info.z-inset));
+    if(any(lessThan(at,lo))||any(greaterThanEqual(at,lo+size)))return 0;
+    vec2 q=abs(vec2(at)+.5-(vec2(lo)+vec2(size)*.5))-(vec2(size)*.5-r);
+    if(q.x<=0||q.y<=0)return 1;
+    float d=length(q)-r;
+    if(d<=-.75)return 1;
+    if(d>=.75)return 0;
+    float c=0;
+    for(int y=0;y<4;y++)for(int x=0;x<4;x++) {
+        vec2 sub=q+(vec2(x,y)+.5)*.25-.5;
+        c+=clamp(.5-(length(sub)-r)*4,0,1);
+    }
+    return c/16;
+}
+uint texel(ivec2 at) {
+    at=clamp(at,ivec2(0),p.texture.xy-1);
+    uint i=uint(at.y*p.texture.x+at.x);
+    if(p.texture.z!=0) return coverageByte(uint(p.texture.w)+i);
+    return src[i];
+}
+uint sampleImage(vec2 uv) {
+    ivec2 a=ivec2(floor(uv));
+    uvec2 f=uvec2(floor(fract(uv)*256));
+    a=clamp(a,ivec2(0),p.texture.xy-1);
+    // Match the software renderer's four-tap 8-bit bilinear filter.
+    uvec4 aa=unpack(texel(a)), bb=unpack(texel(a+ivec2(1,0)));
+    uvec4 cc=unpack(texel(a+ivec2(0,1))), dd=unpack(texel(a+ivec2(1)));
+    return pack((aa*((256-f.x)*(256-f.y))+bb*(f.x*(256-f.y))+
+                 cc*((256-f.x)*f.y)+dd*(f.x*f.y))>>16);
+}
+// A coverage mask's colour at `delta` inside its rect of width `w`.
+uint maskColour(uint col,uint to,bool gradient,ivec2 delta,int w,uint a) {
+    if(gradient) {
+        int t=clamp((delta.x*192+delta.y*64)/max(1,w),0,255);
+        col=colourMix(col,to,t);
+    }
+    return (col&0xffffffu)|(div255(a*(col>>24))<<24);
+}
+void main() {
+    int kind=p.info.x;
+    if(kind==10) {
+        // A batch: one workgroup layer per glyph, none overlapping another.
+        Glyph g=glyphs[p.info.w+int(gl_WorkGroupID.z)];
+        ivec2 at=g.clip.xy+ivec2(gl_GlobalInvocationID.xy);
+        if(any(greaterThanEqual(at,g.clip.zw)))return;
+        ivec2 delta=at-g.rect.xy;
+        uint a=coverageByte(g.data.z+uint(delta.y*g.rect.z+delta.x));
+        if(a==0u)return;
+        put(at,maskColour(g.data.x,g.data.y,g.data.w==5u,delta,g.rect.z,a));
+        return;
+    }
+    ivec2 at=p.clip.xy+ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(at,p.clip.zw)))return;
+    if(kind==9) {
+        uint x=uint(at.x),y=uint(at.y),width=uint(p.info.y);
+        uint value=src[y*width+x];
+        uint bx=x/128,by=y/128; x%=128;y%=128;
+        uint swizzle=((y<<4)&0x70u)^((y<<5)&0xf00u)^((y<<9)&0x1000u)^((y<<8)&0x4000u)^
+          ((x<<2)&0xcu)^((x<<5)&0x380u)^((x<<4)&0x400u)^((x<<6)&0x800u)^((x<<9)&0xa000u);
+        uint index=(by*((width+127)/128)+bx)*16384+swizzle/4;
+        dst[index]=(value&0xff00ff00u)|((value&0xff0000u)>>16)|((value&255u)<<16);
+        return;
+    }
+    if(kind==11) {
+        // The same integer alpha composition as gfx::media_scrim, without
+        // reading a 4K backdrop back to the CPU to darken it.
+        int verticalStart=p.texture.x, horizontalEnd=p.texture.y;
+        uint vertical=at.y<verticalStart?0u:
+            uint(clamp((at.y-verticalStart)*255/max(1,p.rect.w-verticalStart-1),0,255));
+        uint horizontal=at.x<horizontalEnd?
+            p.colours.z*uint(horizontalEnd-1-at.x)/uint(max(1,horizontalEnd-1)):0u;
+        uint alpha=p.colours.y+vertical-div255(p.colours.y*vertical);
+        alpha=alpha+horizontal-div255(alpha*horizontal);
+        put(at,p.colours.x|(alpha<<24));
+        return;
+    }
+    uint col=p.colours.x;
+    float c=1;
+    if(kind==1||kind==2) {
+        int axis=kind==1?0:1;
+        int t=(at[axis]-p.rect[axis])*255/max(1,p.rect[axis+2]-1);
+        col=colourMix(col,p.colours.y,t);
+    }
+    if(kind==3) {
+        col=sampleImage(p.source.xy+vec2(at-p.rect.xy)*p.source.zw);
+        uint a=div255((col>>24)*p.colours.z);
+        col=(col&0xffffffu)|(a<<24);
+    }
+    if(kind==4||kind==5)
+        col=maskColour(col,p.colours.y,kind==5,at-p.rect.xy,p.rect.z,texel(at-p.rect.xy));
+    if(kind==6) {
+        float reach=p.effect.x, r=float(p.info.z);
+        vec2 center=vec2(p.rect.xy)+vec2(p.rect.zw)*.5+vec2(0,max(1, int(reach)/5));
+        vec2 q=max(abs(vec2(at)+.5-center)-(vec2(p.rect.zw)*.5-r),0);
+        float d=length(q)-r;
+        if(d<=0||d>=reach)return;
+        float f=1-d/reach;
+        col=(uint(float(p.colours.z)*f*f+.5)<<24);
+    } else if(kind==7) {
+        vec2 delta=vec2(at)+.5-p.effect.xy;
+        float distance=length(delta), radius=p.effect.z, halfWidth=p.effect.w;
+        c=clamp(min(distance-(radius-halfWidth),(radius+halfWidth)-distance)+.5,0,1);
+        if(p.source.y<1) {
+            float turn=atan(delta.x,-delta.y)*.15915494;
+            if(turn<0)turn+=1;
+            float behind=fract(p.source.x-turn);
+            if(behind>p.source.y)return;
+            if(p.source.z<0.5)c*=1-behind/p.source.y;
+        }
+    } else if(kind==8) c=max(0,coverage(at,0)-coverage(at,p.info.w));
+    else if(p.info.z>0)c=coverage(at,0);
+    if(c<1)col=(col&0xffffffu)|(uint(float(col>>24)*c+.5)<<24);
+    put(at,col);
+}

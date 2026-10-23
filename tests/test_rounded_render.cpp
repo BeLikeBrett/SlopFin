@@ -49,6 +49,19 @@ int main()
     gfx::rounded_rect(100, 100, 400, 120, 24, gfx::rgba(0, 164, 220, 180));
     assert(std::equal(reference.begin(), reference.end(), gfx::back_buffer()));
     gfx::clear(background);
+    gfx::rounded_vertical_gradient(100, 100, 400, 120, 24, gfx::rgba(0, 164, 220, 180),
+                                   gfx::rgba(0, 164, 220, 180));
+    assert(std::equal(reference.begin(), reference.end(), gfx::back_buffer()));
+    gfx::clear(background);
+    gfx::vertical_gradient(100, 100, 400, 120, gfx::rgb(255, 255, 255), gfx::rgb(216, 229, 239));
+    const std::vector<std::uint32_t> ramp(p, p + gfx::surface_words());
+    gfx::clear(background);
+    gfx::rounded_vertical_gradient(100, 100, 400, 120, 24, gfx::rgb(255, 255, 255),
+                                   gfx::rgb(216, 229, 239));
+    assert(pixel(100, 100) == outside && pixel(499, 219) == outside);
+    for (int row = y; row < y + h; ++row)
+        assert(p[row * width + x + w / 2] == ramp[row * width + x + w / 2]);
+    gfx::clear(background);
     gfx::push_clip(150, 110, 200, 80);
     gfx::rounded_rect(100, 100, 400, 120, 24, gfx::rgba(0, 164, 220, 180));
     gfx::pop_clip();

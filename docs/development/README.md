@@ -7,9 +7,13 @@ All commands run from the repository root.
 | --- | --- |
 | Build for PS5 | [Build setup](BUILD.md) |
 | Preview the interface on Linux | [Host build](HOST_BUILD.md) |
+| Find source files | [Source layout](SOURCE_LAYOUT.md) |
 | Understand the app | [Architecture](ARCHITECTURE.md) and [platform constraints](CONSTRAINTS.md) |
 | Validate a change | [Testing](TESTING.md) |
 | Work on hardware video | [Video decode](VIDEO_DECODE.md) and [HDR](HDR.md) |
+| Work on local speech recognition | [Voice search](VOICE_SEARCH.md) |
+| Work on subtitles and native-resolution overlays | [Picture subtitles and controls](BITMAP_SUBTITLES.md) |
+| Work on menu drawing speed (GPU, 4K at 60 FPS) | [GPU menus](GPU_MENU.md) |
 | Work on audio | [Audio paths](AUDIO.md) and [software decoder](SOFTWARE_AUDIO.md) |
 | Build the native package and A53 selector | [Native FPKG](NATIVE_FPKG.md) |
 | Investigate a crash | [Diagnostic internals](DIAGNOSTICS.md) |

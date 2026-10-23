@@ -45,7 +45,12 @@ and server-provided tracks. Native decode and HDMI behavior need console tests.
 make host
 ./build/host/slopfin                 # a window at 70% of 1920x1080
 ./build/host/slopfin --scale 100     # full size
+./build/host/slopfin --headless --output 3840x2160 --script "wait 120; shot 4k.png" --exit-after-script
 ```
+
+`--output WIDTHxHEIGHT` selects the simulated rendering surface: 1280×720,
+1920×1080 (default), 2560×1440, or 3840×2160. This renders fresh pixels at that
+resolution; `--scale` only changes the preview window size.
 
 Settings live in `$XDG_CONFIG_HOME/slopfin/config.json` (or
 `~/.config/slopfin/`), in the same format the console keeps at

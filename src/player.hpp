@@ -37,9 +37,10 @@ enum class State : std::uint8_t
 enum class Fallback : unsigned char
 {
     none,
-    software_audio, /* the CPU (FFmpeg) audio decoder */
-    passthrough,    /* the HDMI port refused compressed audio */
-    dolby_vision,   /* the Dolby Vision HDR10 base layer */
+    bitmap_subtitles, /* local picture decoder failed */
+    software_audio,   /* the CPU (FFmpeg) audio decoder */
+    passthrough,      /* the HDMI port refused compressed audio */
+    dolby_vision,     /* the Dolby Vision HDR10 base layer */
 };
 
 struct Status
@@ -91,6 +92,7 @@ struct Status
     bool paused = false;
     int audio_index = -1;
     int subtitle_index = -1;
+    bool subtitle_bitmap = false;
     bool subtitle_burned = false; /* the server draws it into the picture */
     long long max_bitrate = 0;
     /* Encoded audio/video payload bits per media second (no TS overhead). */

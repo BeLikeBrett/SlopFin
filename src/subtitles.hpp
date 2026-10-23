@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * The server converts every text subtitle format to SubRip on request, so this
- * is the only format parsed here. Image formats (PGS, VobSub) are burned into
- * the picture by the server instead, and never reach this code.
+ * is the only format parsed here. Image formats (PGS, VobSub) use bitmap_subtitles.hpp when read
+ * from MKV, or the server burn-in fallback on other delivery paths.
  */
 
 #ifndef SLOPFIN_SUBTITLES_HPP

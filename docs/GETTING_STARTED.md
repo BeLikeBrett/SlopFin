@@ -60,6 +60,15 @@ Use the sidebar to choose a library. Triangle opens Search; Square opens your
 profile menu. [Controls](CONTROLS.md) explains DualSense seeking and playback
 shortcuts. [Compatibility](COMPATIBILITY.md) covers codecs and output limits.
 
+Customize fonts, colours and picture overlay placement in **Settings → Subtitles**.
+[Subtitle settings](SUBTITLES.md) explains the separate text and picture controls.
+
+Autoplay is built in; configure it in **Settings → Playback**. For **Skip intro**,
+your server needs intro markers from a standard Jellyfin media segment provider
+or appropriately named chapters. Server administrators can follow the
+[three-step marker setup](INTRO_SKIPPING.md#set-up-your-server); viewers use the
+markers their server already provides.
+
 **Settings → Audio/Video → Surround sound** is Automatic: Dolby and DTS go to
 your TV or receiver when it can take them. [Playback stats](PLAYBACK_STATS.md) explains who
 decodes or converts each stream.

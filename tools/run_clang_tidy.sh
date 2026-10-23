@@ -25,8 +25,9 @@ mapfile -d '' host_sources < <(find "$root/tooling/native" -maxdepth 1 \
 
 mapfile -d '' test_sources < <(find "$root/tests" -maxdepth 1 -type f -name '*.cpp' -print0)
 if (( ${#test_sources[@]} )); then
+    read -r -a sdl_flags <<< "$(pkg-config --cflags sdl2)"
     "$tidy" "${test_sources[@]}" --quiet --warnings-as-errors='*' -- \
-        -std=c++20 -DSLOPFIN_HOST -I"$root/src"
+        -std=c++20 -DSLOPFIN_HOST -I"$root/src" "${sdl_flags[@]}"
 fi
 
 mapfile -d '' app_c_sources < <(find "$root/src" -type f -name '*.c' -print0)

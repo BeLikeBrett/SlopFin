@@ -4,13 +4,18 @@
 #include "../src/jellyfin.cpp"
 #include <cassert>
 #include <cstdio>
+#include <cmath>
 
 namespace
 {
 std::string response_body;
+std::string burned_response_body;
 std::string session_body;
 std::string last_get_path;
 std::vector<std::string> requests, bodies;
+std::string watched_reply;
+std::string watched_method;
+int watched_status = 200;
 } // namespace
 namespace slopfin::config
 {
@@ -28,7 +33,24 @@ Response post(std::string_view, int, std::string_view path, const std::vector<st
 {
     requests.emplace_back(path);
     bodies.emplace_back(body);
-    return {response_body.empty() ? 500 : 200, response_body, {}};
+    if (path.find("/PlayedItems/") != std::string_view::npos)
+    {
+        watched_method = "POST";
+        return {watched_status, watched_reply, {}};
+    }
+    const auto &reply =
+        !burned_response_body.empty() && body.find("\"Method\":\"Embed\"") == std::string_view::npos
+            ? burned_response_body
+            : response_body;
+    return {reply.empty() ? 500 : 200, reply, {}};
+}
+Response send(std::string_view method, std::string_view, int, std::string_view path,
+              const std::vector<std::string> &, std::string_view body, std::string_view) noexcept
+{
+    watched_method = method;
+    requests.emplace_back(path);
+    bodies.emplace_back(body);
+    return {watched_status, watched_reply, {}};
 }
 Response get(std::string_view, int, std::string_view path,
              const std::vector<std::string> &) noexcept
@@ -44,6 +66,76 @@ std::string url_encode(std::string_view value) noexcept
 int main()
 {
     using namespace slopfin::jellyfin;
+    const auto timed = slopfin::json::parse(R"({"RunTimeTicks":75012345678})");
+    const auto precise = read_item(*timed);
+    assert(precise.runtime_minutes == 125);
+    assert(std::abs(precise.duration_seconds() - 7501.2345678) < 0.0000001);
+    // TRON's embedded subtitle Title is the language itself. Never strip it
+    // from DisplayTitle as if it were a remux release prefix.
+    const auto subtitles = slopfin::json::parse(R"JSON({"Id":"tron","MediaSources":[{"Id":"source",
+      "MediaStreams":[
+        {"Type":"Subtitle","Index":4,"Codec":"PGSSUB","Language":"eng","Title":"English","DisplayTitle":"English - PGSSUB"},
+        {"Type":"Subtitle","Index":5,"Codec":"PGSSUB","Language":"eng","Title":"English (SDH)","DisplayTitle":"English (SDH) - Hearing Impaired - PGSSUB","IsHearingImpaired":true},
+        {"Type":"Subtitle","Index":16,"Codec":"PGSSUB","Language":"fra","Title":"French (Canadian)","DisplayTitle":"French (Canadian) - PGSSUB"},
+        {"Type":"Subtitle","Index":6,"Codec":"PGSSUB","Language":"ara","DisplayTitle":"PGSUB","IsForced":true}
+      ]}]})JSON");
+    assert(subtitles);
+    const auto parsed_subtitles = read_item(*subtitles).sources.front().subtitle_tracks;
+    assert(parsed_subtitles[0].label == "English - PGSSUB");
+    assert(parsed_subtitles[1].is_hearing_impaired);
+    assert(slopfin::subtitle_labels::label(parsed_subtitles[2]).find("French (Canadian)") == 0);
+    assert(slopfin::subtitle_labels::label(parsed_subtitles[3]) == "Arabic · PGS · Forced");
+    assert(slopfin::subtitle_labels::language("ger") == "German");
+    assert(slopfin::subtitle_labels::language("PT-br") == "Portuguese (br)");
+    assert(slopfin::subtitle_labels::language("xyz") == "xyz");
+    Track missing;
+    missing.codec = "dvdsub";
+    assert(slopfin::subtitle_labels::label(missing) == "Unknown language · DVD");
+
+    session_body =
+        R"({"Items":[{"Id":"beerus","Name":"Dragon Ball Super: Beerus","Type":"Series","UserData":{"Played":true}},{"Id":"z","Name":"Dragonball Z","Type":"Series"}]})";
+    const auto latest_shows = latest("dragonball", 16, "tvshows");
+    assert(latest_shows.size() == 2 && latest_shows[0].id == "beerus");
+    assert(last_get_path.find("/Items?recursive=true") != std::string::npos &&
+           last_get_path.find("includeItemTypes=Series") != std::string::npos &&
+           last_get_path.find("DateLastContentAdded,DateCreated,SortName") != std::string::npos &&
+           last_get_path.find("parentId=dragonball") != std::string::npos &&
+           last_get_path.find("isPlayed") == std::string::npos);
+    session_body = "[]";
+    (void)latest("movies", 16, "movies");
+    assert(last_get_path.find("/Items/Latest?") != std::string::npos);
+    session_body.clear();
+
+    // Both watched operations use the returned progress, rather than keeping
+    // the old resume position or treating the requested boolean as a reply.
+    slopfin::config::current().user_id = "fixture-user";
+    UserProgress updated{false, 6000000000.0, 50.0};
+    watched_reply = R"({"Played":true,"PlaybackPositionTicks":0})";
+    assert(mark_played("fixture", true, &updated));
+    assert(watched_method == "POST" &&
+           requests.back() == "/Users/fixture-user/PlayedItems/fixture");
+    assert(updated.played && updated.resume_ticks == 0.0 && updated.played_percentage == 100.0);
+    watched_reply = R"({"Played":false,"PlaybackPositionTicks":0,"PlayedPercentage":0})";
+    assert(mark_played("fixture", false, &updated));
+    assert(watched_method == "DELETE" && !updated.played && updated.resume_ticks == 0.0 &&
+           updated.played_percentage == 0.0);
+    watched_reply = R"({"Played":false,"PlaybackPositionTicks":123000000,"PlayedPercentage":4})";
+    assert(mark_played("fixture", true, &updated));
+    assert(!updated.played && updated.resume_ticks == 123000000 && updated.played_percentage == 4);
+    watched_status = 500;
+    assert(!mark_played("fixture", true, &updated));
+    assert(!updated.played && updated.resume_ticks == 123000000 && updated.played_percentage == 4);
+    watched_status = 200;
+    watched_reply = "invalid";
+    assert(!mark_played("fixture", true, &updated));
+    assert(updated.resume_ticks == 123000000);
+    watched_status = 204;
+    watched_reply.clear();
+    assert(mark_played("fixture", true, &updated));
+    assert(updated.played && updated.resume_ticks == 0.0 && updated.played_percentage == 100.0);
+    requests.clear();
+    bodies.clear();
+
     // Scope crops are labelled by their tier, not their height.
     const auto label = [](int w, int h)
     {
@@ -299,6 +391,39 @@ int main()
     assert(dv.video_delivery_known && !dv.hdr && !dv.dv_hdr10_base && dv.bit_depth == 8);
     defaults.media_source_id = "absent-version";
     assert(!playback_plan(defaults).valid);
+#ifdef SLOPFIN_BITMAP_SUBTITLES
+    PlaybackRequest picture;
+    picture.item_id = "picture";
+    picture.subtitle_index = 5;
+    response_body = R"({"MediaSources":[{"Id":"bitmap-source","Container":"mkv","Protocol":"File",
+      "SupportsDirectPlay":true,"Size":10000,"MediaStreams":[
+      {"Type":"Video","Codec":"hevc","Width":3840,"Height":2160},
+      {"Type":"Subtitle","Index":3,"Codec":"subrip","IsExternal":true},
+      {"Type":"Subtitle","Index":4,"Codec":"subrip"},
+      {"Type":"Subtitle","Index":5,"Codec":"PGSSUB","DeliveryMethod":"Embed"}]}]})";
+    burned_response_body = R"({"MediaSources":[{"Id":"bitmap-source","Container":"mkv",
+      "TranscodingUrl":"/stream.ts?VideoCodec=h264&AudioCodec=aac",
+      "MediaStreams":[{"Type":"Video","Codec":"hevc"},
+      {"Type":"Subtitle","Index":5,"Codec":"PGSSUB","DeliveryMethod":"Encode"}]}]})";
+    auto bitmap = playback_plan(picture);
+    assert(bitmap.valid && bitmap.direct && bitmap.subtitle_bitmap && !bitmap.subtitle_burned);
+    assert(bitmap.subtitle_ordinal == 1 && bitmap.subtitle_codec == "pgssub");
+    picture.burn_picture_subtitles = true;
+    auto burned = playback_plan(picture);
+    assert(burned.valid && !burned.direct && burned.subtitle_burned && !burned.subtitle_bitmap);
+    assert(query_value(burned.path, "SubtitleStreamIndex") == "5");
+    picture.burn_picture_subtitles = false;
+    picture.server_remux = true;
+    burned = playback_plan(picture);
+    assert(burned.subtitle_burned && !burned.subtitle_bitmap);
+    picture.server_remux = false;
+    // An external track must not accidentally select an internal MKV stream.
+    response_body.replace(response_body.find("\"DeliveryMethod\":\"Embed\""), 24,
+                          "\"DeliveryMethod\":\"Embed\",\"IsExternal\":true");
+    burned = playback_plan(picture);
+    assert(burned.subtitle_burned && !burned.subtitle_bitmap);
+    burned_response_body.clear();
+#endif
     response_body.clear();
     assert(!playback_plan(request).valid); // Never a hidden fixed-rate fallback.
     std::puts("Negotiation quality, TrueHD fallback and delivered HDR tests passed");

@@ -35,13 +35,18 @@
 #include "motion.hpp"
 #include "pad.hpp"
 #include "player.hpp"
+#include "reporter.hpp"
 #include "seek.hpp"
 #include "server_address.hpp"
 #include "search_sections.hpp"
 #include "seerr.hpp"
 #include "subtitle_style.hpp"
+#include "voice_search.hpp"
+#include "subtitle_labels.hpp"
 #include "subtitle_timing.hpp"
 #include "subtitles.hpp"
+#include "bitmap_subtitles.hpp"
+#include "picture_subtitle_layout.hpp"
 #include "telemetry.hpp"
 #include "text.hpp"
 #include "trace.hpp"
@@ -208,6 +213,13 @@ enum class Request
     sign_out,
 };
 
+struct ProgressFocusChange
+{
+    std::string id;
+    bool had_resume = false;
+    bool has_resume = false;
+};
+
 struct Shared
 {
     std::mutex mutex;
@@ -271,6 +283,9 @@ struct Shared
 
     /* Marks Home progress rows stale after playback or a watched-state change. */
     bool progress_stale = false;
+    /* The worker updates item data; the render thread adjusts its saved action
+       cursors when clearing progress removes the Start over button. */
+    std::vector<ProgressFocusChange> progress_focus_changes;
 
     /* "On this PS5": what was asked, for which title and version, and the
        answer once the worker has it. */
@@ -338,7 +353,8 @@ struct View
     int account_row = 0; /* the row focused on the Account screen */
     /* Where Circle goes from the Profile and Dashboard screens. */
     Screen return_screen = Screen::home;
-    int subtitle_row = 1;      /* the row focused on the Subtitles screen */
+    int subtitle_row = 1; /* the row focused on the Subtitles screen */
+    motion::Spring subtitle_scroll;
     int detail_action = 0;     /* 0 Play, 1 Watched, 2 Version */
     int detail_source = 0;     /* which media version is selected */
     bool details_open = false; /* the Details sheet over the detail screen */
@@ -346,11 +362,18 @@ struct View
     std::vector<jellyfin::Item> leaving_items;
     float leaving_scroll = 0.0f;
     long leaving_frame = -1;
-    int details_scroll = 0; /* first line of the sheet on screen */
+    float details_scroll = 0.0f; /* target pixel offset of the file details sheet */
+    motion::Spring details_offset;
+    motion::StickGlide details_glide;
+    float details_limit = 0.0f;
+    float details_hold_time = 0.0f;
+    int details_hold_direction = 0;
     int detail_episode = 0;
     motion::Spring detail_scroll;
     /* The detail page scrolling as a whole, and its Cast & Crew row. */
     motion::Spring detail_page;
+    motion::StickGlide detail_page_glide;
+    bool detail_page_manual = false;
     motion::Spring detail_cast_scroll;
     int detail_cast_index = 0;
     std::string detail_strip_placed_for; /* the episode whose strip was opened at itself */
@@ -746,6 +769,8 @@ void advance_motion() noexcept
     g_view.grid_scroll.step(motion::kScroll, dt);
     g_view.detail_scroll.step(motion::kSlide, dt);
     g_view.detail_page.step(motion::kScroll, dt);
+    g_view.details_offset.step(motion::kScroll, dt);
+    g_view.subtitle_scroll.step(motion::kScroll, dt);
     g_view.detail_cast_scroll.step(motion::kSlide, dt);
     g_view.search.scroll.step(motion::kScroll, dt);
     for (auto &offset : g_view.search.rail)
@@ -835,6 +860,75 @@ void remember_detail_rows(const std::string &id, const std::vector<jellyfin::Ite
         g_detail_rows_order.push_back(id);
     }
     g_detail_rows_cache[id] = CachedDetailRows{entries, next_up};
+}
+
+void apply_marked_progress(const std::string &id, const jellyfin::UserProgress &progress) noexcept
+{
+    std::optional<bool> had_resume;
+    const auto update = [&](jellyfin::Item &item)
+    {
+        if (item.id != id)
+            return false;
+        if (!had_resume.has_value())
+            had_resume = item.resume_ticks > 0.0;
+        item.played = progress.played;
+        item.resume_ticks = progress.resume_ticks;
+        item.played_percentage = progress.played_percentage;
+        return true;
+    };
+    const auto update_all = [&](std::vector<jellyfin::Item> &items)
+    {
+        bool changed = false;
+        for (auto &item : items)
+            changed = update(item) || changed;
+        return changed;
+    };
+    /* Keep prefetched pages coherent too, otherwise going back and reopening
+       this title restores its old Resume button without asking the server. */
+    {
+        std::lock_guard<std::mutex> guard(g_detail_cache_mutex);
+        if (const auto found = g_detail_cache.find(id); found != g_detail_cache.end())
+            update(found->second);
+        for (auto &[key, rows] : g_detail_rows_cache)
+        {
+            (void)key;
+            update_all(rows.entries);
+            update(rows.next_up);
+        }
+    }
+    std::lock_guard<std::mutex> guard(g_shared.mutex);
+    if (g_shared.detail_item.id == id)
+        had_resume = g_shared.detail_item.resume_ticks > 0.0;
+    bool detail_changed = update(g_shared.detail_item);
+    detail_changed = update_all(g_shared.detail_episodes) || detail_changed;
+    detail_changed = update(g_shared.detail_next_up) || detail_changed;
+    if (detail_changed)
+        ++g_shared.detail_epoch;
+    if (update_all(g_shared.grid_items))
+        ++g_shared.grid_epoch;
+    if (update_all(g_shared.search_items))
+        ++g_shared.search_epoch;
+    bool rows_changed = false;
+    for (auto &row : g_shared.rows)
+    {
+        rows_changed = update_all(row.items) || rows_changed;
+        if (row.title == "Continue Watching" && progress.resume_ticks <= 0.0)
+            row.items.erase(std::remove_if(row.items.begin(), row.items.end(),
+                                           [&](const jellyfin::Item &item)
+                                           { return item.id == id; }),
+                            row.items.end());
+    }
+    const std::size_t previous_rows = g_shared.rows.size();
+    g_shared.rows.erase(
+        std::remove_if(g_shared.rows.begin(), g_shared.rows.end(), [](const Row &row)
+                       { return row.title == "Continue Watching" && row.items.empty(); }),
+        g_shared.rows.end());
+    if (rows_changed || g_shared.rows.size() != previous_rows)
+        ++g_shared.rows_epoch;
+    update_all(g_shared.siblings);
+    update(g_shared.pending_play);
+    if (had_resume.has_value() && *had_resume != (progress.resume_ticks > 0.0))
+        g_shared.progress_focus_changes.push_back({id, *had_resume, progress.resume_ticks > 0.0});
 }
 
 void fetch_detail_rows(const jellyfin::Item &item, std::vector<jellyfin::Item> &entries,
@@ -1042,7 +1136,8 @@ void load_home() noexcept
             !library.collection_type.empty())
             continue;
         shown.push_back(library);
-        std::vector<jellyfin::Item> items = jellyfin::latest(library.id, 16);
+        std::vector<jellyfin::Item> items =
+            jellyfin::latest(library.id, 16, library.collection_type);
         if (!items.empty())
             rows.push_back(Row{"Latest in " + library.name, std::move(items), false});
     }
@@ -1093,6 +1188,13 @@ int g_refresh_turn = 0;
 
 void refresh_progress_rows() noexcept
 {
+    // This runs on the library worker. Never replace the exact local stop
+    // position with a server snapshot taken before its final report arrived.
+    if (!reporter::flush(2000))
+    {
+        trace::mark("home: progress report pending; keeping local progress");
+        return;
+    }
     const bool with_latest = g_latest_due.exchange(false) || (g_refresh_turn++ % 4) == 0;
     std::vector<jellyfin::Item> resumed = jellyfin::resume(16);
     std::vector<jellyfin::Item> next = jellyfin::next_up(16);
@@ -1114,7 +1216,8 @@ void refresh_progress_rows() noexcept
     {
         const std::string title = "Latest in " + library.name;
         owned.push_back(title);
-        std::vector<jellyfin::Item> items = jellyfin::latest(library.id, 16);
+        std::vector<jellyfin::Item> items =
+            jellyfin::latest(library.id, 16, library.collection_type);
         if (!items.empty())
             refreshed.push_back(Row{title, std::move(items), false});
     }
@@ -1524,25 +1627,26 @@ void *worker(void *) noexcept
 
         case Request::mark_played:
         case Request::mark_unplayed:
+        {
+            if (!reporter::flush(2000))
+            {
+                trace::mark("watched: waiting for the final playback report");
+                break;
+            }
             /* Marking something played moves it out of Continue Watching and
                pulls the next episode into Next Up. Nothing else on Home
                changes, so this no longer re-walks the libraries. */
-            if (const bool played = request == Request::mark_played;
-                jellyfin::mark_played(text, played))
+            jellyfin::UserProgress progress;
+            if (jellyfin::mark_played(text, request == Request::mark_played, &progress))
             {
-                {
-                    std::lock_guard<std::mutex> guard(g_shared.mutex);
-                    if (g_shared.detail_item.id == text)
-                    {
-                        g_shared.detail_item.played = played;
-                        ++g_shared.detail_epoch; /* the button names the new action */
-                    }
-                }
+                apply_marked_progress(text, progress);
                 refresh_progress_rows();
             }
             break;
+        }
 
         case Request::sign_out:
+            reporter::invalidate();
             jellyfin::sign_out();
             {
                 std::lock_guard<std::mutex> guard(g_shared.mutex);
@@ -1864,7 +1968,6 @@ std::string card_subtitle(const jellyfin::Item &item) noexcept
 void draw_card_placeholder(int x, int y, int w, int h, const jellyfin::Item &item) noexcept
 {
     gfx::rounded_rect(x, y, w, h, kCardRadius, gfx::rgba(0xff, 0xff, 0xff, 0x0b));
-    gfx::stroke_rounded_rect(x, y, w, h, kCardRadius, 1, gfx::rgba(0xff, 0xff, 0xff, 0x14));
     const std::string initial = item.name.empty() ? "?" : item.name.substr(0, 1);
     const int size = std::max(28, h / 8);
     const int width = text::measure(initial, size, Weight::bold);
@@ -2053,6 +2156,7 @@ struct Wash
     int shape = -1;  /* which layout composed it */
     bool ready = false;
     bool hdr = false;
+    bool direct = false;
     /* The page's slide offset, set aside while composing: the cache holds the
        picture where it belongs, not wherever a transition happened to be. */
     int origin_x = 0;
@@ -2062,9 +2166,31 @@ Wash g_wash;
 /* Counts compositions, so the trace can say whether the cache is being hit. */
 unsigned g_wash_composed = 0;
 
+/* The cached background, named by its composition: its pixels change only
+   when it is composed again, so the GPU keeps its copy until then. */
+void blit_wash() noexcept
+{
+    const std::uint64_t id = (std::uint64_t{0x57} << 56) | g_wash_composed;
+    if (g_wash.shape == 0)
+        gfx::blit_surface_height(g_wash.pixels, 720, id);
+    else
+        gfx::blit_surface(g_wash.pixels, id);
+}
+
 /* Reuse the cached background until its item or composition key changes. */
 bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexcept
 {
+    /* GPU composition is cheaper than building and uploading a new full-size
+       CPU cache each time focus changes. Keep the cache for the CPU fallback. */
+    g_wash.direct = gfx::menu_accelerated();
+    if (g_wash.direct)
+    {
+        gfx::origin(g_wash.origin_x, g_wash.origin_y);
+        gfx::set_origin(0, 0);
+        if (draw_base)
+            draw_background();
+        return true;
+    }
     const std::size_t words = gfx::surface_words();
     if (g_wash.words != words)
     {
@@ -2083,10 +2209,7 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
     if (g_wash.ready && g_wash.shape == shape && g_wash.key == key &&
         g_wash.hdr == gfx::hdr_output())
     {
-        if (shape == 0)
-            gfx::blit_surface_height(g_wash.pixels, 720);
-        else
-            gfx::blit_surface(g_wash.pixels);
+        blit_wash();
         gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
         return false;
     }
@@ -2106,15 +2229,18 @@ bool wash_begin(const std::string &key, int shape, bool draw_base = true) noexce
 /* Finishes a composition begun by wash_begin and puts it on the frame. */
 void wash_end() noexcept
 {
+    if (g_wash.direct)
+    {
+        g_wash.direct = false;
+        gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
+        return;
+    }
     if (g_wash.pixels == nullptr || g_wash.ready)
         return;
     gfx::pop_target();
     g_wash.ready = true;
     ++g_wash_composed;
-    if (g_wash.shape == 0)
-        gfx::blit_surface_height(g_wash.pixels, 720);
-    else
-        gfx::blit_surface(g_wash.pixels);
+    blit_wash();
     gfx::set_origin(g_wash.origin_x, g_wash.origin_y);
 }
 
@@ -2504,10 +2630,23 @@ SearchScope search_scope(Screen screen, const std::vector<SidebarEntry> &sidebar
    define it, so it is named here. */
 void open_search() noexcept;
 
-/* Reserve an empty area beneath the field for the native keyboard. */
+bool voice_search_active(voice_search::Phase phase) noexcept
+{
+    return ui::voice_search_active(phase);
+}
+
+bool voice_search_status_visible(voice_search::Phase phase) noexcept
+{
+    return ui::voice_search_status_visible(phase);
+}
+
+/* Recording status has its own space above the existing result rails. */
 int search_results_top() noexcept
 {
-    return kSearchBarY + kSearchBarH + 54;
+    return kSearchBarY + kSearchBarH + 54 +
+           (voice_search_status_visible(voice_search::snapshot().phase)
+                ? ui::kVoiceSearchStatusHeight
+                : 0);
 }
 
 void draw_search_bar(const SearchScope &scope, bool loading, std::size_t results) noexcept
@@ -2517,11 +2656,20 @@ void draw_search_bar(const SearchScope &scope, bool loading, std::size_t results
     field.placeholder = "Search " + scope.label;
     field.scope = scope.label;
     field.typing = ime::busy();
-    if (loading)
+    if (!g_view.search.keyboard_notice.empty())
+        field.note = g_view.search.keyboard_notice;
+    else if (loading)
         field.note = "Searching";
     else if (!g_view.search.committed.empty())
-        field.note = results == 0 ? "No matches" : std::to_string(results) + " results";
+        field.note = results == 0
+                         ? "No matches"
+                         : std::to_string(results) + (results == 1 ? " result" : " results");
+    const auto voice = voice_search::snapshot();
+    ui::apply_voice_search_state(field, voice);
     ui::draw_search_field(kSearchBarX, kSearchBarY, kSearchBarW, field);
+    if (g_view.search.committed.empty() && !field.typing && !field.voice && field.note.empty())
+        ui::draw_search_prompt(kSearchBarX + 28, kSearchBarY + kSearchBarH + 12);
+    ui::draw_voice_search_status(kSearchBarX, kSearchBarY + kSearchBarH + 54, voice);
 }
 
 void draw_search_results(const std::vector<jellyfin::Item> &items,
@@ -2531,20 +2679,11 @@ void draw_search_results(const std::vector<jellyfin::Item> &items,
     const int top = search_results_top();
     if (ime::busy())
         return;
-    draw_button_hints(kContentX, gfx::kHeight - 48,
-                      {{icons::Icon::ps_cross, "Open"},
-                       {icons::Icon::ps_triangle, "Edit search"},
-                       {icons::Icon::ps_circle, "Close"}});
+    const auto voice = voice_search::snapshot();
+    ui::draw_search_close_hint(voice);
 
     if (g_view.search.committed.empty())
-    {
-        text::draw(kContentX, top + 20,
-                   g_view.search.keyboard_notice.empty()
-                       ? "Search movies, series and episodes with the PlayStation keyboard."
-                       : g_view.search.keyboard_notice,
-                   25, Weight::regular, gfx::palette::text_dim);
         return;
-    }
     if (items.empty())
     {
         text::draw(kContentX, top + 20,
@@ -2811,7 +2950,6 @@ void draw_primary_button(int x, int y, int w, const char *label, bool focused) n
     const ui::Theme &theme = ui::kHomeTheme;
     if (focused)
     {
-        gfx::drop_shadow(x, y, w, kButtonH, kFieldRadius, 26, 0x90);
         gfx::rounded_horizontal_gradient(x, y, w, kButtonH, kFieldRadius, theme.accent_from,
                                          theme.accent_to);
         gfx::stroke_rounded_rect(x - 6, y - 6, w + 12, kButtonH + 12, kFieldRadius + 6, 3,
@@ -3128,18 +3266,100 @@ struct DetailButton
 {
     DetailAction action;
     std::string label;
+    float progress = 0.0f;
+    std::string remaining{};
 };
+
+/* Playback leads; the quieter tools read as one toolbar, without extra rims. */
+constexpr int kDetailActionHeight = 56;
+constexpr int kDetailActionGap = 12;
+
+std::string detail_action_label(const DetailButton &button) noexcept
+{
+    if (button.action == DetailAction::play)
+        return button.label == "Play" ? "Play" : "Resume";
+    if (button.action == DetailAction::restart)
+        return "Start over";
+    return button.label;
+}
+
+int detail_action_width(const DetailButton &button) noexcept
+{
+    if (button.action == DetailAction::play)
+        return std::max(text::measure(detail_action_label(button), 21, Weight::medium),
+                        button.label == "Play"
+                            ? 0
+                            : text::measure(button.remaining, 16, Weight::regular)) +
+               80;
+    return text::measure(detail_action_label(button), 21, Weight::medium) + 62;
+}
+
+void draw_detail_action(int x, int y, const DetailButton &button, bool focused) noexcept
+{
+    const bool resume = button.action == DetailAction::play && button.label != "Play";
+    const int width = detail_action_width(button);
+    const auto ink = focused ? gfx::rgb(0x20, 0x21, 0x24) : gfx::palette::text;
+    constexpr int radius = 19;
+    if (focused)
+    {
+        gfx::rounded_vertical_gradient(x, y, width, kDetailActionHeight, radius,
+                                       gfx::rgb(0xff, 0xff, 0xff), gfx::rgb(0xde, 0xdf, 0xe1));
+        gfx::stroke_rounded_rect(x + 1, y + 1, width - 2, kDetailActionHeight - 2, radius - 1, 1,
+                                 gfx::rgba(0xff, 0xff, 0xff, 0xf0));
+    }
+    if (button.action == DetailAction::play)
+    {
+        // Progress belongs to the play affordance; time stays with its label.
+        const int cx = x + 30, cy = y + kDetailActionHeight / 2;
+        gfx::arc(cx, cy, 17, 3, 0.0f, 1.0f,
+                 focused ? gfx::rgba(0x20, 0x32, 0x40, 0x35) : gfx::rgba(0xff, 0xff, 0xff, 0x70),
+                 false);
+        const float progress = std::clamp(button.progress, 0.0f, 1.0f);
+        if (resume && progress > 0.0f)
+            gfx::arc(cx, cy, 17, 3, progress, progress,
+                     focused ? gfx::rgb(0x00, 0x76, 0x9b) : gfx::rgb(0x58, 0xd4, 0xe9), false);
+        icons::draw(icons::Icon::play, cx - 8, cy - 9, 18, ink);
+        if (resume)
+        {
+            text::draw(x + 58, y + 7, "Resume", 21, Weight::medium, ink);
+            text::draw(x + 58, y + 32, button.remaining, 16, Weight::regular,
+                       focused ? gfx::rgb(0x4c, 0x55, 0x60) : gfx::rgb(0xa5, 0xb4, 0xc2));
+        }
+        else
+            text::draw(x + 58, text::centered_y(y, kDetailActionHeight, "Play", 21, Weight::medium),
+                       "Play", 21, Weight::medium, ink);
+        return;
+    }
+    const icons::Icon icon = button.action == DetailAction::play      ? icons::Icon::play
+                             : button.action == DetailAction::restart ? icons::Icon::skip_back
+                             : button.action == DetailAction::watched ? icons::Icon::check
+                             : button.action == DetailAction::series  ? icons::Icon::series
+                                                                      : icons::Icon::info;
+    icons::draw(icon, x + 18, y + 16, 24, focused ? ink : gfx::rgb(0xb6, 0xc4, 0xd4));
+    const std::string label = detail_action_label(button);
+    text::draw(x + 52, text::centered_y(y, kDetailActionHeight, label, 21, Weight::medium), label,
+               21, Weight::medium, ink);
+}
 
 std::vector<DetailButton> detail_actions(const jellyfin::Item &item) noexcept
 {
     std::vector<DetailButton> out;
     if (item.type != "Movie" && item.type != "Episode")
         return out;
-    out.push_back({DetailAction::play, resume_label(item)});
+    const double total_seconds = item.duration_seconds();
+    const double position = item.resume_ticks / 10000000.0;
+    const float progress = static_cast<float>(total_seconds > 0.0 ? position / total_seconds
+                                                                  : item.played_percentage / 100.0);
+    const int left = static_cast<int>(std::ceil(std::max(0.0, total_seconds - position) / 60.0));
+    const std::string remaining =
+        total_seconds <= 0.0 ? std::string{}
+        : left >= 60 ? std::to_string(left / 60) + "h " + std::to_string(left % 60) + "m left"
+                     : std::to_string(left) + "m left";
+    out.push_back({DetailAction::play, resume_label(item), progress, remaining});
     /* Only where there is something to go back from. */
     if (item.resume_ticks > 0.0)
         out.push_back({DetailAction::restart, "Start from beginning"});
-    out.push_back({DetailAction::watched, item.played ? "Unwatched" : "Watched"});
+    out.push_back({DetailAction::watched, item.played ? "Mark unwatched" : "Mark watched"});
     if (item.type == "Episode" && !item.series_id.empty())
         out.push_back({DetailAction::series, "Go to series"});
     if (!item.sources.empty())
@@ -3297,8 +3517,64 @@ std::string resume_label(const jellyfin::Item &item) noexcept
     return "Resume from " + std::to_string(minutes) + "m";
 }
 
-/* Lines the Details sheet shows at once. */
+/* Pixel scrolling keeps headings and values together throughout a glide. */
 constexpr int kDetailsVisible = 17;
+constexpr int kDetailsLine = 40;
+constexpr int kDetailsViewport = kDetailsVisible * kDetailsLine;
+
+void draw_position_bar(int x, int y, int height, int viewport, float limit, float offset) noexcept
+{
+    if (limit <= 0.5f)
+        return;
+    constexpr int width = 5;
+    const int thumb = std::max(44, static_cast<int>(height * viewport / (viewport + limit)));
+    const int top = y + static_cast<int>((height - thumb) * std::clamp(offset / limit, 0.0f, 1.0f));
+    gfx::rounded_rect(x, y, width, height, 2, gfx::rgba(0xff, 0xff, 0xff, 0x24));
+    gfx::rounded_rect(x, top, width, thumb, 2, gfx::rgba(0xff, 0xff, 0xff, 0xb0));
+}
+
+void scroll_details_sheet(float axis, float dt) noexcept
+{
+    dt = std::clamp(dt, 0.0f, 0.1f);
+    const int direction =
+        static_cast<int>(pad::held(pad::Button::down) || pad::pressed(pad::Button::down)) -
+        static_cast<int>(pad::held(pad::Button::up) || pad::pressed(pad::Button::up));
+    if (direction != g_view.details_hold_direction || direction == 0)
+        g_view.details_hold_time = 0.0f;
+    else
+        g_view.details_hold_time += dt;
+    const bool began = direction != 0 && direction != g_view.details_hold_direction;
+    g_view.details_hold_direction = direction;
+    if (direction != 0)
+    {
+        g_view.details_glide.stop();
+        if (began)
+        {
+            g_view.details_scroll = std::clamp(g_view.details_scroll + direction * kDetailsLine,
+                                               0.0f, g_view.details_limit);
+            g_view.details_offset.aim(g_view.details_scroll);
+        }
+        else if (g_view.details_hold_time >= 0.22f)
+        {
+            const float boost =
+                motion::ease_in_out_cubic((g_view.details_hold_time - 0.22f) / 0.8f);
+            const float speed = 600.0f + 1800.0f * boost;
+            g_view.details_scroll = std::clamp(
+                g_view.details_offset.value() + direction * speed * dt, 0.0f, g_view.details_limit);
+            g_view.details_offset.jump(g_view.details_scroll);
+        }
+        return;
+    }
+    const float travel = g_view.details_glide.step(axis, dt) * kDetailsLine * 6.0f;
+    if (g_view.details_glide.moving())
+    {
+        const float next = g_view.details_offset.value() + travel;
+        g_view.details_scroll = std::clamp(next, 0.0f, g_view.details_limit);
+        g_view.details_offset.jump(g_view.details_scroll);
+        if (next <= 0.0f || next >= g_view.details_limit)
+            g_view.details_glide.stop();
+    }
+}
 
 /*
  * What the file on the server is: a properties sheet over the detail screen,
@@ -3326,7 +3602,6 @@ void draw_details_sheet(const jellyfin::Item &item) noexcept
     gfx::fill_rect(0, 0, gfx::kWidth, gfx::kHeight, gfx::rgba(0x00, 0x00, 0x00, 0xb8));
     constexpr int kW = 1240;
     constexpr int kH = 900;
-    constexpr int kLine = 40;
     constexpr int kKeyWidth = 190;
     const int x = (gfx::kWidth - kW) / 2;
     const int y = (gfx::kHeight - kH) / 2;
@@ -3344,12 +3619,18 @@ void draw_details_sheet(const jellyfin::Item &item) noexcept
     text::draw_ellipsized(x + 48, y + 84, kW - 96, subtitle, 22, Weight::regular,
                           gfx::palette::text_dim);
 
-    const int last_first = std::max(0, static_cast<int>(lines.size()) - kDetailsVisible);
-    g_view.details_scroll = std::clamp(g_view.details_scroll, 0, last_first);
-    int row_y = y + 140;
-    for (int i = g_view.details_scroll;
-         i < static_cast<int>(lines.size()) && i < g_view.details_scroll + kDetailsVisible; ++i)
+    g_view.details_limit = static_cast<float>(
+        std::max(0, static_cast<int>(lines.size()) * kDetailsLine - kDetailsViewport));
+    g_view.details_scroll = std::clamp(g_view.details_scroll, 0.0f, g_view.details_limit);
+    g_view.details_offset.aim(g_view.details_scroll);
+    const float offset = std::clamp(g_view.details_offset.value(), 0.0f, g_view.details_limit);
+    const int first = static_cast<int>(offset) / kDetailsLine;
+    const int viewport_y = y + 140;
+    gfx::fill_rect(x + 48, y + 122, kW - 96, 1, gfx::rgba(0xff, 0xff, 0xff, 0x18));
+    gfx::push_clip(x + 48, viewport_y, kW - 120, kDetailsViewport);
+    for (int i = first; i < static_cast<int>(lines.size()) && i <= first + kDetailsVisible; ++i)
     {
+        const int row_y = viewport_y + i * kDetailsLine - static_cast<int>(offset);
         const details::Line &line = lines[static_cast<std::size_t>(i)];
         if (line.kind == details::Line::Kind::heading)
             text::draw(x + 48, row_y + 10, line.key, 21, Weight::medium, gfx::palette::accent);
@@ -3357,15 +3638,23 @@ void draw_details_sheet(const jellyfin::Item &item) noexcept
         {
             text::draw_ellipsized(x + 48, row_y + 6, kKeyWidth - 20, line.key, 22, Weight::regular,
                                   gfx::palette::text_faint);
-            text::draw_ellipsized(x + 48 + kKeyWidth, row_y + 6, kW - 96 - kKeyWidth, line.value,
+            text::draw_ellipsized(x + 48 + kKeyWidth, row_y + 6, kW - 120 - kKeyWidth, line.value,
                                   22, Weight::regular, gfx::palette::text);
         }
-        row_y += kLine;
     }
+    gfx::pop_clip();
+    if (offset > 0.5f)
+        gfx::vertical_gradient(x + 48, viewport_y, kW - 120, 14, gfx::palette::surface,
+                               gfx::with_alpha(gfx::palette::surface, 0));
+    if (offset < g_view.details_limit - 0.5f)
+        gfx::vertical_gradient(x + 48, viewport_y + kDetailsViewport - 14, kW - 120, 14,
+                               gfx::with_alpha(gfx::palette::surface, 0), gfx::palette::surface);
+    draw_position_bar(x + kW - 32, viewport_y, kDetailsViewport, kDetailsViewport,
+                      g_view.details_limit, offset);
 
-    const std::string hint =
-        last_first > 0 ? "Up and down to scroll    \xc2\xb7    Circle to close" : "Circle to close";
-    text::draw(x + 48, y + kH - 50, hint, 20, Weight::regular, gfx::palette::text_faint);
+    const int close_width = 22 + 9 + text::measure("Close", 20, Weight::regular);
+    ui::draw_button_hints(x + kW - 48 - close_width, y + kH - 50,
+                          {{icons::Icon::ps_circle, "Close"}});
 }
 
 /*
@@ -3441,8 +3730,8 @@ constexpr int kDetailPosterW = 300;
 constexpr int kDetailPosterH = 450;
 constexpr int kHeroBottom = kDetailPosterY + kDetailPosterH;
 /* An episode's still in the same place, 16:9 and no taller than a poster. */
-constexpr int kDetailStillW = 720;
-constexpr int kDetailStillH = 405;
+constexpr int kDetailStillW = 560;
+constexpr int kDetailStillH = 315;
 /* let the episode/
    season strip breathe before Cast & Crew instead of squeezing both rows into
    the first viewport. The next row is intentionally reached by scrolling. */
@@ -3601,7 +3890,12 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
     wash_end();
 
     const DetailLayout layout = detail_layout(item, episodes, loading);
-    g_view.detail_page.aim(detail_page_target(layout));
+    const int page_bottom = std::max({kHeroBottom, layout.strip_bottom, layout.cast_bottom});
+    const float page_limit = static_cast<float>(std::max(0, page_bottom - kDetailVisibleBottom));
+    if (!g_view.detail_page_manual)
+        g_view.detail_page.aim(detail_page_target(layout));
+    else if (g_view.detail_page.value() > page_limit)
+        g_view.detail_page.jump(page_limit);
     const int shift = static_cast<int>(g_view.detail_page.value() + 0.5f);
 
     /* Poster beside the text, as the web and TV clients both do. An episode's
@@ -3614,26 +3908,19 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
     const int poster_h = still ? kDetailStillH : kDetailPosterH;
     const gfx::Bitmap *poster =
         images::acquire(item.id, item.image_tag, images::Kind::primary, 560);
-    if (still)
-        gfx::drop_shadow(poster_x, poster_y, poster_w, poster_h, 16, 28, 0x70);
     if (poster != nullptr)
         gfx::blit_cover(*poster, poster_x, poster_y, poster_w, poster_h, 16, 255);
     else
         draw_card_placeholder(poster_x, poster_y, poster_w, poster_h, item);
-    if (still)
+    if (still && item.played_percentage > 0.5)
     {
-        gfx::stroke_rounded_rect(poster_x, poster_y, poster_w, poster_h, 16, 1,
-                                 gfx::rgba(0xff, 0xff, 0xff, 0x1c));
-        if (item.played_percentage > 0.5)
-        {
-            const int track = poster_w - 40;
-            const int filled =
-                static_cast<int>(track * std::min(100.0, item.played_percentage) / 100.0);
-            gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, track, 6, 3,
-                              gfx::rgba(0xff, 0xff, 0xff, 0x40));
-            gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, filled, 6, 3,
-                              gfx::palette::accent);
-        }
+        const int track = poster_w - 40;
+        const int filled =
+            static_cast<int>(track * std::min(100.0, item.played_percentage) / 100.0);
+        gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, track, 6, 3,
+                          gfx::rgba(0xff, 0xff, 0xff, 0x40));
+        gfx::rounded_rect(poster_x + 20, poster_y + poster_h - 24, filled, 6, 3,
+                          gfx::palette::accent);
     }
 
     const int x = poster_x + poster_w + 48;
@@ -3748,7 +4035,7 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
             const int minutes = item.runtime_minutes % 60;
             add(hours > 0 ? std::to_string(hours) + "h " + std::to_string(minutes) + "m"
                           : std::to_string(minutes) + "m");
-            const double left = item.runtime_minutes * 60.0 - item.resume_ticks / 10000000.0;
+            const double left = item.duration_seconds() - item.resume_ticks / 10000000.0;
             if (const std::string ends = time_of_day(std::max(0.0, left)); !ends.empty())
                 add("Ends at " + ends);
         }
@@ -3792,7 +4079,8 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
     }
 
     const std::vector<DetailButton> actions = detail_actions(item);
-    const int buttons_y = poster_y + kDetailPosterH - 50;
+    const int buttons_y =
+        still ? poster_y + poster_h + 40 : poster_y + kDetailPosterH - kDetailActionHeight;
     const bool versions = has_versions(item);
     const int version_y = buttons_y - kVersionHeight - 18;
     const int text_floor = versions           ? version_y - 22
@@ -3811,12 +4099,16 @@ void draw_detail(const jellyfin::Item &item, const std::vector<jellyfin::Item> &
         draw_version_bar(item, x, version_y, right);
 
     {
-        int action_x = x;
+        int action_x = still ? kSafeX : x;
         for (std::size_t i = 0; i < actions.size(); ++i)
         {
-            draw_action(action_x, buttons_y, actions[i].label,
-                        g_view.detail_action == static_cast<int>(i));
-            action_x += action_width(actions[i].label) + kActionGap;
+            draw_detail_action(action_x, buttons_y, actions[i],
+                               g_view.detail_action == static_cast<int>(i));
+            action_x += detail_action_width(actions[i]) + kDetailActionGap;
+            if (actions[i].action == DetailAction::play)
+            {
+                action_x += 12;
+            }
         }
     }
 
@@ -4082,9 +4374,9 @@ std::vector<PlayerButton> player_buttons() noexcept
     if (!g_view.playing_source.audio_tracks.empty())
         out.push_back({icons::Icon::audio, PlayerAction::audio});
     out.push_back({icons::Icon::quality, PlayerAction::quality});
+    out.push_back({icons::Icon::info, PlayerAction::debug});
     if (g_view.playing_item.type == "Episode" && !g_view.playing_item.series_id.empty())
         out.push_back({icons::Icon::skip_forward, PlayerAction::autoplay});
-    out.push_back({icons::Icon::info, PlayerAction::debug});
     return out;
 }
 
@@ -4096,20 +4388,25 @@ enum class TimingRow : std::uint8_t
     late,
     early,
     reset,
+    picture_size,
+    picture_position,
+    picture_reset,
 };
 
 /* Refreshed once a frame from the status both the input and the drawing
    already read, rather than copying the whole status for every row. */
-bool g_subtitle_text_showing = false;
+bool g_subtitle_client_showing = false;
+bool g_subtitle_picture_showing = false;
 
 void note_subtitle_state(const player::Status &status) noexcept
 {
-    g_subtitle_text_showing = status.subtitle_index >= 0 && !status.subtitle_burned;
+    g_subtitle_client_showing = status.subtitle_index >= 0 && !status.subtitle_burned;
+    g_subtitle_picture_showing = status.subtitle_bitmap;
 }
 
 bool subtitle_timing_offered() noexcept
 {
-    return g_subtitle_text_showing;
+    return g_subtitle_client_showing;
 }
 
 TimingRow timing_row(int row) noexcept
@@ -4127,6 +4424,12 @@ TimingRow timing_row(int row) noexcept
         return TimingRow::early;
     case 3:
         return TimingRow::reset;
+    case 4:
+        return g_subtitle_picture_showing ? TimingRow::picture_size : TimingRow::none;
+    case 5:
+        return g_subtitle_picture_showing ? TimingRow::picture_position : TimingRow::none;
+    case 6:
+        return g_subtitle_picture_showing ? TimingRow::picture_reset : TimingRow::none;
     default:
         return TimingRow::none;
     }
@@ -4146,7 +4449,7 @@ int panel_rows() noexcept
 {
     if (g_view.panel_kind == 0)
         return 1 + static_cast<int>(g_view.playing_source.subtitle_tracks.size()) +
-               (subtitle_timing_offered() ? 4 : 0);
+               (subtitle_timing_offered() ? 4 : 0) + (g_subtitle_picture_showing ? 3 : 0);
     if (g_view.panel_kind == 1)
         return static_cast<int>(audio_rows(player::status()).size());
     return static_cast<int>(quality_rows().size());
@@ -4167,13 +4470,29 @@ std::string panel_row_label(int row) noexcept
             return "Subtitles early?  Show them later";
         case TimingRow::reset:
             return "Back to original timing";
+        case TimingRow::picture_size:
+            return std::string{"Picture size  \xc2\xb7  "} +
+                   subtitle_style::kPictureSizeNames[subtitle_style::wrap(
+                       config::current().subtitle_look.picture_size, 5)];
+        case TimingRow::picture_position:
+            return std::string{"Picture position  \xc2\xb7  "} +
+                   subtitle_style::kPicturePositionNames[subtitle_style::wrap(
+                       config::current().subtitle_look.picture_position, 4)];
+        case TimingRow::picture_reset:
+            return "Back to original picture layout";
         case TimingRow::none:
             break;
         }
         if (row == 0)
             return "Off";
         const auto &track = source.subtitle_tracks[static_cast<std::size_t>(row - 1)];
-        return track.label.empty() ? track.language : track.label;
+        std::string label = subtitle_labels::label(track);
+        const auto duplicates = std::count_if(source.subtitle_tracks.begin(),
+                                              source.subtitle_tracks.end(), [&](const auto &other)
+                                              { return subtitle_labels::label(other) == label; });
+        if (duplicates > 1)
+            label += " · Track " + std::to_string(row);
+        return label;
     }
     if (g_view.panel_kind == 1)
     {
@@ -4232,6 +4551,7 @@ bool panel_row_is_current(int row, const player::Status &status) noexcept
 
 void play_adjacent_episode(int direction) noexcept;
 void begin_playback(const jellyfin::Item &item, int source_index, double start_seconds) noexcept;
+void remember_playback_progress(const player::Status &status) noexcept;
 int starting_subtitle(const jellyfin::MediaSource &source) noexcept;
 
 /* Headings are drawn but never landed on. */
@@ -4308,7 +4628,7 @@ void apply_panel_choice() noexcept
         }
         const auto &track = source.subtitle_tracks[static_cast<std::size_t>(chosen)];
         /* A text subtitle is drawn by the app, so it can be swapped without
-           interrupting the picture. An image one is burned in by the server. */
+           interrupting the picture. A picture track restarts the reader to select its packets. */
         if (track.is_text && text_now)
         {
             player::show_text_subtitle(track.index);
@@ -4357,34 +4677,50 @@ void apply_panel_choice() noexcept
 /* The face a style asks for, in the text renderer's terms. */
 Weight subtitle_weight(const subtitle_style::Style &style) noexcept
 {
-    if (style.font == subtitle_style::Font::readable)
-        return style.bold ? Weight::readable_bold : Weight::readable;
-    return style.bold ? Weight::bold : Weight::medium;
+    constexpr Weight faces[subtitle_style::kFontCount][2] = {
+        {Weight::medium, Weight::bold},        {Weight::readable, Weight::readable_bold},
+        {Weight::roboto, Weight::roboto_bold}, {Weight::lato, Weight::lato_bold},
+        {Weight::serif, Weight::serif_bold},   {Weight::mono, Weight::mono_bold}};
+    return faces[static_cast<int>(style.font)][style.bold ? 1 : 0];
+}
+
+void prepare_subtitle_edges() noexcept
+{
+    const auto style = subtitle_style::resolve(config::current().subtitle_look);
+    if (style.edge != subtitle_style::Edge::none)
+        text::prepare_edges(style.pixel_size, subtitle_weight(style));
 }
 
 /* Center subtitle lines relative to the configured floor offset. */
 void draw_subtitle_block(const std::string &text, const subtitle_style::Style &style, int center_x,
-                         int floor) noexcept
+                         int floor, int max_width = gfx::kWidth - 2 * kSafeX,
+                         int ceiling = 0) noexcept
 {
     const int size = style.pixel_size;
     const Weight weight = subtitle_weight(style);
-    std::vector<std::string> lines;
-    for (std::size_t at = 0; at <= text.size();)
+    static std::string wrapped_text;
+    static std::vector<std::string> lines;
+    static int wrapped_size = 0, wrapped_width = 0;
+    static Weight wrapped_weight = Weight::regular;
+    if (wrapped_text != text || wrapped_size != size || wrapped_weight != weight ||
+        wrapped_width != max_width)
     {
-        const std::size_t stop = text.find('\n', at);
-        lines.push_back(text.substr(at, stop == std::string::npos ? std::string::npos : stop - at));
-        if (stop == std::string::npos)
-            break;
-        at = stop + 1;
+        lines = text::wrap_lines(text, max_width, size, weight);
+        wrapped_text = text;
+        wrapped_size = size;
+        wrapped_weight = weight;
+        wrapped_width = max_width;
     }
     const int step = style.line_step;
-    const int top = (floor - style.bottom_margin) - static_cast<int>(lines.size()) * step;
+    const int top = style.near_top
+                        ? ceiling + 96
+                        : (floor - style.bottom_margin) - static_cast<int>(lines.size()) * step;
 
     /* Draw all subtitle backgrounds before text to avoid overlapping boxes dimming earlier lines.
      */
     if (style.box_alpha > 0)
     {
-        const gfx::Color fill = gfx::rgba(0x0c, 0x0c, 0x10, style.box_alpha);
+        const gfx::Color fill = gfx::with_alpha(style.box_colour, style.box_alpha);
         if (style.box == subtitle_style::Box::band)
         {
             int widest = 0;
@@ -4422,7 +4758,7 @@ void draw_subtitle_block(const std::string &text, const subtitle_style::Style &s
         }
     }
 
-    const gfx::Color edge_colour = gfx::rgba(0x00, 0x00, 0x00, 0xcc);
+    const gfx::Color edge_colour = gfx::with_alpha(style.edge_colour, style.edge_alpha);
     int y = top;
     for (const std::string &line : lines)
     {
@@ -4433,22 +4769,11 @@ void draw_subtitle_block(const std::string &text, const subtitle_style::Style &s
         }
         const int width = text::measure(line, size, weight);
         const int x = center_x - width / 2;
-        const int e = style.edge_px;
         if (style.edge == subtitle_style::Edge::outline ||
             style.edge == subtitle_style::Edge::heavy)
-        {
-            const int offsets[8][2] = {{-e, 0},  {e, 0},  {0, -e}, {0, e},
-                                       {-e, -e}, {e, -e}, {-e, e}, {e, e}};
-            /* The thick outline fills its corners too, or the letters keep a
-               bright notch at each diagonal on a light picture. */
-            const int count = style.edge == subtitle_style::Edge::heavy ? 8 : 4;
-            for (int i = 0; i < count; ++i)
-                text::draw(x + offsets[i][0], y + offsets[i][1], line, size, weight, edge_colour);
-        }
+            text::draw_edge(x, y, line, size, weight, edge_colour, style.edge_px);
         else if (style.edge == subtitle_style::Edge::shadow)
-        {
-            text::draw(x + e + 1, y + e + 1, line, size, weight, edge_colour);
-        }
+            text::draw_edge(x, y, line, size, weight, edge_colour, style.edge_px, true);
         text::draw(x, y, line, size, weight, style.colour);
         y += step;
     }
@@ -4929,11 +5254,9 @@ void draw_skip_intro() noexcept
     const int y = base_y + static_cast<int>((1.0f - t) * 18.0f);
     const auto fade = [t](std::uint8_t a) { return static_cast<std::uint8_t>(a * t); };
 
-    gfx::drop_shadow(x, y, kW, kH, kRadius, 18, fade(0x78));
     gfx::rounded_rect(x, y, kW, kH, kRadius, gfx::rgba(0x0c, 0x0d, 0x12, fade(0xea)));
     gfx::rounded_horizontal_gradient(x, y, kW, kH, kRadius, gfx::rgba(0x00, 0xa4, 0xdc, fade(0x1e)),
                                      gfx::rgba(0x0c, 0x0d, 0x12, fade(0x00)));
-    gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 1, gfx::rgba(0xff, 0xff, 0xff, fade(0x24)));
     gfx::stroke_rounded_rect(x, y, kW, kH, kRadius, 2, gfx::rgba(0x62, 0xd5, 0xf4, fade(0xd8)));
     constexpr auto button = icons::Icon::ps_square;
     icons::draw(button, x + 20, y + 25, 26, gfx::with_alpha(ui::hint_colour(button), fade(0xff)));
@@ -4948,24 +5271,37 @@ void draw_skip_intro() noexcept
                18, Weight::regular, gfx::rgba(0xc2, 0xd8, 0xe0, fade(0xff)));
 }
 
-/* Offer the next episode over closing credits. */
-void draw_up_next_card() noexcept
+/* Offer the next episode without covering the credits with a tall panel. */
+struct UpNextLayout
+{
+    int width = 440;
+    int height = 114;
+    int picture_width = 140;
+    int picture_height = 80;
+    int title_size = 24;
+};
+
+int up_next_left(const UpNextLayout &layout, float progress) noexcept
+{
+    const int resting = kContentRight - layout.width;
+    const int outside = gfx::kWidth + 24;
+    return resting + static_cast<int>(std::lround((outside - resting) *
+                                                  (1.0f - std::clamp(progress, 0.0f, 1.0f))));
+}
+
+void draw_up_next_card(const UpNextLayout &layout = {}) noexcept
 {
     const jellyfin::Item &next = g_view.up_next;
-    constexpr int kCardW = 620;
-    constexpr int kStill = 200;
-    constexpr int kCardH = 192;
-    const int x = kContentRight - kCardW;
-    const int y = gfx::kHeight - 280;
-
-    /* It arrives from below rather than appearing. */
-    const float t = std::clamp(g_view.up_next_in.value(), 0.0f, 1.0f);
-    const int lift = static_cast<int>((1.0f - t) * 40.0f);
-    const auto fade = [t](std::uint8_t a) { return static_cast<std::uint8_t>(a * t); };
-    const int top = y + lift;
-
-    gfx::drop_shadow(x, top, kCardW, kCardH, 20, 24, fade(0x88));
-    gfx::rounded_rect(x, top, kCardW, kCardH, 20, gfx::rgba(0x12, 0x12, 0x16, fade(0xf2)));
+    const float progress = std::clamp(g_view.up_next_in.value(), 0.0f, 1.0f);
+    if (progress <= 0.004f)
+        return;
+    const int x = up_next_left(layout, progress);
+    const int top = gfx::kHeight - 88 - layout.height;
+    const float opacity = std::clamp(progress * 1.6f, 0.0f, 1.0f);
+    const auto fade = [opacity](std::uint8_t a) { return static_cast<std::uint8_t>(a * opacity); };
+    gfx::rounded_vertical_gradient(x, top, layout.width, layout.height, 18,
+                                   gfx::rgba(0x1c, 0x1e, 0x23, fade(0xf8)),
+                                   gfx::rgba(0x0e, 0x10, 0x14, fade(0xf8)));
 
     const bool borrowed =
         next.image_tag.empty() && !next.series_id.empty() && !next.series_primary_tag.empty();
@@ -4973,44 +5309,65 @@ void draw_up_next_card() noexcept
     const std::string still_tag = borrowed ? next.series_primary_tag : next.image_tag;
     const gfx::Bitmap *still =
         still_id.empty() ? nullptr
-                         : images::acquire(still_id, still_tag, images::Kind::primary, kStill);
-    const int picture_x = x + 16;
-    const int picture_y = top + 16;
-    const int picture_h = kCardH - 32;
+                         : images::acquire(still_id, still_tag, images::Kind::primary, 200);
+    const int picture_x = x + 12;
+    const int picture_y = top + (layout.height - 8 - layout.picture_height) / 2;
     if (still != nullptr)
-        gfx::blit_cover(*still, picture_x, picture_y, kStill, picture_h, 12, fade(0xff));
+        gfx::blit_cover(*still, picture_x, picture_y, layout.picture_width, layout.picture_height,
+                        10, fade(0xff));
     else
-        gfx::rounded_rect(picture_x, picture_y, kStill, picture_h, 12,
+    {
+        gfx::rounded_rect(picture_x, picture_y, layout.picture_width, layout.picture_height, 10,
                           gfx::rgba(0xff, 0xff, 0xff, fade(0x14)));
+        icons::draw(icons::Icon::series, picture_x + (layout.picture_width - 26) / 2,
+                    picture_y + (layout.picture_height - 26) / 2, 26,
+                    gfx::rgba(0xff, 0xff, 0xff, fade(0x70)));
+    }
 
-    const int text_x = picture_x + kStill + 20;
-    const int text_w = kCardW - (text_x - x) - 24;
+    const int text_x = picture_x + layout.picture_width + 14;
+    const int text_w = x + layout.width - 16 - text_x;
     const bool counting = g_view.autoplay.counting();
-    const int seconds = static_cast<int>(std::ceil(g_view.autoplay.seconds_left()));
-    const std::string heading = counting ? "Next episode in " + std::to_string(std::max(1, seconds))
-                                         : std::string{"Up next"};
-    text::draw(text_x, top + 20, heading, 22, Weight::medium,
-               gfx::rgba(0xff, 0xff, 0xff, fade(0xb0)));
-    std::string title = next.name;
+    const int seconds = std::max(1, static_cast<int>(std::ceil(g_view.autoplay.seconds_left())));
+    std::string heading = counting ? "Up next in " + std::to_string(seconds) + "s" : "Up next";
     if (next.parent_index_number > 0)
-        title = "S" + std::to_string(next.parent_index_number) + ":E" +
-                std::to_string(next.index_number) + "  " + next.name;
-    text::draw_ellipsized(text_x, top + 52, text_w, title, 27, Weight::bold,
+        heading += "   \xc2\xb7   S" + std::to_string(next.parent_index_number) + ":E" +
+                   std::to_string(next.index_number);
+    if (next.runtime_minutes > 0)
+        heading += "   \xc2\xb7   " + std::to_string(next.runtime_minutes) + "m";
+    text::draw_ellipsized(text_x, top + 12, text_w, heading, 16, Weight::medium,
+                          gfx::rgba(0xff, 0xff, 0xff, fade(0xa8)));
+    text::draw_ellipsized(text_x, top + 36, text_w, next.name, layout.title_size, Weight::medium,
                           gfx::rgba(0xff, 0xff, 0xff, fade(0xff)));
 
-    /* The countdown, as a bar that fills. */
-    const int bar_y = top + 96;
-    gfx::rounded_rect(text_x, bar_y, text_w, 6, 3, gfx::rgba(0xff, 0xff, 0xff, fade(0x24)));
+    const int action_y = top + layout.height - 44;
+    const std::string label = counting ? "Play now" : "Play next";
+    constexpr int kActionIcon = 24;
+    constexpr int kActionLabelOffset = kActionIcon + 10;
+    icons::draw(icons::Icon::ps_cross, text_x, action_y + 4, kActionIcon,
+                gfx::with_alpha(icons::button::cross, fade(0xff)));
+    text::draw(text_x + kActionLabelOffset,
+               text::centered_y(action_y, 32, label, 18, Weight::medium), label, 18, Weight::medium,
+               gfx::rgba(0xff, 0xff, 0xff, fade(0xf4)));
+    const int dismiss_x =
+        text_x + kActionLabelOffset + text::measure(label, 18, Weight::medium) + 22;
+    icons::draw(icons::Icon::ps_circle, dismiss_x, action_y + 4, kActionIcon,
+                gfx::with_alpha(icons::button::circle, fade(0xff)));
+    text::draw(dismiss_x + kActionLabelOffset,
+               text::centered_y(action_y, 32, "Not now", 18, Weight::regular), "Not now", 18,
+               Weight::regular, gfx::rgba(0xff, 0xff, 0xff, fade(0xc8)));
+
+    /* A quiet countdown track only appears while something is actually counting. */
     if (counting)
     {
-        const float left =
-            static_cast<float>(g_view.autoplay.seconds_left() / autoplay::kCountdown);
-        const int filled = static_cast<int>(text_w * std::clamp(1.0f - left, 0.0f, 1.0f));
-        gfx::rounded_rect(text_x, bar_y, filled, 6, 3, gfx::palette::accent);
+        const int track = layout.width - 32;
+        const int bar_y = top + layout.height - 5;
+        gfx::rounded_rect(x + 16, bar_y, track, 2, 1, gfx::rgba(0xff, 0xff, 0xff, fade(0x28)));
+        const float elapsed =
+            static_cast<float>(1.0 - g_view.autoplay.seconds_left() / autoplay::kCountdown);
+        const int filled = static_cast<int>(track * std::clamp(elapsed, 0.0f, 1.0f));
+        if (filled > 0)
+            gfx::rounded_rect(x + 16, bar_y, filled, 2, 1, gfx::rgba(0xff, 0xff, 0xff, fade(0xc0)));
     }
-    (void)draw_button_hints(text_x, top + kCardH - 58,
-                            {{icons::Icon::ps_cross, counting ? "Play now" : "Play"},
-                             {icons::Icon::ps_circle, "Not now"}});
 }
 
 /* Pause autoplay until the viewer confirms continued watching. */
@@ -5063,8 +5420,6 @@ void draw_still_watching() noexcept
     for (int i = 0; i < 2; ++i)
     {
         const bool lit = i == g_view.ask_choice;
-        if (lit)
-            gfx::drop_shadow(bx, by, widths[i], kH, kH / 2, 18, 0x80);
         gfx::rounded_rect(bx, by, widths[i], kH, kH / 2,
                           lit ? gfx::palette::focus_surface : gfx::palette::control);
         gfx::stroke_rounded_rect(bx, by, widths[i], kH, kH / 2, lit ? 2 : 1,
@@ -5194,8 +5549,6 @@ void draw_end_card() noexcept
     {
         const bool lit = static_cast<int>(i) == g_view.end_choice;
         const int w = text::measure(choices[i].label, 28, Weight::medium) + 84;
-        if (lit)
-            gfx::drop_shadow(bx, by, w, kH, kH / 2, 18, 0x80);
         gfx::rounded_rect(bx, by, w, kH, kH / 2,
                           lit ? gfx::palette::focus_surface : gfx::palette::control);
         gfx::stroke_rounded_rect(bx, by, w, kH, kH / 2, lit ? 2 : 1,
@@ -5237,6 +5590,8 @@ void draw_player() noexcept
     }
     const std::string cue = subtitles::current(
         subtitle_timing::cue_clock(status.position_seconds, g_view.subtitle_offset));
+    const auto bitmap_cue = bitmap_subtitles::current(
+        subtitle_timing::cue_clock(status.position_seconds, g_view.subtitle_offset));
     static long last_shown = -1;
     static bool last_clean = false;
     /* A frame is only worth reusing when nothing is drawn over the picture --
@@ -5244,9 +5599,9 @@ void draw_player() noexcept
        would never appear at all.  */
     const bool clean = picture && status.state == player::State::playing && !status.paused &&
                        !g_view.osd_visible && !g_view.panel_open && !g_view.show_debug &&
-                       cue.empty() && g_view.flash == 0 && !gfx::hdr_request_pending() &&
-                       g_view.up_next_in.value() <= 0.004f && g_view.intro_in.value() <= 0.004f &&
-                       !g_view.autoplay.asking();
+                       cue.empty() && !bitmap_cue && g_view.flash == 0 &&
+                       !gfx::hdr_request_pending() && g_view.up_next_in.value() <= 0.004f &&
+                       g_view.intro_in.value() <= 0.004f && !g_view.autoplay.asking();
     const bool reuse = clean && last_clean && status.shown == last_shown;
     last_clean = clean;
     last_shown = status.shown;
@@ -5382,6 +5737,8 @@ void draw_player() noexcept
         std::string subtitle_line = "Subtitles  ";
         if (status.subtitle_burned)
             subtitle_line += "burned in by the server";
+        else if (status.subtitle_bitmap)
+            subtitle_line += "PS5 picture overlay";
         else if (status.subtitle_index < 0)
             subtitle_line += "off";
         else
@@ -5406,6 +5763,8 @@ void draw_player() noexcept
         {
             display_line += "unavailable";
         }
+        display_line += "  overlay " + std::to_string(gfx::physical_width()) + "x" +
+                        std::to_string(gfx::physical_height());
         /* Compare repeated-frame cadence with the expected source/display ratio. */
         std::string cadence_line = "Cadence    ";
         {
@@ -5491,6 +5850,21 @@ void draw_player() noexcept
 
     /* The subtitles hold one height whatever the controls are doing, and the
        controls are drawn over the top of them. */
+    if (bitmap_cue && picture)
+    {
+        /* Fit the authored canvas without distorting its artwork. A cropped movie can
+           still have a full-height PGS canvas, including captions in its black bars. */
+        const auto &look = config::current().subtitle_look;
+        const auto placement = picture_subtitle_layout::place(
+            *bitmap_cue, subtitle_style::kPictureSizes[subtitle_style::wrap(look.picture_size, 5)],
+            subtitle_style::wrap(look.picture_position, 4));
+        for (const auto &r : bitmap_cue->rects)
+        {
+            gfx::Bitmap image{r.pixels.get(), r.width, r.height};
+            const auto box = placement.apply(r);
+            gfx::blit_scaled(image, box.x, box.y, box.width, box.height, true);
+        }
+    }
     if (!cue.empty())
         draw_subtitle_lines(cue);
 
@@ -5503,6 +5877,7 @@ void draw_player() noexcept
         /* Everything the stream held goes back now, not when the viewer
            eventually presses something. */
         player::stop();
+        remember_playback_progress(status);
         subtitles::clear();
         pad::set_trigger_feel(pad::TriggerFeel::none);
         trace::mark("player end: finished, stream released");
@@ -5551,6 +5926,7 @@ struct SubtitleRow
     int subtitle_style::Choices::*field;
     int count;
     const char *const *names;
+    bool picture_reset = false;
 };
 
 const std::vector<SubtitleRow> &subtitle_rows() noexcept
@@ -5559,19 +5935,41 @@ const std::vector<SubtitleRow> &subtitle_rows() noexcept
     static const std::vector<SubtitleRow> rows = {
         {"", "Text subtitles", nullptr, 0, nullptr},
         {"Size", nullptr, &ss::Choices::size, 5, ss::kSizeNames},
-        {"Font", nullptr, &ss::Choices::font, 2, ss::kFontNames},
+        {"Font", nullptr, &ss::Choices::font, ss::kFontCount, ss::kFontNames},
         {"Weight", nullptr, &ss::Choices::bold, 2, ss::kBoldNames},
-        {"Colour", nullptr, &ss::Choices::colour, 6, ss::kColourNames},
-        {"Edge", nullptr, &ss::Choices::edge, 4, ss::kEdgeNames},
+        {"Text colour", nullptr, &ss::Choices::colour, ss::kColourCount, ss::kColourNames},
+        {"Edge style", nullptr, &ss::Choices::edge, 4, ss::kEdgeNames},
+        {"Outline / shadow colour", nullptr, &ss::Choices::edge_colour, ss::kEffectColourCount,
+         ss::kEffectColourNames},
+        {"Edge thickness", nullptr, &ss::Choices::edge_width, 3, ss::kEdgeWidthNames},
+        {"Edge opacity", nullptr, &ss::Choices::edge_opacity, 3, ss::kEdgeOpacityNames},
         {"Background", nullptr, &ss::Choices::background, 3, ss::kBackgroundNames},
+        {"Background colour", nullptr, &ss::Choices::background_colour, ss::kEffectColourCount,
+         ss::kEffectColourNames},
         {"Background shape", nullptr, &ss::Choices::box, 2, ss::kBoxNames},
         {"Line spacing", nullptr, &ss::Choices::spacing, 3, ss::kSpacingNames},
         {"Position", nullptr, &ss::Choices::position, 4, ss::kPositionNames},
+        {"Reset text appearance", nullptr, nullptr, 0, nullptr},
         {"", "Picture subtitles (Blu-ray, DVD)", nullptr, 0, nullptr},
+        {"Size", nullptr, &ss::Choices::picture_size, 5, ss::kPictureSizeNames},
+        {"Position", nullptr, &ss::Choices::picture_position, 4, ss::kPicturePositionNames},
         {"When one is the default", nullptr, &ss::Choices::picture, 2, ss::kPictureNames},
-        {"Back to the original look", nullptr, nullptr, 0, nullptr},
+        {"Reset picture appearance", nullptr, nullptr, 0, nullptr, true},
     };
     return rows;
+}
+
+bool subtitle_row_enabled(const SubtitleRow &row) noexcept
+{
+    const auto &look = config::current().subtitle_look;
+    if (row.field == &subtitle_style::Choices::edge_colour ||
+        row.field == &subtitle_style::Choices::edge_width ||
+        row.field == &subtitle_style::Choices::edge_opacity)
+        return subtitle_style::resolve(look).edge != subtitle_style::Edge::none;
+    if (row.field == &subtitle_style::Choices::box ||
+        row.field == &subtitle_style::Choices::background_colour)
+        return subtitle_style::wrap(look.background, 3) != 0;
+    return row.label[0] != '\0';
 }
 
 /* Circle goes back: the prompt sits bottom right, like the Cross prompts. */
@@ -5589,10 +5987,27 @@ void draw_subtitle_settings() noexcept
     const auto &rows = subtitle_rows();
 
     constexpr int kListW = 700;
-    /* Nine choices, two headings and an action have to finish above the hint
-       line at the foot of the screen. */
     constexpr int kRowH = 52;
-    int focus_y = kGridTop - 20;
+    constexpr int list_top = kGridTop - 20;
+    constexpr int list_height = gfx::kHeight - 132 - list_top;
+    int total_height = 0, selected_y = 0;
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+    {
+        if (rows[static_cast<std::size_t>(i)].label[0] == '\0')
+            total_height += (i == 0 ? 0 : 14) + 44;
+        else
+        {
+            if (i == g_view.subtitle_row)
+                selected_y = total_height;
+            total_height += kRowH;
+        }
+    }
+    const int target_scroll =
+        std::clamp(selected_y - list_height + kRowH, 0, std::max(0, total_height - list_height));
+    g_view.subtitle_scroll.aim(static_cast<float>(target_scroll));
+    const int scroll = static_cast<int>(g_view.subtitle_scroll.value() + 0.5f);
+    gfx::push_clip(kContentX - 16, list_top, kListW, list_height);
+    int focus_y = list_top - scroll;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
         if (rows[static_cast<std::size_t>(i)].label[0] == '\0')
@@ -5604,7 +6019,7 @@ void draw_subtitle_settings() noexcept
             ui::focus_pill(kContentX - 16, focus_y, kListW, kRowH - 8, ui::FocusGroup::settings, 1);
         focus_y += kRowH;
     }
-    int y = kGridTop - 20;
+    int y = list_top - scroll;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
         const SubtitleRow &row = rows[static_cast<std::size_t>(i)];
@@ -5616,22 +6031,29 @@ void draw_subtitle_settings() noexcept
             continue;
         }
         const bool focused = i == g_view.subtitle_row;
+        const bool enabled = subtitle_row_enabled(row);
         ui::control_label(kContentX + 8, y, kListW - 300, kRowH - 8, row.label, 24, Weight::medium,
-                          focused ? gfx::palette::text : gfx::palette::text_dim);
+                          !enabled  ? gfx::palette::text_faint
+                          : focused ? gfx::palette::text
+                                    : gfx::palette::text_dim);
         if (row.field != nullptr)
         {
             const int value = subtitle_style::wrap(settings.subtitle_look.*row.field, row.count);
             std::string shown = row.names[value];
-            if (focused)
+            if (focused && enabled)
                 shown = "\xe2\x80\xb9  " + shown + "  \xe2\x80\xba";
             const int width = text::measure(shown, 24, Weight::regular);
             text::draw(kContentX + kListW - 44 - width,
                        text::centered_y(y, kRowH - 8, row.label, 24, Weight::medium), shown, 24,
-                       Weight::regular, focused ? gfx::palette::text : gfx::palette::text_dim);
+                       Weight::regular,
+                       !enabled  ? gfx::palette::text_faint
+                       : focused ? gfx::palette::text
+                                 : gfx::palette::text_dim);
         }
         y += kRowH;
     }
 
+    gfx::pop_clip();
     /* The preview: bright below, dark above, so the edge and box choices can be
        judged against both kinds of picture. */
     constexpr int kPreviewX = kContentX + 760;
@@ -5642,17 +6064,92 @@ void draw_subtitle_settings() noexcept
     gfx::rounded_rect(kPreviewX, kPreviewY, preview_w, kPreviewH, 18, gfx::rgb(0x1a, 0x1f, 0x2b));
     gfx::fill_rect(kPreviewX, kPreviewY + kPreviewH / 2, preview_w, kPreviewH / 2,
                    gfx::rgb(0xc9, 0xcf, 0xd6));
-    text::draw(kPreviewX + 24, kPreviewY + 18, "Preview", 20, Weight::medium,
-               gfx::palette::text_faint);
-    subtitle_style::Style style = subtitle_style::resolve(settings.subtitle_look);
-    /* Position is shown to scale: the preview is about half the screen's height. */
-    style.bottom_margin = style.bottom_margin * kPreviewH / gfx::kHeight + 24;
-    draw_subtitle_block("This is how your subtitles\nwill look while you watch.", style,
-                        kPreviewX + preview_w / 2, kPreviewY + kPreviewH);
+    const auto field = rows[static_cast<std::size_t>(g_view.subtitle_row)].field;
+    const bool picture_preview =
+        rows[static_cast<std::size_t>(g_view.subtitle_row)].picture_reset ||
+        field == &subtitle_style::Choices::picture ||
+        field == &subtitle_style::Choices::picture_size ||
+        field == &subtitle_style::Choices::picture_position;
+    text::draw(kPreviewX + 24, kPreviewY + 18,
+               picture_preview                               ? "Picture placement preview"
+               : field == &subtitle_style::Choices::position ? "Position preview"
+                                                             : "Dark scene",
+               20, Weight::medium, gfx::palette::text_faint);
+    if (picture_preview)
+    {
+        bitmap_subtitles::Frame sample;
+        sample.width = 1920;
+        sample.height = 1080;
+        sample.rects = {{410, 830, 1100, 170, {}}};
+        const auto transform = picture_subtitle_layout::place(
+            sample,
+            subtitle_style::kPictureSizes[subtitle_style::wrap(settings.subtitle_look.picture_size,
+                                                               5)],
+            subtitle_style::wrap(settings.subtitle_look.picture_position, 4),
+            {kPreviewX, kPreviewY + 60, preview_w, kPreviewH - 60});
+        const auto box = transform.apply(sample.rects[0]);
+        subtitle_style::Style preview;
+        preview.pixel_size = std::max(12, static_cast<int>(72 * transform.scale));
+        preview.line_step = preview.pixel_size * 5 / 4;
+        preview.bottom_margin = 0;
+        preview.edge_px = 1;
+        draw_subtitle_block("Picture subtitles\nkeep their original lettering.", preview,
+                            box.x + box.width / 2, box.y + box.height, preview_w - 48);
+    }
+    else
+    {
+        subtitle_style::Style style = subtitle_style::resolve(settings.subtitle_look);
+        if (field == &subtitle_style::Choices::position)
+        {
+            style.bottom_margin = style.bottom_margin * kPreviewH / gfx::kHeight + 24;
+            draw_subtitle_block("Every word.\nEvery scene.", style, kPreviewX + preview_w / 2,
+                                kPreviewY + kPreviewH, preview_w - 48, kPreviewY);
+        }
+        else
+        {
+            /* Show the very same native-size lettering on both backgrounds.
+               The old preview placed every sample in the bright half only. */
+            style.near_top = false;
+            style.bottom_margin = 20;
+            text::draw(kPreviewX + 24, kPreviewY + kPreviewH / 2 + 14, "Bright scene", 18,
+                       Weight::medium, gfx::rgb(0x36, 0x40, 0x4b));
+            draw_subtitle_block("Every word.\nEvery scene.", style, kPreviewX + preview_w / 2,
+                                kPreviewY + kPreviewH / 2, preview_w - 48);
+            draw_subtitle_block("Every word.\nEvery scene.", style, kPreviewX + preview_w / 2,
+                                kPreviewY + kPreviewH, preview_w - 48);
+        }
+    }
     gfx::pop_clip();
+    const char *help =
+        picture_preview
+            ? "Original font and colours. Size and position apply to PS5 picture overlays."
+        : field == &subtitle_style::Choices::font
+            ? "Choose a font family. Normal and Bold use that family's own lettering."
+        : field == &subtitle_style::Choices::colour
+            ? "Sets the letters only. Outline and background colours are independent."
+        : field == &subtitle_style::Choices::edge_colour
+            ? "Sets the outline or shadow colour. Turn on an edge style to see it."
+        : field == &subtitle_style::Choices::background_colour
+            ? "Sets the box or band colour. Choose See-through or Solid to see it."
+        : field == &subtitle_style::Choices::edge ? "Outline follows the letters. Soft shadow adds "
+                                                    "gentle depth. None leaves the text plain."
+        : field == &subtitle_style::Choices::edge_width
+            ? "Fine is subtle; Strong adds contrast. Thickness scales with your text size."
+        : field == &subtitle_style::Choices::edge_opacity
+            ? "Subtle lets more of the picture through. Solid keeps the edge darkest on bright "
+              "scenes."
+        : field == &subtitle_style::Choices::background || field == &subtitle_style::Choices::box
+            ? "Choose a soft box for each line, or one band behind the whole subtitle."
+        : field == &subtitle_style::Choices::position
+            ? "Moves text subtitles within the screen. Near the top stays clear of the lower "
+              "picture."
+            : "The same lettering on dark and bright scenes. Text and picture tracks have separate "
+              "controls.";
+    text::draw_wrapped(kPreviewX, kPreviewY + kPreviewH + 24, preview_w, 3, 28, help, 20,
+                       Weight::regular, gfx::palette::text_dim);
 
-    text::draw(kContentX, gfx::kHeight - 90, "Left and right to change", 20, Weight::regular,
-               gfx::palette::text_faint);
+    text::draw(kContentX, gfx::kHeight - 90, "Left / right to change · Right stick to scroll", 20,
+               Weight::regular, gfx::palette::text_faint);
     draw_back_hint();
 }
 
@@ -6135,7 +6632,6 @@ void draw_report_prompt() noexcept
     const int x = (gfx::kWidth - kCardW) / 2;
     const int y = (gfx::kHeight - kCardH) / 2;
     gfx::fill_rect(0, 0, gfx::kWidth, gfx::kHeight, gfx::rgba(0x00, 0x00, 0x00, 0xb4));
-    gfx::drop_shadow(x, y, kCardW, kCardH, 26, 26, 0x90);
     gfx::rounded_rect(x, y, kCardW, kCardH, 26, gfx::rgba(0x16, 0x16, 0x1b, 0xfa));
     const bool offering = g_view.report_prompt == View::ReportPrompt::offer;
     const std::string title =
@@ -6239,6 +6735,8 @@ void update_home_scroll(const std::vector<Row> &rows) noexcept
 
 void ask_keyboard(View::Prompt prompt) noexcept
 {
+    if (prompt == View::Prompt::search)
+        voice_search::cancel();
     if (!ime::available())
     {
         if (prompt == View::Prompt::search)
@@ -6271,7 +6769,7 @@ void ask_keyboard(View::Prompt prompt) noexcept
         break;
     case View::Prompt::search:
         ime::request(g_view.search.committed, "Search Jellyfin", "Find a movie, series or episode",
-                     ime::Mode::search, ui::kSearchKeyboardY);
+                     ime::Mode::search);
         break;
     case View::Prompt::none:
         break;
@@ -6295,6 +6793,21 @@ void connect_server_draft() noexcept
     submit(Request::probe_server, address.host, {}, address.port);
 }
 
+void advance_keyboard_input_guard() noexcept
+{
+    if (g_view.ime_input_guard == 0)
+        return;
+    for (int i = 0; i < static_cast<int>(pad::Button::count); ++i)
+        if (pad::held(static_cast<pad::Button>(i)))
+        {
+            /* IME intercepts controller samples while open. Its closing button
+               can therefore look newly pressed when samples return to us. */
+            g_view.ime_input_guard = 2;
+            return;
+        }
+    --g_view.ime_input_guard;
+}
+
 void handle_keyboard_result() noexcept
 {
     /* A keyboard the Profile or Dashboard screen asked for is theirs to read. */
@@ -6306,8 +6819,6 @@ void handle_keyboard_result() noexcept
         if (ime::take_cancelled())
         {
             g_view.ime_input_guard = 2;
-            if (g_view.prompt == View::Prompt::search && g_view.search.committed.empty())
-                g_view.search.open = false;
             g_view.prompt = View::Prompt::none;
         }
         return;
@@ -6360,7 +6871,7 @@ struct DetailPosition
     int action = 0;
     int source = 0;
     int cast_index = 0;
-    int details_scroll = 0;
+    float details_scroll = 0.0f;
     float strip_scroll = 0.0f;
     float page_scroll = 0.0f;
     float cast_scroll = 0.0f;
@@ -6381,13 +6892,34 @@ struct Back
     int action = 0;    /* which detail button had the focus */
     int source = 0;
     int cast_index = 0;
-    int details_scroll = 0;
+    float details_scroll = 0.0f;
     float scroll = 0.0f;      /* grid or detail strip */
     float page_scroll = 0.0f; /* vertical detail page */
     float cast_scroll = 0.0f;
     bool details_open = false;
 };
 std::vector<Back> g_back;
+
+void reconcile_progress_focus(const ProgressFocusChange &change) noexcept
+{
+    const auto adjust = [&](int &action)
+    {
+        if (action < 1 || change.had_resume == change.has_resume)
+            return;
+        if (change.has_resume)
+            ++action;
+        else
+            --action; /* Start over becomes Play; later actions keep their meaning. */
+    };
+    if (g_shared.detail_item.id == change.id)
+        adjust(g_view.detail_action);
+    if (const auto found = g_detail_positions.find(change.id); found != g_detail_positions.end())
+        adjust(found->second.action);
+    for (auto &entry : g_back)
+        if (entry.screen == Screen::detail && entry.id == change.id)
+            adjust(entry.action);
+}
+
 void push_back_entry(Screen from) noexcept
 {
     if (g_back.size() > 16)
@@ -6509,6 +7041,7 @@ void open_grid(const std::string &library_id, const std::string &title) noexcept
 /* Use cached item metadata immediately while detail rows load. */
 void open_detail(const std::string &item_id, bool remember, const jellyfin::Item *known) noexcept
 {
+    seerr::leave();
     if (remember)
         push_back_entry(current_screen());
     /* Whatever is already known goes up at once: the full record, if the
@@ -6562,9 +7095,13 @@ void open_detail(const std::string &item_id, bool remember, const jellyfin::Item
         g_view.detail_episode = destination.episode;
         g_view.detail_scroll.jump(destination.strip_scroll);
         g_view.detail_page.jump(destination.page_scroll);
+        g_view.detail_page_glide.stop();
+        g_view.detail_page_manual = false;
         g_view.detail_cast_scroll.jump(destination.cast_scroll);
         g_view.detail_cast_index = destination.cast_index;
         g_view.details_scroll = destination.details_scroll;
+        g_view.details_offset.jump(destination.details_scroll);
+        g_view.details_glide.stop();
         g_view.details_open = destination.details_open;
         /* The page itself may transition, but the restored focus should not
            independently pop in from zero as though it were a new selection. */
@@ -6579,9 +7116,13 @@ void open_detail(const std::string &item_id, bool remember, const jellyfin::Item
         g_view.detail_episode = 0;
         g_view.detail_scroll.jump(0.0f);
         g_view.detail_page.jump(0.0f);
+        g_view.detail_page_glide.stop();
+        g_view.detail_page_manual = false;
         g_view.detail_cast_scroll.jump(0.0f);
         g_view.detail_cast_index = 0;
-        g_view.details_scroll = 0;
+        g_view.details_scroll = 0.0f;
+        g_view.details_offset.jump(0.0f);
+        g_view.details_glide.stop();
         g_view.details_open = false;
         g_view.detail_strip_placed_for.clear();
         restart_focus();
@@ -6637,8 +7178,12 @@ bool go_back() noexcept
             g_view.detail_source = entry.source;
             g_view.detail_cast_index = entry.cast_index;
             g_view.details_scroll = entry.details_scroll;
+            g_view.details_offset.jump(entry.details_scroll);
+            g_view.details_glide.stop();
             g_view.detail_scroll.jump(entry.scroll);
             g_view.detail_page.jump(entry.page_scroll);
+            g_view.detail_page_glide.stop();
+            g_view.detail_page_manual = false;
             g_view.detail_cast_scroll.jump(entry.cast_scroll);
             g_view.details_open = entry.details_open;
             g_view.focus.jump(1.0f);
@@ -6665,6 +7210,9 @@ void open_section(const std::vector<SidebarEntry> &entries, int index, bool keep
         return;
     const SidebarEntry &entry = entries[static_cast<std::size_t>(index)];
 
+    if (entry.kind != SidebarEntry::Kind::discover &&
+        entry.kind != SidebarEntry::Kind::discover_section)
+        seerr::leave();
     switch (entry.kind)
     {
     case SidebarEntry::Kind::home:
@@ -6769,6 +7317,8 @@ void switch_to_discover() noexcept
         g_shared.screen = Screen::discover;
     }
     g_back.clear();
+    g_view.leaving_items.clear();
+    g_view.leaving_frame = -1;
     g_view.world_dir = 1;
     g_view.sidebar_scroll.jump(0.0f);
     restart_focus();
@@ -6779,6 +7329,7 @@ void switch_to_home(const std::vector<SidebarEntry> &entries) noexcept
 {
     if (entries.empty())
         return;
+    seerr::leave();
     const int index = std::clamp(g_view.active_section, 0, static_cast<int>(entries.size()) - 1);
     const SidebarEntry &entry = entries[static_cast<std::size_t>(index)];
     switch (entry.kind)
@@ -6803,6 +7354,8 @@ void switch_to_home(const std::vector<SidebarEntry> &entries) noexcept
     g_view.active_section = index;
     g_view.sidebar_index = index;
     g_back.clear();
+    g_view.leaving_items.clear();
+    g_view.leaving_frame = -1;
     g_view.world_dir = -1;
     g_view.sidebar_scroll.jump(0.0f);
     restart_focus();
@@ -6985,12 +7538,13 @@ void open_search() noexcept
     search.reveal.jump(0.0f);
     search.reveal.aim(1.0f);
     g_view.sidebar_focused = false;
-    ask_keyboard(View::Prompt::search);
+    // Opening Search never records. Speak and Type are explicit actions.
     restart_focus();
 }
 
 void close_search() noexcept
 {
+    voice_search::cancel();
     View::Search &search = g_view.search;
     search.open = false;
     search.reveal.jump(0.0f);
@@ -7031,6 +7585,30 @@ bool handle_search_input(const SearchScope &scope, const std::vector<jellyfin::I
     auto &search = g_view.search;
     if (!search.open)
         return false;
+    if (ime::busy() || g_view.ime_input_guard > 0)
+        return true;
+    std::string spoken;
+    if (voice_search::take_result(spoken))
+    {
+        search.draft = spoken;
+        search.refresh_requested = true;
+        search.keyboard_notice.clear();
+        run_live_search(scope);
+        return true;
+    }
+    const auto voice = voice_search::snapshot();
+    const bool voice_busy = voice_search_active(voice.phase);
+    if (voice_busy)
+    {
+        if (pad::pressed(pad::Button::circle))
+            voice_search::cancel();
+        else if (pad::pressed(pad::Button::triangle))
+            ask_keyboard(View::Prompt::search);
+        else if (voice.phase == voice_search::Phase::listening &&
+                 (pad::pressed(pad::Button::cross) || pad::pressed(pad::Button::r3)))
+            voice_search::finish();
+        return true;
+    }
     if (search.pending > 0 && --search.pending == 0)
         run_live_search(scope);
     if (pad::pressed(pad::Button::circle))
@@ -7038,9 +7616,16 @@ bool handle_search_input(const SearchScope &scope, const std::vector<jellyfin::I
         close_search();
         return true;
     }
-    if (pad::pressed(pad::Button::triangle))
+    if (pad::pressed(pad::Button::triangle) ||
+        (search.committed.empty() && pad::pressed(pad::Button::cross)))
     {
         ask_keyboard(View::Prompt::search);
+        return true;
+    }
+    if (pad::pressed(pad::Button::r3))
+    {
+        search.keyboard_notice.clear();
+        voice_search::start();
         return true;
     }
     if (sections.empty())
@@ -7163,12 +7748,39 @@ void handle_detail_input(const jellyfin::Item &item, const std::vector<jellyfin:
     {
         if (pad::pressed(pad::Button::circle) || pad::pressed(pad::Button::cross) ||
             action_at(g_view.detail_action) != DetailAction::details)
+        {
             g_view.details_open = false;
-        else if (pad::pressed(pad::Button::down))
-            ++g_view.details_scroll; /* clamped where it is drawn */
-        else if (pad::pressed(pad::Button::up) && g_view.details_scroll > 0)
-            --g_view.details_scroll;
+            g_view.details_hold_direction = 0;
+            g_view.details_hold_time = 0.0f;
+            g_view.details_glide.stop();
+        }
+        else
+            scroll_details_sheet(pad::scroll_axis(), frame_seconds());
         return;
+    }
+
+    /* The right stick moves the whole media page, independently of the focused
+       row. A direction press returns to the normal focus-following viewport. */
+    if (pad::pressed(pad::Button::up) || pad::pressed(pad::Button::down) ||
+        pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right))
+    {
+        g_view.detail_page_glide.stop();
+        g_view.detail_page_manual = false;
+    }
+    else
+    {
+        const float travel = g_view.detail_page_glide.step(pad::scroll_axis(), frame_seconds());
+        if (g_view.detail_page_glide.moving())
+        {
+            const DetailLayout layout = detail_layout(item, episodes, false);
+            const int bottom = std::max({kHeroBottom, layout.strip_bottom, layout.cast_bottom});
+            const float limit = static_cast<float>(std::max(0, bottom - kDetailVisibleBottom));
+            const float next = g_view.detail_page.value() + travel * 320.0f;
+            g_view.detail_page.jump(std::clamp(next, 0.0f, limit));
+            g_view.detail_page_manual = true;
+            if (next <= 0.0f || next >= limit)
+                g_view.detail_page_glide.stop();
+        }
     }
 
     /* Do not focus cast while series or season rows are still loading. */
@@ -7319,7 +7931,11 @@ void handle_detail_input(const jellyfin::Item &item, const std::vector<jellyfin:
         case DetailAction::details:
         {
             g_view.details_open = true;
-            g_view.details_scroll = 0;
+            g_view.details_hold_direction = 0;
+            g_view.details_hold_time = 0.0f;
+            g_view.details_scroll = 0.0f;
+            g_view.details_offset.jump(0.0f);
+            g_view.details_glide.stop();
             /* Ask the way Play asks: the selected version, its default tracks. */
             const auto &source = item.sources[static_cast<std::size_t>(
                 std::clamp(g_view.detail_source, 0, static_cast<int>(item.sources.size()) - 1))];
@@ -7380,7 +7996,7 @@ void begin_playback(const jellyfin::Item &item, int source_index, double start_s
     }
     /* Room for the stream first, before it allocates anything. */
     images::set_playback(true);
-    if (!player::start(request, item.name, item.runtime_minutes * 60.0))
+    if (!player::start(request, item.name, item.duration_seconds()))
     {
         images::set_playback(false);
         return;
@@ -7466,6 +8082,79 @@ void play_adjacent_episode(int direction) noexcept
     submit(Request::play_sibling, wanted);
 }
 
+/* Every playback exit needs a populated destination. Direct playback and
+   episode changes can run without ever opening a detail page. Keep an
+   existing page (and its viewport), otherwise seed one from the playing item
+   while its remaining rows load. */
+void remember_playback_progress(const player::Status &status) noexcept
+{
+    auto &item = g_view.playing_item;
+    if (item.id.empty() || !std::isfinite(status.position_seconds) ||
+        status.position_seconds < 0.0 ||
+        (status.frames == 0 &&
+         (status.state == player::State::opening || status.state == player::State::failed)))
+        return;
+    const bool complete = g_view.finished || status.state == player::State::ended;
+    const double duration = status.duration_seconds;
+    const double position =
+        duration > 0.0 ? std::min(status.position_seconds, duration) : status.position_seconds;
+    const jellyfin::UserProgress progress{item.played || complete,
+                                          complete ? 0.0 : position * 10000000.0,
+                                          complete         ? 100.0
+                                          : duration > 0.0 ? 100.0 * position / duration
+                                                           : 0.0};
+    item.played = progress.played;
+    item.resume_ticks = progress.resume_ticks;
+    item.played_percentage = progress.played_percentage;
+    remember_detail(item);
+    apply_marked_progress(item.id, progress);
+    if (progress.resume_ticks <= 0.0)
+        return;
+    // A newly started title may not have been in Continue Watching yet.
+    std::lock_guard<std::mutex> guard(g_shared.mutex);
+    auto row = std::find_if(g_shared.rows.begin(), g_shared.rows.end(),
+                            [](const Row &entry) { return entry.title == "Continue Watching"; });
+    if (row == g_shared.rows.end())
+        g_shared.rows.insert(g_shared.rows.begin(), Row{"Continue Watching", {item}, true});
+    else
+    {
+        row->items.erase(std::remove_if(row->items.begin(), row->items.end(),
+                                        [&](const jellyfin::Item &entry)
+                                        { return entry.id == item.id; }),
+                         row->items.end());
+        row->items.insert(row->items.begin(), item);
+        if (row->items.size() > 16)
+            row->items.resize(16);
+    }
+    ++g_shared.rows_epoch;
+}
+
+void leave_playback() noexcept
+{
+    const auto stopped = player::status();
+    player::stop();
+    remember_playback_progress(stopped);
+    subtitles::clear();
+    pad::set_trigger_feel(pad::TriggerFeel::none);
+    g_view.finished = false;
+    trace::mark("player: left playback for the title page");
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        if (!g_shared.detail_item.id.empty())
+        {
+            g_shared.screen = Screen::detail;
+            return;
+        }
+    }
+    if (!g_view.playing_item.id.empty())
+        open_detail(g_view.playing_item.id, false, &g_view.playing_item);
+    else
+    {
+        std::lock_guard<std::mutex> guard(g_shared.mutex);
+        g_shared.screen = Screen::home;
+    }
+}
+
 /* Drive autoplay from playback state, even while another control owns input. */
 void advance_autoplay(const player::Status &status) noexcept
 {
@@ -7506,13 +8195,7 @@ void advance_autoplay(const player::Status &status) noexcept
         /* Nobody answered. Stop, so the server is not left transcoding to an
            empty room, and leave the title's page up. */
         g_view.autoplay.still_there();
-        player::stop();
-        subtitles::clear();
-        pad::set_trigger_feel(pad::TriggerFeel::none);
-        {
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.screen = Screen::detail;
-        }
+        leave_playback();
         break;
     case autoplay::Action::none:
         break;
@@ -7552,11 +8235,7 @@ void handle_player_input() noexcept
         else if (pad::pressed(pad::Button::cross) && g_view.ask_choice == 1)
         {
             g_view.autoplay.still_there();
-            player::stop();
-            subtitles::clear();
-            pad::set_trigger_feel(pad::TriggerFeel::none);
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.screen = Screen::detail;
+            leave_playback();
         }
         else if (pad::pressed(pad::Button::cross))
         {
@@ -7571,11 +8250,7 @@ void handle_player_input() noexcept
         else if (pad::pressed(pad::Button::circle))
         {
             g_view.autoplay.still_there();
-            player::stop();
-            subtitles::clear();
-            pad::set_trigger_feel(pad::TriggerFeel::none);
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.screen = Screen::detail;
+            leave_playback();
         }
         return;
     }
@@ -7594,12 +8269,7 @@ void handle_player_input() noexcept
             --g_view.end_choice;
         else if (pad::pressed(pad::Button::circle))
         {
-            player::stop();
-            subtitles::clear();
-            pad::set_trigger_feel(pad::TriggerFeel::none);
-            g_view.finished = false;
-            std::lock_guard<std::mutex> guard(g_shared.mutex);
-            g_shared.screen = Screen::detail;
+            leave_playback();
         }
         else if (pad::pressed(pad::Button::cross))
         {
@@ -7617,16 +8287,11 @@ void handle_player_input() noexcept
                 g_view.autoplay.chosen_by_hand();
                 g_view.finished = false;
                 (void)player::start(again, g_view.playing_item.name,
-                                    g_view.playing_item.runtime_minutes * 60.0);
+                                    g_view.playing_item.duration_seconds());
                 break;
             }
             case EndChoice::Kind::leave:
-                player::stop();
-                subtitles::clear();
-                pad::set_trigger_feel(pad::TriggerFeel::none);
-                g_view.finished = false;
-                std::lock_guard<std::mutex> guard(g_shared.mutex);
-                g_shared.screen = Screen::detail;
+                leave_playback();
                 break;
             }
         }
@@ -7754,7 +8419,26 @@ void handle_player_input() noexcept
         g_view.timing_held =
             adjusting && pad::held(pad::Button::cross) ? g_view.timing_held + 1 : 0;
         const bool repeat = g_view.timing_held > 20 && (g_view.timing_held - 20) % 3 == 0;
-        if (adjusting && (pad::pressed(pad::Button::cross) || repeat))
+        const bool picture_control =
+            timing == TimingRow::picture_size || timing == TimingRow::picture_position;
+        if (picture_control &&
+            (pad::pressed(pad::Button::left) || pad::pressed(pad::Button::right) ||
+             pad::pressed(pad::Button::cross)))
+        {
+            auto &look = config::current().subtitle_look;
+            int &value =
+                timing == TimingRow::picture_size ? look.picture_size : look.picture_position;
+            const int count = timing == TimingRow::picture_size ? 5 : 4;
+            value = subtitle_style::wrap(value + (pad::pressed(pad::Button::left) ? -1 : 1), count);
+            config::save();
+        }
+        else if (timing == TimingRow::picture_reset && pad::pressed(pad::Button::cross))
+        {
+            config::current().subtitle_look.picture_size = 1;
+            config::current().subtitle_look.picture_position = 0;
+            config::save();
+        }
+        else if (adjusting && (pad::pressed(pad::Button::cross) || repeat))
         {
             g_view.subtitle_offset =
                 subtitle_timing::nudge(g_view.subtitle_offset, timing == TimingRow::late);
@@ -7813,13 +8497,7 @@ void handle_player_input() noexcept
             g_view.osd_dismissed = true;
             return;
         }
-        player::stop();
-        subtitles::clear();
-        pad::set_trigger_feel(pad::TriggerFeel::none);
-        g_view.finished = false;
-        std::lock_guard<std::mutex> guard(g_shared.mutex);
-        trace::mark("player: left playback for the title page");
-        g_shared.screen = Screen::detail;
+        leave_playback();
         return;
     }
 
@@ -8035,11 +8713,18 @@ void handle_player_input() noexcept
                 player::show_text_subtitle(-1);
             else
             {
-                int wanted = tracks.front().index;
+                const jellyfin::Track *wanted = &tracks.front();
                 for (const auto &track : tracks)
                     if (track.is_default && track.is_text)
-                        wanted = track.index;
-                player::show_text_subtitle(wanted);
+                        wanted = &track;
+                if (wanted->is_text)
+                    player::show_text_subtitle(wanted->index);
+                else
+                {
+                    jellyfin::PlaybackRequest request = player::current_request();
+                    request.subtitle_index = wanted->index;
+                    restart_here(request);
+                }
             }
         }
         /* Subtitles have nothing to do with the timeline, so they do not
@@ -8062,23 +8747,33 @@ void handle_player_input() noexcept
         g_view.osd_visible = false;
 }
 
+void scroll_settings_selection(int &index, int maximum, float axis, float seconds) noexcept;
+
 void handle_subtitle_settings_input() noexcept
 {
     const auto &rows = subtitle_rows();
     const int last = static_cast<int>(rows.size()) - 1;
-    const auto is_heading = [&rows](int i)
-    { return rows[static_cast<std::size_t>(i)].label[0] == '\0'; };
+    const auto enabled = [&rows](int i)
+    { return subtitle_row_enabled(rows[static_cast<std::size_t>(i)]); };
+    const int previous = g_view.subtitle_row;
+    scroll_settings_selection(g_view.subtitle_row, last, pad::scroll_axis(), frame_seconds());
+    const int direction = g_view.subtitle_row > previous ? 1 : -1;
+    while (g_view.subtitle_row > 1 && g_view.subtitle_row < last && !enabled(g_view.subtitle_row))
+        g_view.subtitle_row += direction;
+    g_view.subtitle_row = std::max(1, g_view.subtitle_row);
+    if (g_view.subtitle_row != previous)
+        return;
     if (pad::pressed(pad::Button::down) && g_view.subtitle_row < last)
     {
         ++g_view.subtitle_row;
-        if (is_heading(g_view.subtitle_row) && g_view.subtitle_row < last)
+        while (!enabled(g_view.subtitle_row) && g_view.subtitle_row < last)
             ++g_view.subtitle_row;
         return;
     }
     if (pad::pressed(pad::Button::up) && g_view.subtitle_row > 1)
     {
         --g_view.subtitle_row;
-        if (is_heading(g_view.subtitle_row) && g_view.subtitle_row > 1)
+        while (!enabled(g_view.subtitle_row) && g_view.subtitle_row > 1)
             --g_view.subtitle_row;
         return;
     }
@@ -8086,7 +8781,7 @@ void handle_subtitle_settings_input() noexcept
     config::Settings &settings = config::current();
     const bool left = pad::pressed(pad::Button::left);
     const bool right = pad::pressed(pad::Button::right) || pad::pressed(pad::Button::cross);
-    if (row.field != nullptr && (left || right))
+    if (row.field != nullptr && subtitle_row_enabled(row) && (left || right))
     {
         int &value = settings.subtitle_look.*row.field;
         value = subtitle_style::wrap(value + (left ? -1 : 1), row.count);
@@ -8094,7 +8789,22 @@ void handle_subtitle_settings_input() noexcept
     }
     else if (row.field == nullptr && pad::pressed(pad::Button::cross))
     {
-        settings.subtitle_look = subtitle_style::Choices{};
+        const subtitle_style::Choices defaults{};
+        if (row.picture_reset)
+        {
+            settings.subtitle_look.picture_size = defaults.picture_size;
+            settings.subtitle_look.picture_position = defaults.picture_position;
+        }
+        else
+        {
+            for (const auto &appearance : rows)
+            {
+                if (&appearance == &row)
+                    break;
+                if (appearance.field != nullptr)
+                    settings.subtitle_look.*appearance.field = defaults.*appearance.field;
+            }
+        }
         config::save();
     }
 }
@@ -8102,6 +8812,9 @@ void handle_subtitle_settings_input() noexcept
 /* Where the profile menu, the Profile screen and Settings > Account lead. */
 void apply_account_choice(account::Choice choice, Screen from) noexcept
 {
+    if (choice == account::Choice::profile || choice == account::Choice::dashboard ||
+        choice == account::Choice::sign_out)
+        seerr::leave();
     switch (choice)
     {
     case account::Choice::profile:
@@ -8167,6 +8880,8 @@ void handle_settings_input() noexcept
     config::Settings &settings = config::current();
     if (g_view.settings_page != 0 && pad::pressed(pad::Button::circle))
     {
+        if (g_view.settings_page == 1)
+            prepare_subtitle_edges();
         g_view.settings_page = g_view.settings_page == 3 ? 10 : 0;
         return;
     }
@@ -8371,6 +9086,9 @@ void handle_settings_input() noexcept
         if (g_view.settings_page == 9)
             seerr::open_settings();
         g_view.subtitle_row = 1;
+        g_view.subtitle_scroll.jump(0.0f);
+        g_view.settings_stick_steps = 0;
+        g_view.settings_stick_direction = 0;
     }
 }
 } // namespace
@@ -8390,6 +9108,7 @@ bool exit_requested() noexcept
 void start() noexcept
 {
     config::load();
+    prepare_subtitle_edges();
     (void)ime::initialize();
     (void)images::start();
 
@@ -8487,6 +9206,10 @@ void frame() noexcept
     g_last_loop_us = loop_start;
 
     ++g_view.frames;
+    if (g_view.frames == 1)
+        trace::mark(gfx::menu_accelerated()
+                        ? "Menu renderer: Vulkan GPU at native output resolution"
+                        : "Menu renderer: CPU fallback");
     /* Once signed in, the typed credentials have no further use. */
     if (config::current().signed_in() &&
         (!g_view.pending_password.empty() || !g_view.pending_username.empty()))
@@ -8502,8 +9225,7 @@ void frame() noexcept
     if ((g_view.frames % 240) == 0)
         trim_artwork_fades();
 
-    if (g_view.ime_input_guard > 0)
-        --g_view.ime_input_guard;
+    advance_keyboard_input_guard();
     ime::poll();
     handle_keyboard_result();
     /* Discover keeps its own keyboard; it reads a result the search bar above
@@ -8546,6 +9268,9 @@ void frame() noexcept
     const auto snapshot_shared = [&]
     {
         std::lock_guard<std::mutex> guard(g_shared.mutex);
+        for (const auto &change : g_shared.progress_focus_changes)
+            reconcile_progress_focus(change);
+        g_shared.progress_focus_changes.clear();
         home_epoch = g_shared.home_epoch;
         screen = g_shared.screen;
         status = g_shared.status;
@@ -8645,7 +9370,9 @@ void frame() noexcept
         {
             /* The detail screen always stops before it starts; a second start
                on a live stream is refused and leaves the old one running. */
+            const auto stopped = player::status();
             player::stop();
+            remember_playback_progress(stopped);
             subtitles::clear();
             bool resume = false;
             {
@@ -8914,16 +9641,17 @@ void frame() noexcept
     /* Output mode changes are a frame-boundary operation, not a side effect of
        clearing a UI screen. The playback worker waits for this acknowledgement
        before it configures HDMI audio and starts decoding. */
+    gfx::set_menu_acceleration(screen != Screen::playing);
     gfx::apply_pending_output_mode();
 
     // Playback draws its own full frame/bars. A menu gradient here both
     // wastes HDR work and invalidates an unchanged video staging buffer.
     const bool detail_background_covers_frame =
-        screen == Screen::detail && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
-        g_wash.ready && g_wash.shape == 1 && g_wash.words == gfx::surface_words();
+        screen == Screen::detail && !g_view.search.open && !detail_item.id.empty() &&
+        (gfx::menu_accelerated() || (g_view.page_in.value() >= 0.995f && g_wash.ready &&
+                                     g_wash.shape == 1 && g_wash.words == gfx::surface_words()));
     bool home_background_covers_top = false;
-    if (screen == Screen::home && !g_view.search.open && g_view.page_in.value() >= 0.995f &&
-        !rows.empty())
+    if (screen == Screen::home && !g_view.search.open && !rows.empty())
     {
         const auto &row = rows[static_cast<std::size_t>(g_view.row_index)];
         if (!row.items.empty())
@@ -9096,7 +9824,7 @@ void frame() noexcept
             g_view.world_dir = 0;
         /* A page rises into place; a tab slides in from its own side. */
         if (page_moving)
-            gfx::set_origin(static_cast<int>((1.0f - page_in) * 90.0f * g_view.world_dir),
+            gfx::set_origin(0,
                             g_view.world_dir != 0 ? 0 : static_cast<int>((1.0f - page_in) * 30.0f));
 
         switch (screen)
@@ -9516,7 +10244,7 @@ void frame() noexcept
                             played.sources.empty() ? jellyfin::MediaSource{} : played.sources[0];
                         set_playing_title(played);
                         title = played.name;
-                        duration = played.runtime_minutes * 60.0;
+                        duration = played.duration_seconds();
                     }
                     /* The detail screen always stops before it starts, so the
                        test path does too; otherwise a second play is refused

@@ -14,6 +14,7 @@
 #include "gfx.hpp"
 #include "icons.hpp"
 #include "text.hpp"
+#include "voice_search.hpp"
 
 #include <algorithm>
 #include <initializer_list>
@@ -108,7 +109,8 @@ int draw_top_chip(int x, int y, icons::Icon icon, const std::string &label) noex
 int top_chip_width(const std::string &label) noexcept;
 
 /* The width draw_button_chip would use. */
-int button_chip_width(const std::string &label) noexcept;
+int button_chip_width(const std::string &label,
+                      icons::Icon icon = icons::Icon::ps_triangle) noexcept;
 
 /* A legend of hints in a row. Returns the x after the last one. */
 int draw_button_hints(int x, int y, std::initializer_list<ButtonHint> hints) noexcept;
@@ -160,12 +162,11 @@ inline int stick_focus(int index, int columns, int rows, float scroll, int row_h
     return std::clamp(index / columns, first, last) * columns + index % columns;
 }
 
-/* The search field Home and Discover share, with the Triangle chip beside it
-   and a one-line answer after that. The keyboard opens just beneath it. */
+/* Home and Discover share a search field, R3 Speak action and status area.
+   The native keyboard uses the fixed placement defined by ime.hpp. */
 inline constexpr int kSearchFieldY = kPageTitleY - 6;
 inline constexpr int kSearchFieldH = 72;
 inline constexpr int kSearchFieldW = 832;
-inline constexpr int kSearchKeyboardY = kSearchFieldY + kSearchFieldH + 14;
 struct SearchField
 {
     std::string text;
@@ -173,8 +174,27 @@ struct SearchField
     std::string scope; /* what the search is bounded to, inside the field */
     std::string note;  /* "Searching", "12 results" */
     bool typing = false;
+    bool voice = false;
+    bool listening = false;
+    bool voice_available = true;
 };
 void draw_search_field(int x, int y, int w, const SearchField &field) noexcept;
+inline constexpr int kVoiceSearchStatusHeight = 150;
+inline bool voice_search_active(voice_search::Phase phase) noexcept
+{
+    return phase == voice_search::Phase::preparing || phase == voice_search::Phase::downloading ||
+           phase == voice_search::Phase::listening || phase == voice_search::Phase::processing;
+}
+inline bool voice_search_status_visible(voice_search::Phase phase) noexcept
+{
+    return phase == voice_search::Phase::downloading || phase == voice_search::Phase::listening ||
+           phase == voice_search::Phase::processing;
+}
+void apply_voice_search_state(SearchField &field, const voice_search::Snapshot &voice) noexcept;
+void draw_search_prompt(int x, int y, bool voice_available = true) noexcept;
+/* y is the status area's top, below the field and its one-line note. */
+void draw_voice_search_status(int x, int y, const voice_search::Snapshot &voice) noexcept;
+void draw_search_close_hint(const voice_search::Snapshot &voice) noexcept;
 
 } // namespace slopfin::ui
 

@@ -33,7 +33,6 @@ slopfin-trace.txt
 # Local preview, captures and diagnostic artifacts.
 /captures/
 /.slopfin/
-/.director-runs/
 slopfin-report-offered.txt
 slopfin-frame.bin
 slopfin-frames.csv
@@ -51,7 +50,3 @@ slopfin-audio.txt
 /PLAN.md
 /PROGRESS.md
 /docs/PLAYBACK_DEFAULTS.md
-
-# Local coding-agent instructions. Public engineering constraints live in docs.
-/CLAUDE.md
-/AGENTS.md

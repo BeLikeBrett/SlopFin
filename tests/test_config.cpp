@@ -45,6 +45,16 @@ int main()
     settings.seerr_auth = 2;
     settings.autoplay_series_overrides["show"] = false;
     settings.subtitle_offsets["episode"] = 1.5;
+    assert(settings.subtitle_look.picture_size == 1 &&
+           settings.subtitle_look.picture_position == 0);
+    settings.subtitle_look.picture_size = 3;
+    settings.subtitle_look.picture_position = 2;
+    settings.subtitle_look.font = 5;
+    settings.subtitle_look.colour = 15;
+    settings.subtitle_look.edge_colour = 13;
+    settings.subtitle_look.background_colour = 10;
+    settings.subtitle_look.edge_width = 2;
+    settings.subtitle_look.edge_opacity = 0;
     settings.navigation_order = {"library:a", "home", "discover"};
     settings.navigation_hidden = {"home", "discover"};
     settings.seerr_watched_requests = {"123", "456"};
@@ -53,6 +63,12 @@ int main()
     assert(stat(path.c_str(), &metadata) == 0 && (metadata.st_mode & 0777) == 0600);
     slopfin::config::load();
     assert(!settings.audio_passthrough);
+    assert(settings.subtitle_look.font == 5 && settings.subtitle_look.colour == 15 &&
+           settings.subtitle_look.edge_colour == 13 &&
+           settings.subtitle_look.background_colour == 10);
+    assert(settings.subtitle_look.edge_width == 2 && settings.subtitle_look.edge_opacity == 0);
+    assert(settings.subtitle_look.picture_size == 3 &&
+           settings.subtitle_look.picture_position == 2);
     assert(settings.navigation_order ==
            (std::vector<std::string>{"library:a", "home", "discover"}));
     assert(settings.navigation_hidden == (std::vector<std::string>{"home", "discover"}));
@@ -130,6 +146,41 @@ int main()
                text.find("dvHdr10Base") == std::string::npos);
     }
     assert(settings.report_server.empty() && settings.autoplay_series_overrides.empty());
+    // Upgrade a real-shaped pre-picture-layout configuration. Login, device,
+    // text appearance and show choices survive new defaults and a save/reload.
+    {
+        std::ofstream legacy(path);
+        legacy << R"({"host":"https://legacy.example/jellyfin","port":443,
+"token":"legacy-token","userId":"legacy-user","deviceId":"legacy-device",
+"audioPassthrough":0,"triggerFeedback":0,
+"navigationOrder":["discover","home"],"navigationHidden":["library:old"],
+"seerrHost":"https://requests.example","seerrPort":443,"seerrCookie":"session-value",
+"seerrUser":"Viewer","seerrAuth":1,"seerrWatchedRequests":["42"],
+"subtitleLook":{"size":2,"font":1,"position":2},"subtitleOffsets":{"episode":-1.2},
+"autoplay":{"enabled":0,"askAfter":3,"askIdleMinutes":60},"autoplaySeries":{"show":1}})";
+    }
+    for (int cycle = 0; cycle < 2; ++cycle)
+    {
+        slopfin::config::load();
+        assert(settings.signed_in() && settings.token == "legacy-token" &&
+               settings.user_id == "legacy-user" && settings.device_id == "legacy-device");
+        assert(settings.host == "https://legacy.example/jellyfin" && settings.port == 443);
+        assert(!settings.audio_passthrough && !settings.trigger_feedback);
+        assert(settings.navigation_order == (std::vector<std::string>{"discover", "home"}) &&
+               settings.navigation_hidden == std::vector<std::string>{"library:old"});
+        assert(settings.seerr_cookie == "session-value" && settings.seerr_user == "Viewer" &&
+               settings.seerr_auth == 1 &&
+               settings.seerr_watched_requests == std::vector<std::string>{"42"});
+        assert(settings.subtitle_look.size == 2 && settings.subtitle_look.font == 1 &&
+               settings.subtitle_look.position == 2 && settings.subtitle_look.edge_colour == 0 &&
+               settings.subtitle_look.background_colour == 0 &&
+               settings.subtitle_look.picture_size == 1 &&
+               settings.subtitle_look.picture_position == 0);
+        assert(slopfin::config::subtitle_offset("episode") == -1.2 &&
+               !settings.autoplay_look.enabled && settings.autoplay_look.ask_after == 3 &&
+               slopfin::config::autoplay_enabled("show"));
+        assert(slopfin::config::save());
+    }
     const auto receiver = slopfin::diagnostics::destination("http://reports.example.com:8103/base");
     assert(receiver.valid() && receiver.port == 8103 &&
            receiver.host == "http://reports.example.com/base");

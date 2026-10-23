@@ -13,6 +13,7 @@
 #define SLOPFIN_DETAILS_SHEET_HPP
 
 #include "jellyfin.hpp"
+#include "subtitle_labels.hpp"
 
 #include <cstdio>
 #include <string>
@@ -211,7 +212,10 @@ inline std::vector<Line> build(const jellyfin::Item &item, const jellyfin::Media
         for (std::size_t i = 0; i < list.size(); ++i)
         {
             const jellyfin::Track &track = list[i];
-            std::string value = track.label.empty() ? track.language : track.label;
+            std::string value = std::string_view{title} == "Subtitles"
+                                    ? subtitle_labels::label(track)
+                                : track.label.empty() ? track.language
+                                                      : track.label;
             if (track.bitrate > 0)
                 join(value, rate_text(track.bitrate));
             pair(std::to_string(i + 1), value);

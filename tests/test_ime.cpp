@@ -100,9 +100,10 @@ int main()
     init_result = 0;
     outcome = 0;
     dialog_status = 1;
-    ime::request("Amélie 🎬", "Search", "", ime::Mode::search, 286);
+    ime::request("Amélie 🎬", "Search", "", ime::Mode::search);
     ime::poll();
-    assert(captured.pos_y == 286.0f);
+    assert(captured.pos_x == ime::kSearchKeyboardX && captured.pos_y == ime::kSearchKeyboardY);
+    assert(captured.horizontal_alignment == 1 && captured.vertical_alignment == 0);
     assert(from_utf16(captured.input_text_buffer) == "Amélie 🎬");
     dialog_status = 2;
     ime::poll();
