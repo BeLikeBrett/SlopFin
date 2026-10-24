@@ -1,5 +1,16 @@
 # Public interface captures
 
+`library-console.png`, `discover-console.png` and `signin-2.00-console.png`
+are the owner's three latest PS5 gallery captures from 2026-10-24, showing
+SlopFin 2.00 on firmware 8.20. The console's native 3840×2160 JPEG XR images
+were converted to PNG and scaled to 1920×1080 for documentation. They show the
+movie library/profile menu, Discover's trending catalogue, and sign-in. Plain
+opaque local masks remove the server connection line and all six Quick Connect
+digits from the sign-in image before resizing; the remaining interface pixels
+are unchanged apart from scaling. Account and library names are published with
+the owner's permission. Media artwork belongs to its respective owners and is
+displayed as part of the client, not distributed as app assets.
+
 `home-console.png` and `media-console.png` are direct SlopFin 2.00 candidate
 captures from PS5 firmware 8.20 on 2026-10-23, at 1920×1080 from the native 4K
 render surface. They show the updated GPU interface and transparent resting

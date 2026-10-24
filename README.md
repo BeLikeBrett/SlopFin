@@ -36,6 +36,24 @@ the PS5's video decoder for supported H.264 and HEVC media.
 
 ![Media page with Resume progress and controller actions](docs/images/media-console.png)
 
+<details>
+<summary>More PS5 screenshots: library, Discover and sign-in</summary>
+
+Browse your library and open profile controls without leaving the page.
+
+![Movie library and profile menu on PS5](docs/images/library-console.png)
+
+Discover trending movies and shows, with request and availability badges.
+
+![Discover on PS5](docs/images/discover-console.png)
+
+Connect with Quick Connect or your Jellyfin username and password. Connection
+details and the temporary code are redacted in this capture.
+
+![Quick Connect and password sign-in on PS5](docs/images/signin-2.00-console.png)
+
+</details>
+
 ## Install
 
 You need a jailbroken PS5, a compatible homebrew loader and a Jellyfin server.

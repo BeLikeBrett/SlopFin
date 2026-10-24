@@ -5,6 +5,8 @@ Home. It can be hidden in Settings → Navigation. Connect Seerr or Jellyseerr t
 trending titles, search for a movie or series, request it and follow its download.
 An Overseerr-compatible server can use API-key or local-account authentication.
 
+![Trending movies and shows in Discover on PS5](images/discover-console.png)
+
 ## Connect
 
 Choose **Connect request server** in an unconfigured Discover screen, or open
@@ -35,18 +37,20 @@ opens each one straight away.
 
 | Control | Action |
 | --- | --- |
-| Triangle | Search using the PlayStation keyboard (Refresh on Requests); the search field and keyboard sit where Home's do |
+| Triangle | Open Search (Refresh on Requests); press Cross to type, or R3 to speak |
 | D-pad | Browse titles; Up from the first row reaches the media filter |
 | Cross | Open a title, then choose its action |
-| R3 | Cycle All / Movies / Shows; the right-stick prompt beside the filter depresses on a press |
+| R3 | Cycle All / Movies / Shows outside Search; start local voice input inside Search |
 | Hold L2 or R2 + Up/Down | Next or previous Discover category |
 | L1 | Back to the Home tab |
 | Square | Your profile menu |
-| Circle | Close the title, clear a search, or return to the sidebar |
+| Circle | Dismiss the keyboard, cancel voice input, close Search or return to the sidebar |
 
 Availability badges come from the request server. Approved or queued titles
 show **Requested** in the catalog. Requests shows actual download progress
 when the server provides it.
+Choose the media filter before opening Search. Dismissing the keyboard or
+cancelling voice input keeps Search open; another Circle closes Search.
 The All / Movies / Series filter sits beside the category's name; Left/Right
 choose while it is focused, and changes apply immediately. These catalogs use
 the server's discovery endpoints; search uses the server's relevance order, and

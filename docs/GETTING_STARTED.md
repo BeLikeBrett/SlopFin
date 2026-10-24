@@ -7,7 +7,7 @@ tested environment.
 ## Install the folder download
 
 1. Open [Releases](https://github.com/BeLikeBrett/SlopFin/releases) and download
-   the folder ZIP from a published preview.
+   the folder ZIP from the latest release.
 2. Extract it and transfer the **complete `PPSA99001` folder** to your loader's
    homebrew directory, commonly `/data/homebrew/`.
 3. Let your loader register the title, then open SlopFin from the PS5 menu.
@@ -52,7 +52,7 @@ starts, it keeps trying for a few seconds, then shows **Can't reach your
 server** with the sign-in still saved: choose Continue once the server is back.
 Only a server that rejects the saved sign-in asks you to sign in again.
 
-![Quick Connect and password sign-in on PS5](images/signin-console.png)
+![Quick Connect and password sign-in on PS5, with connection details and code redacted](images/signin-2.00-console.png)
 
 ## Start watching
 
