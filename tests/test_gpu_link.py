@@ -28,11 +28,20 @@ vk_common_Optional w 0 0
 radv_Implemented w 0 0
 radv_Required w 0 0
 malloc w 0 0
+sqtt_GetDeviceProcAddr w 0 0
+wsi_GetDeviceProcAddr w 0 0
+sqtt_Implemented w 0 0
+sqtt_Implemented T 0 10
+sqtt_Required w 0 0
+sqtt_Required U
+other_Optional w 0 0
+radv_internal_helper w 0 0
 radv_Required U
 radv_Implemented T 0 10
 """
         self.assertEqual(
-            HOOKS.null_entrypoints(symbols), ["radv_Optional", "vk_common_Optional"]
+            HOOKS.null_entrypoints(symbols),
+            ["radv_Optional", "sqtt_GetDeviceProcAddr", "vk_common_Optional", "wsi_GetDeviceProcAddr"],
         )
 
     def test_link_keeps_implementation_and_rejects_missing_required_function(self):
@@ -51,10 +60,12 @@ radv_Implemented T 0 10
                     command, cwd=work, check=check, capture_output=True, text=True
                 )
 
+            optional = [prefix + "_Optional" for prefix in HOOKS.MESA_LAYERS]
             (work / "hooks.c").write_text(
-                "extern void radv_Optional(void) __attribute__((weak));\n"
+                "".join("extern void " + name + "(void) __attribute__((weak));\n"
+                        for name in optional) +
                 "extern void radv_Implemented(void) __attribute__((weak));\n"
-                "void (*hooks[])(void) = {radv_Optional, radv_Implemented};\n"
+                "void (*hooks[])(void) = {" + ", ".join(optional) + ", radv_Implemented};\n"
                 "void _start(void) {}\n"
             )
             (work / "implementation.c").write_text("void radv_Implemented(void) {}\n")
@@ -66,15 +77,18 @@ radv_Implemented T 0 10
                 "python3", str(ROOT / "tools/gpu-weak-entrypoints.py"),
                 "--nm", nm, "--archive", "driver.a",
             ).stdout.splitlines()
-            self.assertEqual(flags, ["--defsym=radv_Optional=0"])
-            (work / "local.map").write_text("{ local: radv_*; };\n")
+            self.assertEqual(flags, ["--defsym=" + name + "=0" for name in sorted(optional)])
+            (work / "local.map").write_text("{ local: " + " ".join(name + ";" for name in optional) +
+                                           " radv_Implemented; };\n")
             link = (linker, "-pie", "--version-script", "local.map", *flags,
                     "--whole-archive", "driver.a", "--no-whole-archive")
             run(*link, "-o", "good.elf")
             dynamic = run(readelf, "--dyn-syms", "good.elf").stdout
-            self.assertNotIn("radv_Optional", dynamic)
+            for name in optional:
+                self.assertNotIn(name, dynamic)
             symbols = run(nm, "--format=posix", "good.elf").stdout
-            self.assertRegex(symbols, r"radv_Optional [aA] 0 ")
+            for name in optional:
+                self.assertRegex(symbols, name + r" [aA] 0 ")
             self.assertRegex(symbols, r"radv_Implemented [tT] [1-9a-f][0-9a-f]* ")
 
             (work / "required.c").write_text(

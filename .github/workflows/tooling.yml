@@ -97,6 +97,14 @@ jobs:
           python3 -m pip install meson ninja mako pyyaml packaging
           PATH="/usr/lib/llvm-18/bin:$PATH" bash tools/setup-gpu-menu.sh
 
+      # Preserve this expensive, pinned build even if a later app check fails.
+      - name: Save built GPU menu dependencies
+        if: steps.gpu-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .deps/gpu
+          key: gpu-menu-${{ runner.os }}-${{ hashFiles('tools/setup-gpu-menu.sh') }}
+
       - name: Check the GPU menu draws what the CPU renderer draws
         run: bash tools/test-gpu-menu.sh
 
